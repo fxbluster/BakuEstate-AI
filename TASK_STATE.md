@@ -11,8 +11,15 @@
 - [x] **OpenAI Studio HD Səsləndirmə İnteqrasiyası (`src/media/openai_tts.py`)**:
   - `tts-1-hd` modeli və `nova` qadın səsi inteqrasiya edildi.
   - Avtomatik `az-AZ-BanuNeural` (Edge-TTS) fallback mexanizmi quruldu.
-  - Azərbaycan dili üçün fonetik tənzimləmə funksiyası (`normalize_azerbaijani_phonetics`) əlavə olundu: ("95 000 AZN" -> "95 min manat", "kv.m" -> "kvadrat metr", "q." -> "qəsəbəsi").
-  - FFmpeg ilə sözbəsöz dəqiq sinxron SRT subtitr generasiyası tamamlandı.
+  - Azərbaycan dili üçün fonetik tənzimləmə funksiyası (`normalize_azerbaijani_phonetics`) təkmilləşdirildi: ("q." -> "qəsəbəsi", "m." -> "metrosu", "küç." -> "küçəsi", "pr." -> "prospekti").
+  - FFmpeg ilə sözbəsöz dəqiq sinxron SRT və ASS subtitr generasiyası tamamlandı.
+
+- [x] **Vizual Dizayn və Tipoqrafiyanın Əsaslı Təkmilləşdirilməsi (`src/media/ffmpeg_compositor.py`)**:
+  - **Unicode Şrift Dəstəyi:** Windows native `Segoe UI Bold` və `Arial Bold` tətbiq edildi; "Ə" hərfinin qırılması (`QIYM[]T`) və emojilərin qutuya düşməsi 100% aradan qaldırıldı.
+  - **Vahid Lüks Kart (Unified Header Card):** Üst-üstə yığılmış 4 lent əvəzinə zərif qaranlıq şüşə kart (`#0F172A`), qızılı haşiyə, qırmızı təcili satış və yaşıl kupça nişanları, böyük qızılı qiymət və təmiz ünvan xətti quruldu.
+  - **ASS Təhlükəsiz Zolaq Subtitrləri:** Yuxarıdakı nəhəng qara qutular ləğv edildi; TikTok/Reels üçün sarı (`&H0000FFFF`) şriftlə aşağı təhlükəsiz zonada (`MarginV=420`) incə qara konturlu subtitrlər yerləşdirildi.
+  - **Aşağı Əlaqə / CTA Kartı:** "Ölü zona" olan aşağı hissəyə birbaşa sahibinin nömrəsi və WhatsApp linki olan müasir əlaqə kartı əlavə edildi.
+  - **Telegram Çatdırılması:** Təkmilləşdirilmiş yeni video Telegram botuna uğurla çatdırıldı (**Message ID: 7**).
 
 - [x] **Dinamik Audio Mikser və Ducking (`src/media/ffmpeg_compositor.py`)**:
   - `sidechaincompress` filtri ilə səs gələndə musiqinin avtomatik qısılması (ducking): `threshold=0.08:ratio=5:attack=30:release=350`.
