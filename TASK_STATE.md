@@ -36,12 +36,13 @@
 
 ---
 
-## 2. Cari Vəziyyət və İstifadəçidən Qərar Gözləyən Nöqtə
+## 2. Təsdiqlənmiş Qərar və İnteqrasiya
 
-- Hər iki video variantı istifadəçinin Telegram botuna (`@bakuestatee_bot`) çatdırılıb:
-  - **Variant 1:** Nova HD Səs + Modern Trap Beat
-  - **Variant 2:** Nova HD Səs + Luxury Piano Lounge
-- İstifadəçinin bu iki musiqi stilindən birini daimi default seçməsi və ya dinamik rejim (məsələn, qiyməti ucuz/təcili elanlar üçün Beat, premium elanlar üçün Piano Lounge) seçməsi gözlənilir.
+- [x] **İstifadəçi Qərarı:** Variant 2 (**Luxury Acoustic Piano Lounge**) əsas seçim olaraq təsdiqləndi.
+- [x] `config/settings.py` və `.env` konfiqurasiyasında `DEFAULT_BG_MUSIC` olaraq `assets/music/luxury_lounge.mp3` təyin edildi.
+- [x] Səs rejimi olaraq OpenAI Studio `nova` (HD) qadın səsi və avtomatik `az-AZ-BanuNeural` fallback qüvvədə saxlanıldı.
+- [x] `START_BAKU_ESTATE.bat` və masaüstü qısayol yeniləndi (İstifadəçi masaüstündəki ikonaya 1 dəfə klikləməklə birbaşa bu konfiqurasiya ilə videolar yaradır).
+- [x] Bütün 63 test 100% uğurla keçdi (`OK`).
 
 ---
 

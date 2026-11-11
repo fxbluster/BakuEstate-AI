@@ -14,7 +14,7 @@ echo.
 echo  * Brave avtomatik acilir (Google Pro hesabin yuklenir)
 echo  * bina.az-dan sahibinden kupcali menziller tapilir
 echo  * Google Pro (Gemini) en baximli Reels ssenarisini yazir
-echo  * Babek sesi ile seslendirilir, qizili qiymet nisani montaj olunur
+echo  * OpenAI Nova HD xanim sesi ve Luxury Lounge fon musiqisi ile montaj olunur
 echo  * Telegram-a gonderilir (@bakuestatee_bot)
 echo  * Hesab kvotasi bitende ekranda sesli bildiris cixir:
 echo    "Brave-de novbeti Google Pro hesabina kec ve [OK] bas"

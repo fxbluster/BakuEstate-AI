@@ -210,7 +210,7 @@ MAX_VIDEO_DURATION = 55.0
 ASSETS_DIR = BASE_DIR / "assets"
 MUSIC_DIR = ASSETS_DIR / "music"
 SFX_DIR = ASSETS_DIR / "sfx"
-DEFAULT_BG_MUSIC = os.getenv("DEFAULT_BG_MUSIC", str(MUSIC_DIR / "luxury_beat.mp3"))
+DEFAULT_BG_MUSIC = os.getenv("DEFAULT_BG_MUSIC", str(MUSIC_DIR / "luxury_lounge.mp3"))
 
 # Colors for banners & badges
 COLOR_GOLDEN_BANNER = "#F59E0B"  # Golden price banner
