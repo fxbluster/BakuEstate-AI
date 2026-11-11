@@ -20,12 +20,13 @@
   - **ASS Təhlükəsiz Zolaq Subtitrləri:** Yuxarıdakı nəhəng qara qutular ləğv edildi; TikTok/Reels üçün sarı (`&H0000FFFF`) şriftlə aşağı təhlükəsiz zonada (`MarginV=420`) incə qara konturlu subtitrlər yerləşdirildi.
   - **Aşağı Əlaqə / CTA Kartı:** "Ölü zona" olan aşağı hissəyə birbaşa sahibinin nömrəsi və WhatsApp linki olan müasir əlaqə kartı əlavə edildi.
 - [x] **Telegram CRM və Sosial Media Mətninin Məntiqi Ayrılması (`src/dispatcher/telegram_crm.py`)**:
-  - **Daxili CRM Bloku:** Mülkiyyətçinin adı, bir toxunuşla kopyalanan nömrəsi (`<code>`), hazır pre-filled WhatsApp linki və birbaşa bina.az linki ayrıldı.
-  - **İctimai Paylaşım Bloku (Kopyala-Paylaş):** Mülkiyyətçinin nömrəsi və ya bina.az linki ictimai mətndən tam təmizləndi; alıcıları birbaşa səhifəyə / agentə yönəldən güclü CTA (`📩 Ətraflı məlumat üçün Direktə yazın`) qoyuldu.
-  - **Dəqiq Maksimum 5 Heştəq:** Alqoritmə zərər verən 15-20 spam heştəq və `#binaaz` ləğv edildi; əmlak tipinə uyğun dəqiq 5 hədəfli heştəq təyin olundu.
+  - **Ayrı-Ayrı Göndərilmə (1-Tap Copy):** Video ilə birlikdə daxili CRM kartı göndərilir (Message 9), dərhal ardınca isə Instagram/TikTok üçün təmiz mətn **tam ayrıca mesaj kimi** göndərilir (Message 10).
+  - İstifadəçi telefonda sadəcə ikinci mesaja toxunub "Kopyala" basır və heç bir silmə-qırpma etmədən birbaşa Instagram-da "Paste" edir.
+  - **Daxili CRM Bloku:** Mülkiyyətçinin adı, toxunuşla kopyalanan nömrəsi (`<code>`), hazır pre-filled WhatsApp linki və birbaşa bina.az linki.
+  - **İctimai Paylaşım Bloku:** Mülkiyyətçinin nömrəsi və ya bina.az linki ictimai mətndən tam təmizləndi; alıcıları birbaşa səhifəyə / agentə yönəldən güclü CTA (`📩 Ətraflı məlumat üçün Direktə yazın`).
+  - **Dəqiq Maksimum 5 Heştəq:** Alqoritmə zərər verən spam heştəqlər ləğv edildi; əmlak tipinə uyğun dəqiq 5 hədəfli heştəq təyin olundu.
   - **Əmlak Tipinin Avtomatik Təyini:** Elanın təsvirinə görə avtomatik `HƏYƏT EVİ`, `MƏNZİL` və ya `VİLLA` başlığı seçilir.
-  - **Format Düzəlişləri:** `100 m²` (.0 ləğv edildi) və `Mehdiabad qəsəbəsi` (qısaltmasız).
-  - **Canlı Yoxlama:** Yeni strukturla Telegram botuna **Message ID: 8** uğurla çatdırıldı.
+  - **Canlı Yoxlama:** Telegram botuna Message ID 9 (Video+CRM) və Message ID 10 (Təmiz Kopyalanacaq Mətn) uğurla çatdırıldı.
 
 - [x] **Dinamik Audio Mikser və Ducking (`src/media/ffmpeg_compositor.py`)**:
   - `sidechaincompress` filtri ilə səs gələndə musiqinin avtomatik qısılması (ducking): `threshold=0.08:ratio=5:attack=30:release=350`.
