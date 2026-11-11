@@ -19,6 +19,7 @@ if sys.platform == "win32":
         pass
 
 import os
+import re
 import shutil
 import logging
 import subprocess
@@ -64,6 +65,58 @@ def escape_ffmpeg_path(path: Path) -> str:
         drive, rest = posix_path.split(":", 1)
         return f"{drive}\\:{rest}"
     return posix_path
+
+
+def get_windows_font_path(bold: bool = True) -> str:
+    """Returns escaped Windows TTF font path with full Azerbaijani Unicode support."""
+    candidates = [
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c.replace(":", "\\:")
+    return ""
+
+
+def convert_srt_to_ass(srt_path: Path, ass_path: Path) -> Path:
+    """
+    Converts an SRT subtitle file to a 1080x1920 ASS subtitle file.
+    Places subtitles in the safe zone (MarginV=420) with high-contrast
+    TikTok viral yellow font, black outline, and NO opaque black boxes.
+    """
+    ass_header = """[Script Info]
+Title: Baku Estate AI Subtitles
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ModernSub,Segoe UI,54,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.8,1.8,2,60,60,420,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    dialogues = []
+    if srt_path.exists():
+        content = srt_path.read_text(encoding="utf-8")
+        blocks = re.split(r'\n\s*\n', content.strip())
+        for block in blocks:
+            lines = [l.strip() for l in block.splitlines() if l.strip()]
+            if len(lines) >= 3 and "-->" in lines[1]:
+                m = re.match(r'(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)', lines[1])
+                if m:
+                    sh, sm, ss, sms, eh, em, es, ems = m.groups()
+                    start_ass = f"{int(sh)}:{sm}:{ss}.{sms[:2]}"
+                    end_ass = f"{int(eh)}:{em}:{es}.{ems[:2]}"
+                    text = " ".join(lines[2:])
+                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},ModernSub,,0,0,0,,{text}")
+
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(ass_header + "\n".join(dialogues) + "\n")
+    return ass_path
 
 
 def sanitize_text(text: str) -> str:
@@ -198,7 +251,17 @@ class VideoCompositor:
             ]
             subprocess.run(concat_cmd, check=True, capture_output=True)
 
-            # Prepare overlays
+            # Fonts
+            font_bold = get_windows_font_path(bold=True)
+            font_reg = get_windows_font_path(bold=False)
+
+            # Location formatting and clean abbreviation expansion
+            raw_loc = listing.get("location") or listing.get("address") or "Bakı şəhəri"
+            loc_clean = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəsəbəsi', raw_loc, flags=re.IGNORECASE).strip()
+            loc_clean = re.sub(r'\bm\.(?=\s|$|[,\.!])', 'metrosu', loc_clean, flags=re.IGNORECASE).strip()
+            loc_clean = re.sub(r'\bküç\.(?=\s|$|[,\.!])', 'küçəsi', loc_clean, flags=re.IGNORECASE).strip()
+            loc_clean = re.sub(r'\bpr\.(?=\s|$|[,\.!])', 'prospekti', loc_clean, flags=re.IGNORECASE).strip()
+
             price = listing.get("price")
             curr = listing.get("currency") or "AZN"
             try:
@@ -206,54 +269,78 @@ class VideoCompositor:
                 formatted_price = f"{int(num_price):,}".replace(",", " ") if num_price > 0 else "Münasib Qiymət"
             except (ValueError, TypeError):
                 formatted_price = "Münasib Qiymət"
-            price_text = sanitize_text(f"QIYMƏT: {formatted_price} {curr}")
+            price_display = sanitize_text(f"QIYMƏT: {formatted_price} {curr}")
 
-            loc_text = sanitize_text(listing.get("location") or listing.get("address") or "Bakı şəhəri")
             rooms = listing.get("rooms")
             area = listing.get("area")
-            param_parts = []
+            specs_parts = [loc_clean]
             if rooms:
-                param_parts.append(f"{rooms} otaqlı")
+                specs_parts.append(f"{rooms} otaq")
             if area:
-                param_parts.append(f"{int(area)} m²")
-            param_str = " | ".join(param_parts)
-            loc_banner_text = sanitize_text(f"📍 {loc_text}" + (f"  ({param_str})" if param_str else ""))
+                try:
+                    specs_parts.append(f"{int(float(area))} m²")
+                except Exception:
+                    specs_parts.append(f"{area} m²")
+            specs_display = sanitize_text("  •  ".join(specs_parts))
 
-            # Subtitle filter string
-            escaped_srt = escape_ffmpeg_path(Path(srt_path))
+            # Phone / CTA line
+            owner_phone = listing.get("owner_phone") or listing.get("phone") or ""
+            if owner_phone:
+                cta_line2 = sanitize_text(f"ƏLAQƏ / WHATSAPP: {owner_phone}")
+            else:
+                cta_line2 = sanitize_text("ƏLAQƏ / WHATSAPP ÜÇÜN DM YAZIN")
+            cta_line1 = sanitize_text("BİRBAŞA SAHİBİNDƏN  •  KOMİSSİYASIZ")
 
-            # Build final filtergraph for banners & subtitles
+            # Convert SRT to modern ASS for safe-zone burned subtitles
+            ass_path = temp_dir / "subtitles_styled.ass"
+            convert_srt_to_ass(Path(srt_path), ass_path)
+            escaped_ass = escape_ffmpeg_path(ass_path)
+
+            # Build final filtergraph with Unified Luxury Card & Bottom Contact Card
             filter_chains = []
 
-            # 1. Hook Badge: First 3.2 seconds high-urgency red/gold badge
+            # 1. Unified Luxury Header Card (x=50, y=70, w=980, h=250)
             filter_chains.append(
-                f"drawbox=y=70:color=0xDC2626@0.92:width=iw:height=65:t=fill:enable='between(t,0,3.2)',"
-                f"drawtext=text='🔥 TƏCİLİ KUPÇALI SATIŞ':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=86:enable='between(t,0,3.2)'"
+                f"drawbox=x=50:y=70:width=980:height=250:color=0x0F172A@0.88:t=fill,"
+                f"drawbox=x=50:y=70:width=980:height=250:color=0xF59E0B@0.45:t=3"
             )
 
-            # 2. Golden Price Banner (y=150, height=90, golden color 0xF59E0B)
-            filter_chains.append(
-                f"drawbox=y=150:color=0xF59E0B@0.95:width=iw:height=90:t=fill,"
-                f"drawtext=text='{price_text}':fontcolor=0x111827:fontsize=44:x=(w-text_w)/2:y=173"
-            )
-
-            # 3. Emerald Green Kupça Badge (if listing has bill of sale)
-            if listing.get("has_bill_of_sale", True):
+            # 2. Badges: Urgent red pill + Kupça green pill
+            has_kupca = listing.get("has_bill_of_sale", True)
+            if has_kupca:
                 filter_chains.append(
-                    f"drawbox=x=80:y=255:width=420:height=65:color=0x10B981@0.95:t=fill,"
-                    f"drawtext=text='✓ KUPCALI / CIXARISLI':fontcolor=white:fontsize=30:x=105:y=273"
+                    f"drawbox=x=80:y=95:width=210:height=40:color=0xDC2626@0.95:t=fill,"
+                    f"drawtext=fontfile='{font_bold}':text='TƏCİLİ SATIŞ':fontcolor=white:fontsize=22:x=115:y=104,"
+                    f"drawbox=x=310:y=95:width=180:height=40:color=0x059669@0.95:t=fill,"
+                    f"drawtext=fontfile='{font_bold}':text='KUPÇALI':fontcolor=white:fontsize=22:x=352:y=104"
+                )
+            else:
+                filter_chains.append(
+                    f"drawbox=x=80:y=95:width=210:height=40:color=0xDC2626@0.95:t=fill,"
+                    f"drawtext=fontfile='{font_bold}':text='TƏCİLİ SATIŞ':fontcolor=white:fontsize=22:x=115:y=104"
                 )
 
-            # 4. Location Banner
+            # 3. Main Price Line in Gold (y=150)
             filter_chains.append(
-                f"drawbox=y=335:color=0x0F172A@0.85:width=iw:height=65:t=fill,"
-                f"drawtext=text='{loc_banner_text}':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=353"
+                f"drawtext=fontfile='{font_bold}':text='{price_display}':fontcolor=0xF59E0B:fontsize=52:x=(w-text_w)/2:y=150"
             )
 
-            # 5. Burned Subtitles: High-contrast TikTok viral yellow font (&H0000FFFF) with strong outline
+            # 4. Specs Line (y=230)
             filter_chains.append(
-                f"subtitles='{escaped_srt}':force_style='FontSize=28,Bold=1,PrimaryColour=&H0000FFFF,"
-                f"OutlineColour=&H00000000,BorderStyle=3,Outline=2.8,Shadow=1.5,Alignment=2,MarginV=210'"
+                f"drawtext=fontfile='{font_reg}':text='{specs_display}':fontcolor=0xE2E8F0:fontsize=32:x=(w-text_w)/2:y=230"
+            )
+
+            # 5. Bottom Contact / CTA Card (x=80, y=1680, w=920, h=130)
+            filter_chains.append(
+                f"drawbox=x=80:y=1680:width=920:height=130:color=0x0F172A@0.92:t=fill,"
+                f"drawbox=x=80:y=1680:width=920:height=130:color=0x10B981@0.50:t=2,"
+                f"drawtext=fontfile='{font_bold}':text='{cta_line1}':fontcolor=0xF59E0B:fontsize=26:x=(w-text_w)/2:y=1700,"
+                f"drawtext=fontfile='{font_bold}':text='{cta_line2}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=1740"
+            )
+
+            # 6. Burned Subtitles via ASS filter (safe-zone MarginV=420, TikTok yellow, no black boxes)
+            filter_chains.append(
+                f"subtitles='{escaped_ass}'"
             )
 
             final_vf = ",".join(filter_chains)

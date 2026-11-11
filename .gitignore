@@ -17,7 +17,10 @@ data/downloads/
 data/output/*.mp4
 data/output/*.mp3
 data/output/*.srt
+data/output/*.ass
 data/output/*.json
+data/output/*.jpg
+data/output/*.png
 data/database.sqlite
 
 # IDE & OS

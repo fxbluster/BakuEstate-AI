@@ -72,10 +72,10 @@ def normalize_azerbaijani_phonetics(text: str) -> str:
         (r'\bAZN\b', 'manat'),
         (r'\bkv\.?\s*m\b', 'kvadrat metr'),
         (r'\bm²\b', 'kvadrat metr'),
-        (r'\bq\.\b', 'qəsəbəsində'),
-        (r'\bm\.\b', 'metrosu yaxınlığında'),
-        (r'\bküç\.\b', 'küçəsində'),
-        (r'\bpr\.\b', 'prospektində'),
+        (r'\bq\.(?=\s|$|[,\.!])', 'qəsəbəsində'),
+        (r'\bm\.(?=\s|$|[,\.!])', 'metrosu yaxınlığında'),
+        (r'\bküç\.(?=\s|$|[,\.!])', 'küçəsində'),
+        (r'\bpr\.(?=\s|$|[,\.!])', 'prospektində'),
         (r'\b(\d+)/(\d+)\b', r'\2 mərtəbəli binanın \1-ci mərtəbəsində'),
     ]
     for pattern, repl in replacements:
