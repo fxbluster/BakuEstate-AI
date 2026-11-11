@@ -62,11 +62,50 @@ def get_targeted_hashtags(prop_type: str) -> list[str]:
         return ["#emlak", "#menzil", "#baku", "#kupcali", "#ipoteka"]
 
 
-def generate_social_caption(listing: Dict[str, Any]) -> str:
+def generate_crm_caption(listing: Dict[str, Any]) -> str:
+    """Generates the private CRM lead card for the agency/investor."""
+    price = listing.get("price")
+    curr = listing.get("currency", "AZN")
+    try:
+        num_price = float(price) if price is not None else 0.0
+        formatted_price = f"{int(num_price):,}".replace(",", " ") if num_price > 0 else "Münasib Qiymət"
+    except (ValueError, TypeError):
+        formatted_price = "Münasib Qiymət"
+
+    raw_loc = listing.get("location") or listing.get("address") or "Bakı"
+    loc = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəsəbəsi', raw_loc, flags=re.IGNORECASE).strip()
+    loc = re.sub(r'\bm\.(?=\s|$|[,\.!])', 'metrosu', loc, flags=re.IGNORECASE).strip()
+
+    bina_id = listing.get("bina_id", "")
+    raw_phone = listing.get("owner_phone", "")
+    normalized_phone = clean_phone_number(raw_phone)
+    wa_digits = normalized_phone.lstrip("+")
+
+    prop_type = get_property_type(listing)
+
+    if wa_digits:
+        wa_text = f"Salam, bina.az-dakı {bina_id} nömrəli {prop_type.lower()} elanınızla bağlı yazıram."
+        wa_link = f"https://wa.me/{wa_digits}?text={urllib.parse.quote(wa_text)}"
+    else:
+        wa_link = f"https://bina.az/items/{bina_id}"
+
+    seller_title = "Birbaşa Mülkiyyətçi (Sahibindən)" if listing.get("is_owner") else "Vasitəçi / Agent"
+
+    lines = [
+        "💼 <b>DAXİLİ CRM — MÜLKİYYƏTÇİ İLƏ ƏLAQƏ</b>",
+        f"👤 <b>Elan Sahibi:</b> {listing.get('contact_name') or 'Mülkiyyətçi'} ({seller_title})",
+        f"📞 <b>Telefon:</b> <code>{raw_phone or 'Qeyd olunmayıb'}</code>",
+        f"💬 <b>WhatsApp:</b> <a href=\"{wa_link}\">Mülkiyyətçiyə WhatsApp-da Yaz</a>",
+        f"🔗 <b>bina.az Linki:</b> https://bina.az/items/{bina_id}",
+        f"💰 <b>Qiymət:</b> {formatted_price} {curr} | 📍 <b>Ərazi:</b> {loc}"
+    ]
+    return "\n".join(lines)
+
+
+def generate_public_caption(listing: Dict[str, Any]) -> str:
     """
-    Generates a high-converting, logically separated lead notification:
-    Section 1: CRM Lead Info (for agency/investor - owner phone, WhatsApp link, source URL)
-    Section 2: Ready-to-copy Instagram/TikTok Caption (public - NO owner number or competitor links, max 5 hashtags)
+    Generates a clean, 1-tap copy-paste Instagram/TikTok caption.
+    Strictly NO owner numbers, NO competitor links, max 5 hashtags.
     """
     price = listing.get("price")
     curr = listing.get("currency", "AZN")
@@ -94,34 +133,11 @@ def generate_social_caption(listing: Dict[str, Any]) -> str:
     floors = listing.get("floors", "")
     floor_str = f" | {floor}/{floors} mərtəbə" if floor else ""
 
-    bina_id = listing.get("bina_id", "")
-    raw_phone = listing.get("owner_phone", "")
-    normalized_phone = clean_phone_number(raw_phone)
-    wa_digits = normalized_phone.lstrip("+")
-
     prop_type = get_property_type(listing)
     hashtags = get_targeted_hashtags(prop_type)[:5]
-
-    # WhatsApp link for agency to contact owner
-    if wa_digits:
-        wa_text = f"Salam, bina.az-dakı {bina_id} nömrəli {prop_type.lower()} elanınızla bağlı yazıram."
-        wa_link = f"https://wa.me/{wa_digits}?text={urllib.parse.quote(wa_text)}"
-    else:
-        wa_link = f"https://bina.az/items/{bina_id}"
-
-    seller_title = "Birbaşa Mülkiyyətçi (Sahibindən)" if listing.get("is_owner") else "Vasitəçi / Agent"
     kupca_badge = "✅ Dövlət Çıxarışı (Kupça) var - İpotekaya yararlıdır!" if listing.get("has_bill_of_sale", True) else "Müqaviləli"
 
     caption_lines = [
-        "💼 <b>DAXİLİ CRM — MÜLKİYYƏTÇİ İLƏ ƏLAQƏ</b>",
-        f"👤 <b>Elan Sahibi:</b> {listing.get('contact_name') or 'Mülkiyyətçi'} ({seller_title})",
-        f"📞 <b>Telefon:</b> <code>{raw_phone or 'Qeyd olunmayıb'}</code>",
-        f"💬 <b>WhatsApp:</b> <a href=\"{wa_link}\">Mülkiyyətçiyə WhatsApp-da Yaz</a>",
-        f"🔗 <b>bina.az Linki:</b> https://bina.az/items/{bina_id}",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        "📲 <b>İNSTAGRAM / TİKTOK ÜÇÜN (KOPYALA-PAYLAŞ)</b>",
-        "",
         f"🔥 <b>TƏCİLİ KUPÇALI {prop_type} SATILIR!</b> 🔥",
         "",
         f"💰 <b>Qiymət:</b> {formatted_price} {curr}",
@@ -133,8 +149,14 @@ def generate_social_caption(listing: Dict[str, Any]) -> str:
         "",
         " ".join(hashtags)
     ]
-
     return "\n".join(caption_lines)
+
+
+def generate_social_caption(listing: Dict[str, Any]) -> str:
+    """Returns the combined caption for backward-compatibility or full display."""
+    crm = generate_crm_caption(listing)
+    public = generate_public_caption(listing)
+    return f"{crm}\n\n━━━━━━━━━━━━━━━━━━━━━\n📲 <b>İNSTAGRAM / TİKTOK ÜÇÜN (KOPYALA-PAYLAŞ)</b>\n\n{public}"
 
 
 class TelegramCRMDispatcher:
@@ -159,10 +181,11 @@ class TelegramCRMDispatcher:
         custom_caption: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Sends the MP4 video to Telegram channel/group or records mock dispatch.
-        Returns dispatch response metadata.
+        Sends the MP4 video with internal CRM details, followed immediately
+        by a standalone 1-tap copy-paste Instagram/TikTok caption.
         """
-        caption = custom_caption or generate_social_caption(listing)
+        crm_caption = generate_crm_caption(listing)
+        public_caption = custom_caption or generate_public_caption(listing)
         video_file = Path(video_path)
 
         if not video_file.exists():
@@ -175,7 +198,8 @@ class TelegramCRMDispatcher:
                 "bina_id": listing.get("bina_id"),
                 "video_path": str(video_file.resolve()),
                 "owner_phone": listing.get("owner_phone"),
-                "caption": caption,
+                "crm_caption": crm_caption,
+                "public_caption": public_caption,
                 "dispatched_at": json.dumps(str(Path(video_path).stat().st_mtime))
             }
             with open(lead_dump_path, "w", encoding="utf-8") as f:
@@ -185,37 +209,55 @@ class TelegramCRMDispatcher:
                 "status": "MOCK_SUCCESS",
                 "message_id": f"mock_msg_{listing.get('bina_id')}",
                 "lead_dump": str(lead_dump_path.resolve()),
-                "caption": caption
+                "crm_caption": crm_caption,
+                "public_caption": public_caption
             }
 
-        # Real Telegram Bot API call
+        # 1. Real Telegram API: Send Video with CRM Lead Card
         logger.info(f"Uploading video {video_path} to Telegram chat {self.chat_id}...")
-        api_url = f"https://api.telegram.org/bot{self.bot_token}/sendVideo"
-
-        # Guard against Telegram Bot API 1024-character caption limit for media
-        telegram_caption = caption
-        if len(telegram_caption) > 1024:
-            telegram_caption = telegram_caption[:1020] + "..."
+        api_video_url = f"https://api.telegram.org/bot{self.bot_token}/sendVideo"
 
         with open(video_file, "rb") as vf:
             payload = {
                 "chat_id": self.chat_id,
-                "caption": telegram_caption,
+                "caption": crm_caption,
                 "parse_mode": "HTML",
                 "supports_streaming": True
             }
             files = {"video": (video_file.name, vf, "video/mp4")}
-            resp = requests.post(api_url, data=payload, files=files, timeout=120)
+            resp = requests.post(api_video_url, data=payload, files=files, timeout=120)
 
-        if resp.status_code == 200:
-            result = resp.json().get("result", {})
-            msg_id = str(result.get("message_id", ""))
-            logger.info(f"Video lead successfully dispatched! Telegram Message ID: {msg_id}")
-            return {
-                "status": "DISPATCHED",
-                "message_id": msg_id,
-                "caption": caption
-            }
-        else:
+        if resp.status_code != 200:
             logger.error(f"Telegram dispatch failed (status {resp.status_code}): {resp.text}")
             raise RuntimeError(f"Telegram dispatch failed: {resp.text}")
+
+        result = resp.json().get("result", {})
+        msg_id = str(result.get("message_id", ""))
+        logger.info(f"Video lead successfully dispatched! Telegram Message ID: {msg_id}")
+
+        # 2. Real Telegram API: Send Standalone 1-Tap Copy-Paste Caption
+        api_msg_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        msg_payload = {
+            "chat_id": self.chat_id,
+            "text": public_caption,
+            "parse_mode": "HTML"
+        }
+        try:
+            resp_msg = requests.post(api_msg_url, json=msg_payload, timeout=30)
+            if resp_msg.status_code == 200:
+                public_msg_id = str(resp_msg.json().get("result", {}).get("message_id", ""))
+                logger.info(f"Standalone copy-paste caption dispatched! Message ID: {public_msg_id}")
+            else:
+                logger.warning(f"Failed to send standalone copy-paste caption: {resp_msg.text}")
+                public_msg_id = ""
+        except Exception as e:
+            logger.warning(f"Failed to send standalone copy-paste caption: {e}")
+            public_msg_id = ""
+
+        return {
+            "status": "DISPATCHED",
+            "message_id": msg_id,
+            "public_message_id": public_msg_id,
+            "crm_caption": crm_caption,
+            "public_caption": public_caption
+        }
