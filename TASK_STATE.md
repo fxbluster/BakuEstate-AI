@@ -19,7 +19,13 @@
   - **Vahid Lüks Kart (Unified Header Card):** Üst-üstə yığılmış 4 lent əvəzinə zərif qaranlıq şüşə kart (`#0F172A`), qızılı haşiyə, qırmızı təcili satış və yaşıl kupça nişanları, böyük qızılı qiymət və təmiz ünvan xətti quruldu.
   - **ASS Təhlükəsiz Zolaq Subtitrləri:** Yuxarıdakı nəhəng qara qutular ləğv edildi; TikTok/Reels üçün sarı (`&H0000FFFF`) şriftlə aşağı təhlükəsiz zonada (`MarginV=420`) incə qara konturlu subtitrlər yerləşdirildi.
   - **Aşağı Əlaqə / CTA Kartı:** "Ölü zona" olan aşağı hissəyə birbaşa sahibinin nömrəsi və WhatsApp linki olan müasir əlaqə kartı əlavə edildi.
-  - **Telegram Çatdırılması:** Təkmilləşdirilmiş yeni video Telegram botuna uğurla çatdırıldı (**Message ID: 7**).
+- [x] **Telegram CRM və Sosial Media Mətninin Məntiqi Ayrılması (`src/dispatcher/telegram_crm.py`)**:
+  - **Daxili CRM Bloku:** Mülkiyyətçinin adı, bir toxunuşla kopyalanan nömrəsi (`<code>`), hazır pre-filled WhatsApp linki və birbaşa bina.az linki ayrıldı.
+  - **İctimai Paylaşım Bloku (Kopyala-Paylaş):** Mülkiyyətçinin nömrəsi və ya bina.az linki ictimai mətndən tam təmizləndi; alıcıları birbaşa səhifəyə / agentə yönəldən güclü CTA (`📩 Ətraflı məlumat üçün Direktə yazın`) qoyuldu.
+  - **Dəqiq Maksimum 5 Heştəq:** Alqoritmə zərər verən 15-20 spam heştəq və `#binaaz` ləğv edildi; əmlak tipinə uyğun dəqiq 5 hədəfli heştəq təyin olundu.
+  - **Əmlak Tipinin Avtomatik Təyini:** Elanın təsvirinə görə avtomatik `HƏYƏT EVİ`, `MƏNZİL` və ya `VİLLA` başlığı seçilir.
+  - **Format Düzəlişləri:** `100 m²` (.0 ləğv edildi) və `Mehdiabad qəsəbəsi` (qısaltmasız).
+  - **Canlı Yoxlama:** Yeni strukturla Telegram botuna **Message ID: 8** uğurla çatdırıldı.
 
 - [x] **Dinamik Audio Mikser və Ducking (`src/media/ffmpeg_compositor.py`)**:
   - `sidechaincompress` filtri ilə səs gələndə musiqinin avtomatik qısılması (ducking): `threshold=0.08:ratio=5:attack=30:release=350`.
