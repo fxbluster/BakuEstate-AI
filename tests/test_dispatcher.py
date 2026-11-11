@@ -30,11 +30,17 @@ class TestTelegramCRM(unittest.TestCase):
     def test_generate_social_caption(self):
         caption = generate_social_caption(self.sample_listing)
         self.assertIn("275 000 AZN", caption)
-        self.assertIn("Gənclik m.", caption)
+        self.assertIn("Gənclik", caption)
         self.assertIn("3 otaq", caption)
         self.assertIn("wa.me/994501234567", caption)
         self.assertIn("#baku", caption)
-        self.assertIn("Trending Track", caption)
+        self.assertNotIn("#binaaz", caption)
+        self.assertIn("DAXİLİ CRM", caption)
+        self.assertIn("KOPYALA-PAYLAŞ", caption)
+        
+        # Verify max 5 hashtags
+        hashtags = [w for w in caption.split() if w.startswith("#")]
+        self.assertLessEqual(len(hashtags), 5)
 
     def test_generate_social_caption_with_local_phone(self):
         listing = dict(self.sample_listing)

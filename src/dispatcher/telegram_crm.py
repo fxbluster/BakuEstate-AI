@@ -40,54 +40,98 @@ TRENDING_AUDIOS = [
 ]
 
 
+def get_property_type(listing: Dict[str, Any]) -> str:
+    """Detects whether listing is a courtyard house, villa, commercial, or apartment."""
+    combined = f"{listing.get('title', '')} {listing.get('description', '')}".lower()
+    if any(k in combined for k in ["həyət evi", "heyet evi", "həyət", "heyet", "bağ evi", "bag evi"]):
+        return "HƏYƏT EVİ"
+    elif "villa" in combined:
+        return "VİLLA"
+    elif any(k in combined for k in ["obyekt", "ofis"]):
+        return "OBYEKT"
+    return "MƏNZİL"
+
+
+def get_targeted_hashtags(prop_type: str) -> list[str]:
+    """Returns at most 5 high-converting, clean viral hashtags without competitor tags."""
+    if prop_type == "HƏYƏT EVİ":
+        return ["#emlak", "#evler", "#heyetevleri", "#kupcali", "#baku"]
+    elif prop_type == "VİLLA":
+        return ["#villa", "#luxuryrealestate", "#baku", "#emlak", "#kupcali"]
+    else:
+        return ["#emlak", "#menzil", "#baku", "#kupcali", "#ipoteka"]
+
+
 def generate_social_caption(listing: Dict[str, Any]) -> str:
     """
-    Generates a high-converting, ready-to-copy caption for Instagram Reels and TikTok.
-    Includes listing highlights, price, owner phone, direct WhatsApp click link,
-    trending audio recommendations, and viral hashtags.
+    Generates a high-converting, logically separated lead notification:
+    Section 1: CRM Lead Info (for agency/investor - owner phone, WhatsApp link, source URL)
+    Section 2: Ready-to-copy Instagram/TikTok Caption (public - NO owner number or competitor links, max 5 hashtags)
     """
     price = listing.get("price")
     curr = listing.get("currency", "AZN")
-    formatted_price = f"{int(price):,}".replace(",", " ") if price else "Münasib Qiymət"
+    try:
+        num_price = float(price) if price is not None else 0.0
+        formatted_price = f"{int(num_price):,}".replace(",", " ") if num_price > 0 else "Münasib Qiymət"
+    except (ValueError, TypeError):
+        formatted_price = "Münasib Qiymət"
 
-    loc = listing.get("location") or listing.get("address") or "Bakı"
+    raw_loc = listing.get("location") or listing.get("address") or "Bakı"
+    loc = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəsəbəsi', raw_loc, flags=re.IGNORECASE).strip()
+    loc = re.sub(r'\bm\.(?=\s|$|[,\.!])', 'metrosu', loc, flags=re.IGNORECASE).strip()
+    loc = re.sub(r'\bküç\.(?=\s|$|[,\.!])', 'küçəsi', loc, flags=re.IGNORECASE).strip()
+    loc = re.sub(r'\bpr\.(?=\s|$|[,\.!])', 'prospekti', loc, flags=re.IGNORECASE).strip()
+
     rooms = listing.get("rooms", "")
     area = listing.get("area", "")
+    try:
+        area_num = float(area) if area else 0.0
+        area_str = f"{int(area_num)} m²" if area_num.is_integer() else f"{area_num:.1f} m²"
+    except Exception:
+        area_str = f"{area} m²" if area else ""
+
     floor = listing.get("floor", "")
     floors = listing.get("floors", "")
+    floor_str = f" | {floor}/{floors} mərtəbə" if floor else ""
 
     bina_id = listing.get("bina_id", "")
     raw_phone = listing.get("owner_phone", "")
     normalized_phone = clean_phone_number(raw_phone)
     wa_digits = normalized_phone.lstrip("+")
 
-    # WhatsApp link with international phone number format
+    prop_type = get_property_type(listing)
+    hashtags = get_targeted_hashtags(prop_type)[:5]
+
+    # WhatsApp link for agency to contact owner
     if wa_digits:
-        wa_text = f"Salam, bina.az-dakı {bina_id} nömrəli elanınızla bağlı yazıram."
+        wa_text = f"Salam, bina.az-dakı {bina_id} nömrəli {prop_type.lower()} elanınızla bağlı yazıram."
         wa_link = f"https://wa.me/{wa_digits}?text={urllib.parse.quote(wa_text)}"
     else:
         wa_link = f"https://bina.az/items/{bina_id}"
 
-    seller_title = "BİRBAŞA MÜLKİYYƏTÇİ (Sahibindən)" if listing.get("is_owner") else "Təcili Satış"
-    kupca_badge = "✅ ÇIXARIŞ (Kupça) VAR - İpotekaya tam yararlıdır!" if listing.get("has_bill_of_sale", True) else "Müqaviləli"
+    seller_title = "Birbaşa Mülkiyyətçi (Sahibindən)" if listing.get("is_owner") else "Vasitəçi / Agent"
+    kupca_badge = "✅ Dövlət Çıxarışı (Kupça) var - İpotekaya yararlıdır!" if listing.get("has_bill_of_sale", True) else "Müqaviləli"
 
     caption_lines = [
-        "🔥 <b>BAKIDA TƏCİLİ KUPÇALI MƏNZİL SATILIR!</b> 🔥",
+        "💼 <b>DAXİLİ CRM — MÜLKİYYƏTÇİ İLƏ ƏLAQƏ</b>",
+        f"👤 <b>Elan Sahibi:</b> {listing.get('contact_name') or 'Mülkiyyətçi'} ({seller_title})",
+        f"📞 <b>Telefon:</b> <code>{raw_phone or 'Qeyd olunmayıb'}</code>",
+        f"💬 <b>WhatsApp:</b> <a href=\"{wa_link}\">Mülkiyyətçiyə WhatsApp-da Yaz</a>",
+        f"🔗 <b>bina.az Linki:</b> https://bina.az/items/{bina_id}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        "📲 <b>İNSTAGRAM / TİKTOK ÜÇÜN (KOPYALA-PAYLAŞ)</b>",
+        "",
+        f"🔥 <b>TƏCİLİ KUPÇALI {prop_type} SATILIR!</b> 🔥",
         "",
         f"💰 <b>Qiymət:</b> {formatted_price} {curr}",
-        f"📍 <b>Ərazi:</b> {loc}",
-        f"📐 <b>Parametrlər:</b> {rooms} otaq | {area} m²" + (f" | {floor}/{floors} mərtəbə" if floor else ""),
+        f"📍 <b>Ünvan:</b> {loc}",
+        f"📐 <b>Parametrlər:</b> {rooms} otaq | {area_str}{floor_str}",
         f"📜 <b>Sənəd:</b> {kupca_badge}",
-        f"👤 <b>Satıcı:</b> {seller_title}",
         "",
-        f"📞 <b>Əlaqə telefonu:</b> {raw_phone or 'Qeyd olunmayıb'}",
-        f"💬 <b>Birbaşa WhatsApp:</b> <a href=\"{wa_link}\">WhatsApp-da Yaz</a>",
-        f"🔗 <b>Elan linki:</b> https://bina.az/items/{bina_id}",
+        "📩 <b>Ətraflı məlumat və baxış üçün Direktə (DM) yazın və ya bizimlə əlaqə saxlayın!</b>",
         "",
-        "🎵 <b>Tövsiyə olunan Trending Audio:</b>",
-        f"👉 {TRENDING_AUDIOS[0]}",
-        "",
-        " ".join(VIRAL_HASHTAGS)
+        " ".join(hashtags)
     ]
 
     return "\n".join(caption_lines)
