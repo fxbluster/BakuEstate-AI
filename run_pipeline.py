@@ -35,7 +35,8 @@ from config.settings import (
     PROFILES_DIR,
     FILTER_DIRECT_OWNER_ONLY,
     EDGE_TTS_VOICE,
-    EDGE_TTS_RATE
+    EDGE_TTS_RATE,
+    DEFAULT_BG_MUSIC
 )
 from src.database import (
     init_db,
@@ -71,7 +72,7 @@ class BakuEstatePipeline:
         self.owner_only = owner_only
         self.mock_dispatch = mock_dispatch
         self.use_gemini = use_gemini
-        self.bg_music_path = bg_music_path
+        self.bg_music_path = bg_music_path if bg_music_path is not None else DEFAULT_BG_MUSIC
         self.gemini_client = BraveGeminiClient()
 
         # Ensure DB is initialized
@@ -240,6 +241,7 @@ def main():
     parser.add_argument("--init-db-only", action="store_true", help="Initialize SQLite database schema and exit")
     parser.add_argument("--live-dispatch", action="store_true", help="Send to real Telegram bot instead of mock")
     parser.add_argument("--use-gemini", action="store_true", help="Use active Google Pro (Gemini) session in Brave for scripts")
+    parser.add_argument("--bg-music", type=str, default=None, help="Path to custom background music audio file")
 
     args = parser.parse_args()
 
@@ -257,7 +259,8 @@ def main():
         owner_only=not args.allow_agents,
         mock_dispatch=not args.live_dispatch,
         db_path=DB_PATH,
-        use_gemini=args.use_gemini
+        use_gemini=args.use_gemini,
+        bg_music_path=args.bg_music
     )
 
     pipeline.run_full_pipeline(

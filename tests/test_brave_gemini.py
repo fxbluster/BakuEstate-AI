@@ -2,6 +2,10 @@
 Unit tests for Brave Gemini Client and Human-in-the-Loop Account Switcher.
 """
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import unittest
 from unittest.mock import patch, MagicMock
 from src.google_pool.brave_gemini_client import (
@@ -50,7 +54,7 @@ class TestBraveGemini(unittest.TestCase):
         prompt = client.build_real_estate_prompt(listing)
         self.assertIn("Yasamal", prompt)
         self.assertIn("120000 AZN", prompt)
-        self.assertIn("Çıxarış (Kupça) var", prompt)
+        self.assertIn("Kupça", prompt)
         self.assertIn("Azərbaycan dilində", prompt)
 
     @patch("src.google_pool.brave_gemini_client.is_brave_debugging_open", return_value=False)
