@@ -44,40 +44,60 @@ class GooglePoolManager:
         self.cooldown_seconds = cooldown_seconds
         self.daily_quota = daily_quota
 
-    def acquire_account(self) -> Optional[Dict[str, Any]]:
+    def acquire_account(
+        self,
+        require_session: bool = False,
+        prioritize_sessions: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """
         Selects an available account using round-robin (least recently used)
         that is active, not in cooldown, and under its daily quota.
+        If prioritize_sessions is True, accounts with persistent sessions on disk
+        are prioritized over unconfigured profiles.
         """
         conn = get_connection(self.db_path)
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat()
 
-        with conn:
-            # First look for active accounts whose cooldown has passed and quota not exceeded
-            rows = conn.execute("""
-                SELECT * FROM google_accounts
-                WHERE is_active = 1
-                  AND (cooldown_until IS NULL OR cooldown_until <= ?)
-                  AND quota_used_today < max_daily_quota
-                ORDER BY COALESCE(last_used_at, '1970-01-01') ASC, id ASC
-            """, (now_iso,)).fetchall()
+        try:
+            with conn:
+                # First look for active accounts whose cooldown has passed and quota not exceeded
+                rows = conn.execute("""
+                    SELECT * FROM google_accounts
+                    WHERE is_active = 1
+                      AND (cooldown_until IS NULL OR cooldown_until <= ?)
+                      AND quota_used_today < max_daily_quota
+                    ORDER BY COALESCE(last_used_at, '1970-01-01') ASC, id ASC
+                """, (now_iso,)).fetchall()
 
-            if not rows:
-                logger.warning("No Google accounts currently available (all cooling down or at quota limit).")
-                conn.close()
-                return None
+                if not rows:
+                    logger.warning("No Google accounts currently available (all cooling down or at quota limit).")
+                    return None
 
-            selected = dict(rows[0])
+                selected = None
+                from src.google_pool.setup_accounts import check_profile_login_status
+                if prioritize_sessions or require_session:
+                    for r in rows:
+                        status = check_profile_login_status(r["profile_name"], self.profiles_dir)
+                        if status.get("has_session", False):
+                            selected = dict(r)
+                            break
 
-            # Update last_used_at immediately to reserve it
-            conn.execute("""
-                UPDATE google_accounts
-                SET last_used_at = ?
-                WHERE id = ?
-            """, (now_iso, selected["id"]))
+                if not selected:
+                    if require_session:
+                        logger.warning("No authenticated Google accounts available with active sessions.")
+                        return None
+                    selected = dict(rows[0])
 
-        conn.close()
+                # Update last_used_at immediately to reserve it
+                conn.execute("""
+                    UPDATE google_accounts
+                    SET last_used_at = ?
+                    WHERE id = ?
+                """, (now_iso, selected["id"]))
+        finally:
+            conn.close()
+
         logger.info(f"Acquired Google account profile: {selected['profile_name']}")
         return selected
 
@@ -85,10 +105,12 @@ class GooglePoolManager:
         self,
         profile_name: str,
         success: bool = True,
-        custom_cooldown: Optional[int] = None
+        custom_cooldown: Optional[int] = None,
+        record_quota: Optional[bool] = None
     ) -> None:
         """
-        Releases an account, records quota consumption, and puts it in cooldown.
+        Releases an account, records quota consumption (if successful or requested),
+        and puts it in cooldown.
         """
         conn = get_connection(self.db_path)
         now_dt = datetime.now(timezone.utc)
@@ -96,27 +118,43 @@ class GooglePoolManager:
         cooldown_until_iso = (now_dt + timedelta(seconds=cooldown_dur)).isoformat()
         now_iso = now_dt.isoformat()
 
-        with conn:
-            conn.execute("""
-                UPDATE google_accounts
-                SET quota_used_today = quota_used_today + 1,
-                    cooldown_until = ?,
-                    last_used_at = ?
-                WHERE profile_name = ?
-            """, (cooldown_until_iso, now_iso, profile_name))
+        should_record_quota = record_quota if record_quota is not None else (success is True)
 
-        conn.close()
-        logger.info(f"Released account {profile_name}. Cooldown until: {cooldown_until_iso} ({cooldown_dur}s)")
+        try:
+            with conn:
+                if should_record_quota:
+                    conn.execute("""
+                        UPDATE google_accounts
+                        SET quota_used_today = quota_used_today + 1,
+                            cooldown_until = ?,
+                            last_used_at = ?
+                        WHERE profile_name = ?
+                    """, (cooldown_until_iso, now_iso, profile_name))
+                else:
+                    conn.execute("""
+                        UPDATE google_accounts
+                        SET cooldown_until = ?,
+                            last_used_at = ?
+                        WHERE profile_name = ?
+                    """, (cooldown_until_iso, now_iso, profile_name))
+        finally:
+            conn.close()
+
+        status_str = "success" if success else "failed"
+        quota_str = "+1 quota" if should_record_quota else "no quota consumed"
+        logger.info(f"Released account {profile_name} ({status_str}, {quota_str}). Cooldown until: {cooldown_until_iso} ({cooldown_dur}s)")
 
     def get_pool_status(self) -> List[Dict[str, Any]]:
         """Returns the real-time operational status of all accounts in the pool."""
         conn = get_connection(self.db_path)
         now_dt = datetime.now(timezone.utc)
 
-        rows = conn.execute("""
-            SELECT * FROM google_accounts ORDER BY id ASC
-        """).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute("""
+                SELECT * FROM google_accounts ORDER BY id ASC
+            """).fetchall()
+        finally:
+            conn.close()
 
         status_list = []
         for r in rows:
@@ -144,15 +182,18 @@ class GooglePoolManager:
     def reset_daily_quotas(self) -> None:
         """Resets the quota_used_today counter for all accounts (e.g. daily cron)."""
         conn = get_connection(self.db_path)
-        with conn:
-            conn.execute("UPDATE google_accounts SET quota_used_today = 0")
-        conn.close()
+        try:
+            with conn:
+                conn.execute("UPDATE google_accounts SET quota_used_today = 0")
+        finally:
+            conn.close()
         logger.info("Reset all Google accounts daily quota counters.")
 
     @contextmanager
     def persistent_playwright_context(self, profile_name: str, headless: bool = True):
         """
         Context manager providing a Playwright BrowserContext with persistent user data dir.
+        Applies stealth anti-detection flags to avoid Google CAPTCHA / bot blocks.
         Gracefully yields None if Playwright binary is not available.
         """
         profile_path = self.profiles_dir / profile_name
@@ -167,15 +208,25 @@ class GooglePoolManager:
                         user_data_dir=str(profile_path),
                         headless=headless,
                         executable_path=browser_exe,
-                        args=["--disable-blink-features=AutomationControlled"]
+                        ignore_default_args=["--enable-automation"],
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--no-sandbox",
+                            "--disable-infobars",
+                            "--disable-dev-shm-usage",
+                            "--no-first-run",
+                            "--no-default-browser-check"
+                        ]
                     )
-                    try:
-                        yield context
-                    finally:
-                        context.close()
                 except Exception as e:
                     logger.warning(f"Could not launch browser for profile {profile_name} (needs playwright browser download): {e}")
                     yield None
+                    return
+
+                try:
+                    yield context
+                finally:
+                    context.close()
         except ImportError:
             logger.warning("Playwright is not installed in current environment.")
             yield None

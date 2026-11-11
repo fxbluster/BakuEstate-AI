@@ -77,6 +77,70 @@ class TestBraveGemini(unittest.TestCase):
         res = prompt_account_switch(account_number=1, videos_completed=5, reason="User stop")
         self.assertFalse(res)
 
+    def test_clean_gemini_response_gemini_said_and_bullets(self):
+        raw = """
+        Gemini said
+        * Nərimanov metrosu yanında 2 otaqlı əla təmirli mənzil!
+        - Qiyməti cəmi 115 min manat.
+        Tələsin, fürsəti qaçırmayın!
+        """
+        cleaned = clean_gemini_response(raw)
+        self.assertNotIn("Gemini said", cleaned)
+        self.assertFalse(cleaned.startswith("*"))
+        self.assertIn("Nərimanov metrosu yanında", cleaned)
+        self.assertIn("115 min manat", cleaned)
+
+    @patch("src.google_pool.brave_gemini_client.check_profile_login_status", return_value={"has_session": True})
+    @patch("src.google_pool.brave_gemini_client.is_brave_debugging_open", return_value=True)
+    def test_generate_script_with_account_rotation_on_quota(self, mock_open, mock_status):
+        mock_pool = MagicMock()
+        # First account hits quota, second account succeeds
+        mock_pool.acquire_account.side_effect = [
+            {"profile_name": "acc_1", "id": 1},
+            {"profile_name": "acc_2", "id": 2}
+        ]
+
+        client = BraveGeminiClient(pool_manager=mock_pool)
+        # Mock _execute_gemini_prompt
+        client._execute_gemini_prompt = MagicMock(side_effect=[
+            {"success": False, "quota_hit": True},
+            {"success": True, "text": "Möhtəşəm dəniz mənzərəli 3 otaqlı ev! Cəmi 150 min manat."}
+        ])
+
+        result = client.generate_script({"title": "Test listing", "price": 150000})
+        self.assertIsNotNone(result)
+        self.assertIn("Möhtəşəm dəniz mənzərəli", result)
+
+        # Verify acc_1 was released with cooldown, and acc_2 with success
+        mock_pool.release_account.assert_any_call("acc_1", success=False, custom_cooldown=3600)
+        mock_pool.release_account.assert_any_call("acc_2", success=True)
+
+    @patch("src.google_pool.brave_gemini_client.check_profile_login_status")
+    @patch("src.google_pool.brave_gemini_client.is_brave_debugging_open", return_value=True)
+    def test_generate_script_skips_unauthenticated_profile(self, mock_open, mock_status):
+        mock_pool = MagicMock()
+        mock_pool.acquire_account.side_effect = [
+            {"profile_name": "acc_3", "id": 3},
+            {"profile_name": "acc_1", "id": 1}
+        ]
+        # acc_3 has no session, acc_1 has session
+        mock_status.side_effect = [
+            {"has_session": False},
+            {"has_session": True}
+        ]
+
+        client = BraveGeminiClient(pool_manager=mock_pool)
+        client._execute_gemini_prompt = MagicMock(return_value={
+            "success": True,
+            "text": "Yasamalda çıxarışlı 2 otaqlı ev satılır!"
+        })
+
+        result = client.generate_script({"title": "Yasamal ev", "price": 95000})
+        self.assertIsNotNone(result)
+        self.assertIn("Yasamalda çıxarışlı", result)
+        mock_pool.release_account.assert_any_call("acc_3", success=False, custom_cooldown=3600)
+        mock_pool.release_account.assert_any_call("acc_1", success=True)
+
 
 if __name__ == "__main__":
     unittest.main()

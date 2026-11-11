@@ -73,12 +73,12 @@ class BakuEstatePipeline:
         self.mock_dispatch = mock_dispatch
         self.use_gemini = use_gemini
         self.bg_music_path = bg_music_path if bg_music_path is not None else DEFAULT_BG_MUSIC
-        self.gemini_client = BraveGeminiClient()
 
         # Ensure DB is initialized
         init_db(self.db_path)
         self.scraper = BinaScraper(owner_only=self.owner_only)
         self.pool_manager = GooglePoolManager(db_path=self.db_path)
+        self.gemini_client = BraveGeminiClient(pool_manager=self.pool_manager)
         self.compositor = VideoCompositor()
         self.dispatcher = TelegramCRMDispatcher(mock_mode=self.mock_dispatch)
 
@@ -137,14 +137,14 @@ class BakuEstatePipeline:
         custom_script = None
         if self.use_gemini:
             if not self.gemini_client.is_connected():
-                logger.info("Brave port 9222 aktiv deyil. Brave avtomatik başladılır...")
+                logger.info("Google AI Pro hovuzu yoxlanılır...")
                 self.gemini_client.ensure_connected()
 
             if self.gemini_client.is_connected():
-                logger.info("Requesting viral AI script from Google Pro (Gemini Advanced) in Brave...")
+                logger.info("Requesting viral AI script from Google AI Pro (Gemini Advanced)...")
                 custom_script = self.gemini_client.generate_script(listing)
             else:
-                logger.info("Brave remote port 9222 not active. Using built-in high-quality script generator.")
+                logger.info("Google AI Pro pool not active. Using built-in high-quality script generator.")
 
         script_text, audio_path, srt_path, duration = generate_tts_for_listing(
             listing=listing,
