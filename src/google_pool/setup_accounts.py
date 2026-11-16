@@ -144,7 +144,7 @@ def launch_account_for_login(profile_name: str, headless: bool = False):
         print(f"[Brave Setup] Giriş bitdikdən sonra Brave pəncərəsini bağlayın.\n")
 
         urls = [
-            "https://gemini.google.com/app"
+            "https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app"
         ]
         cmd = [
             browser_exe,
