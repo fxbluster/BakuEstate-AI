@@ -25,7 +25,9 @@ class TestPipelineEndToEnd(unittest.TestCase):
         self.pipeline = BakuEstatePipeline(
             owner_only=False,
             mock_dispatch=True,
-            db_path=self.db_path
+            db_path=self.db_path,
+            enable_supabase=False,
+            enable_notion=False
         )
 
     def tearDown(self):

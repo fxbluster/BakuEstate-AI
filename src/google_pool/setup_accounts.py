@@ -86,20 +86,42 @@ def check_profile_login_status(profile_name: str, profiles_dir: Optional[Path] =
     if not target_dir.exists():
         return {"exists": False, "has_session": False, "size_mb": 0.0}
 
-    # Check for Network/Cookies or Default/Cookies
+    total_bytes = sum(f.stat().st_size for f in target_dir.rglob('*') if f.is_file())
+    size_mb = round(total_bytes / (1024 * 1024), 2)
+
+    # Check for actual Google auth cookies (SID, SSID, SAPISID, HSID, etc.)
     cookies_paths = [
         target_dir / "Default" / "Network" / "Cookies",
         target_dir / "Default" / "Cookies",
         target_dir / "Network" / "Cookies"
     ]
-    has_cookies = any(p.exists() and p.stat().st_size > 0 for p in cookies_paths)
+    has_auth_session = False
+    for cp in cookies_paths:
+        if cp.exists() and cp.stat().st_size > 0:
+            try:
+                import sqlite3
+                import tempfile
+                import shutil
+                tmp = tempfile.mktemp()
+                shutil.copy2(cp, tmp)
+                conn = sqlite3.connect(tmp)
+                c = conn.cursor()
+                c.execute("SELECT 1 FROM cookies WHERE name IN ('SID', 'SSID', 'SAPISID', 'HSID', '__Secure-1PSID') LIMIT 1")
+                if c.fetchone():
+                    has_auth_session = True
+                conn.close()
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                if has_auth_session:
+                    break
+            except Exception:
+                pass
 
-    total_bytes = sum(f.stat().st_size for f in target_dir.rglob('*') if f.is_file())
-    size_mb = round(total_bytes / (1024 * 1024), 2)
+    has_cookies = any(p.exists() and p.stat().st_size > 0 for p in cookies_paths)
 
     return {
         "exists": True,
-        "has_session": has_cookies or size_mb > 5.0,
+        "has_session": has_auth_session or (has_cookies and size_mb > 5.0),
         "size_mb": size_mb
     }
 
@@ -122,7 +144,6 @@ def launch_account_for_login(profile_name: str, headless: bool = False):
         print(f"[Brave Setup] Giriş bitdikdən sonra Brave pəncərəsini bağlayın.\n")
 
         urls = [
-            "https://accounts.google.com/ServiceLogin",
             "https://gemini.google.com/app"
         ]
         cmd = [

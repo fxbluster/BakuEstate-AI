@@ -113,8 +113,9 @@ class TestSchedulerModule(unittest.TestCase):
         self.assertIsNotNone(scheduler.last_run_time)
         mock_pipeline_inst.run_full_pipeline.assert_called_once_with(pages=1, limit=1)
 
+    @patch("sentry_sdk.capture_exception")
     @patch("src.scheduler.BakuEstatePipeline")
-    def test_scheduler_run_job_exception_handling(self, mock_pipeline_cls):
+    def test_scheduler_run_job_exception_handling(self, mock_pipeline_cls, mock_capture_exc):
         mock_pipeline_inst = MagicMock()
         mock_pipeline_inst.run_full_pipeline.side_effect = RuntimeError("Scraper network timeout")
         mock_pipeline_cls.return_value = mock_pipeline_inst
@@ -125,10 +126,11 @@ class TestSchedulerModule(unittest.TestCase):
             run_on_startup=False,
             db_path=self.db_path
         )
-        # Should catch error, log it, and return empty list instead of crashing
+        # Should catch error, log it, capture in Sentry, and return empty list instead of crashing
         results = scheduler.run_job()
         self.assertEqual(results, [])
         self.assertEqual(scheduler.total_runs_completed, 0)
+        mock_capture_exc.assert_called_once()
 
     @patch("src.scheduler.BakuEstatePipeline")
     def test_scheduler_start_max_runs(self, mock_pipeline_cls):

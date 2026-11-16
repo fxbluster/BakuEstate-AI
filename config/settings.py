@@ -7,7 +7,7 @@ TTS options, video parameters, and Telegram CRM credentials.
 from pathlib import Path
 import os
 import sys
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 # Ensure UTF-8 on Windows environments
 if sys.platform == "win32":
@@ -135,24 +135,69 @@ def save_env_value(key: str, value: str, env_path: Optional[Path] = None) -> Non
     os.environ[key] = str(value)
 
 
-def _safe_int(val: Optional[str], default: int) -> int:
-    """Safely converts string to int, handling commas and currency strings."""
-    if not val:
+def safe_parse_numeric(val: Any, default: float = 0.0, is_price: bool = False) -> float:
+    """
+    Safely converts strings, integers, or floats into clean numeric float values.
+    Handles:
+    - Real estate units ('m²', 'm2', 'kv.m', 'kv', 'AZN', 'manat', 'USD', '$') without corrupting numbers.
+    - Dot and comma thousand separators (e.g. '180.000', '1,250,000', '180.000,50').
+    - Decimal places for area and prices (e.g. '65.5 m²', '110,2 m2').
+    """
+    if val is None:
         return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s:
+        return default
+    # Strip common units first to avoid preserving digit '2' from 'm2' or 'kv.m'
+    s = re.sub(r'(?i)\b(m2|kv\.?\s*m|kvm|azn|manat|usd)\b', '', s)
+    s = re.sub(r'(?i)(m²|m2)', '', s)
+    s = re.sub(r'[^\d.,-]', '', s)
+    if not s:
+        return default
+
+    if '.' in s and ',' in s:
+        if s.rfind('.') < s.rfind(','):
+            s = s.replace('.', '').replace(',', '.')
+        else:
+            s = s.replace(',', '')
+    elif '.' in s:
+        if s.count('.') > 1:
+            s = s.replace('.', '')
+        elif is_price and re.search(r'\.\d{3}$', s):
+            s = s.replace('.', '')
+    elif ',' in s:
+        if s.count(',') > 1:
+            s = s.replace(',', '')
+        elif is_price and re.search(r',\d{3}$', s):
+            s = s.replace(',', '')
+        else:
+            s = s.replace(',', '.')
+
     try:
-        cleaned = re.sub(r"[^\d-]", "", str(val).strip())
-        return int(cleaned) if cleaned else default
+        return float(s)
     except Exception:
         return default
 
 
-def _safe_float(val: Optional[str], default: float) -> float:
-    """Safely converts string to float."""
-    if not val:
+def _safe_int(val: Optional[Any], default: int) -> int:
+    """Safely converts input to int, handling units and thousand separators."""
+    if val is None:
         return default
     try:
-        cleaned = re.sub(r"[^\d.-]", "", str(val).strip())
-        return float(cleaned) if cleaned else default
+        parsed = safe_parse_numeric(val, default=float(default), is_price=False)
+        return int(parsed)
+    except Exception:
+        return default
+
+
+def _safe_float(val: Optional[Any], default: float) -> float:
+    """Safely converts input to float."""
+    if val is None:
+        return default
+    try:
+        return safe_parse_numeric(val, default=default, is_price=False)
     except Exception:
         return default
 
@@ -225,6 +270,183 @@ BLUR_FILTER = "boxblur=25:5"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_MOCK_DISPATCH = os.getenv("TELEGRAM_MOCK_DISPATCH", "true").lower() in ("1", "true", "yes")
+
+# Sentry Telemetry and Crash Reporting Settings
+SENTRY_DSN = os.getenv("SENTRY_DSN", "https://768f921e07aae7c82a4ea793e61a45b1@o4512418793586688.ingest.de.sentry.io/4512441253298256")
+SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT", "production")
+SENTRY_TRACES_SAMPLE_RATE = _safe_float(os.getenv("SENTRY_TRACES_SAMPLE_RATE"), 1.0)
+
+_sentry_initialized = False
+
+def init_sentry() -> bool:
+    """
+    Safely initializes Sentry SDK telemetry and error tracking if available.
+    """
+    global _sentry_initialized
+    if _sentry_initialized:
+        return True
+    if not SENTRY_DSN:
+        return False
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=SENTRY_ENVIRONMENT,
+            traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE
+        )
+        _sentry_initialized = True
+        return True
+    except Exception:
+        return False
+
+# Supabase Cloud Storage & Database Sync Settings
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ejsaccbeatmwqodwwzwu.supabase.co")
+SUPABASE_KEY = os.getenv(
+    "SUPABASE_KEY",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqc2FjY2JlYXRtd3FvZHd3end1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzk2NDM0MCwiZXhwIjoyMDk5NTQwMzQwfQ.6zSCmucOFXrbeyq_-_WlxwLNIX8mj4q6Y7FvtnUUet8"
+)
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "baku-estate-media")
+SUPABASE_ENABLED = os.getenv("SUPABASE_ENABLED", "true").lower() in ("1", "true", "yes")
+
+# Notion CRM Database Settings
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "41a7b510-0e72-81f5-9270-eb56eb3cc2af")
+NOTION_DATA_SOURCE_ID = os.getenv("NOTION_DATA_SOURCE_ID", "41a7b510-0e72-8179-99a5-000bff2d8a14")
+NOTION_ENABLED = os.getenv("NOTION_ENABLED", "true").lower() in ("1", "true", "yes")
+NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
+
+# Keenable Real-Time Baku Real Estate Market Averages (AZN / m², Oct-Nov 2026)
+BAKU_DISTRICT_MEDIAN_M2 = {
+    "nərimanov": 3293,
+    "nerimanov": 3293,
+    "nəsimi": 3131,
+    "nasimi": 3131,
+    "səbail": 3037,
+    "sebail": 3037,
+    "yasamal": 2923,
+    "xəzər": 2844,
+    "xezer": 2844,
+    "nizami": 2843,
+    "xətai": 2647,
+    "xetai": 2647,
+    "binəqədi": 1950,
+    "bineqedi": 1950,
+    "sabunçu": 1750,
+    "sabuncu": 1750,
+    "suraxanı": 1550,
+    "suraxani": 1550,
+    "pirallahı": 1350,
+    "abşeron": 1667,
+    "absheron": 1667,
+    "masazır": 1450,
+    "xırdalan": 1550,
+    "baku_median": 2650
+}
+
+# Mapping of Baku metro stations, landmarks, and settlements to administrative districts
+BAKU_LANDMARK_DISTRICT_MAP = {
+    # Nərimanov
+    "gənclik": "Nərimanov",
+    "genclik": "Nərimanov",
+    "nəriman nərimanov": "Nərimanov",
+    "neriman nerimanov": "Nərimanov",
+    "montin": "Nərimanov",
+    "təbriz": "Nərimanov",
+    "tebriz": "Nərimanov",
+    # Nəsimi
+    "28 may": "Nəsimi",
+    "cəfər cabbarlı": "Nəsimi",
+    "cefer cabbarli": "Nəsimi",
+    "nəsimi bazarı": "Nəsimi",
+    "tibbi universitet": "Nəsimi",
+    "papanin": "Nəsimi",
+    # Yasamal
+    "elmlər": "Yasamal",
+    "elmler": "Yasamal",
+    "inşaatçılar": "Yasamal",
+    "insaatcilar": "Yasamal",
+    "20 yanvar": "Yasamal",
+    "yeni yasamal": "Yasamal",
+    # Səbail
+    "içərişəhər": "Səbail",
+    "iceriseher": "Səbail",
+    "sahil": "Səbail",
+    "badamdar": "Səbail",
+    "bayıl": "Səbail",
+    "bayil": "Səbail",
+    "bibiheybət": "Səbail",
+    # Xətai
+    "şah ismayıl xətai": "Xətai",
+    "sah ismayil xetai": "Xətai",
+    "əhmədli": "Xətai",
+    "ehmedli": "Xətai",
+    "həzi aslanov": "Xətai",
+    "hezi aslanov": "Xətai",
+    "ağ şəhər": "Xətai",
+    "ag seher": "Xətai",
+    "white city": "Xətai",
+    "köhnə günəşli": "Xətai",
+    "kohne gunesli": "Xətai",
+    # Nizami
+    "neftçilər": "Nizami",
+    "neftciler": "Nizami",
+    "qara qarayev": "Nizami",
+    "xalqlar": "Nizami",
+    "koroğlu": "Nizami",
+    "koroglu": "Nizami",
+    "bakmil": "Nizami",
+    # Binəqədi
+    "memar əcəmi": "Binəqədi",
+    "memar ecemi": "Binəqədi",
+    "əcəmi": "Binəqədi",
+    "ecemi": "Binəqədi",
+    "azadlıq": "Binəqədi",
+    "azadliq": "Binəqədi",
+    "dərnəgül": "Binəqədi",
+    "dernegul": "Binəqədi",
+    "biləcəri": "Binəqədi",
+    "bileceri": "Binəqədi",
+    "rəsulzadə": "Binəqədi",
+    "resulzade": "Binəqədi",
+    # Sabunçu
+    "bakıxanov": "Sabunçu",
+    "bakixanov": "Sabunçu",
+    "zabrat": "Sabunçu",
+    "maştağa": "Sabunçu",
+    "mastaga": "Sabunçu",
+    "nardaran": "Sabunçu",
+    "pirşağı": "Sabunçu",
+    "pirsagi": "Sabunçu",
+    # Xəzər
+    "mərdəkan": "Xəzər",
+    "merdekan": "Xəzər",
+    "şüvəlan": "Xəzər",
+    "suvelan": "Xəzər",
+    "buzovna": "Xəzər",
+    "bilgəh": "Xəzər",
+    "bilgeh": "Xəzər",
+    "binə": "Xəzər",
+    "bine": "Xəzər",
+    "türkan": "Xəzər",
+    "turkan": "Xəzər",
+    # Suraxanı
+    "qaraçuxur": "Suraxanı",
+    "qaracuxur": "Suraxanı",
+    "hövsan": "Suraxanı",
+    "hovsan": "Suraxanı",
+    "yeni günəşli": "Suraxanı",
+    "yeni gunesli": "Suraxanı",
+    "əmircan": "Suraxanı",
+    "emircan": "Suraxanı",
+    "bülbülə": "Suraxanı",
+    "bulbule": "Suraxanı",
+    # Abşeron
+    "xırdalan": "Abşeron",
+    "xirdalan": "Abşeron",
+    "masazır": "Abşeron",
+    "masazir": "Abşeron",
+    "saray": "Abşeron",
+    "mehdiabad": "Abşeron"
+}
 
 # Scheduler & Daemon Settings
 SCHEDULE_TIMES = os.getenv("SCHEDULE_TIMES", "12:30,19:30")

@@ -40,6 +40,9 @@ class TestMCPServer(unittest.TestCase):
         self.assertIn("generate_real_estate_script", tool_names)
         self.assertIn("get_gemini_pool_status", tool_names)
         self.assertIn("rotate_gemini_account", tool_names)
+        self.assertIn("get_market_analysis", tool_names)
+        self.assertIn("sync_deal_to_supabase", tool_names)
+        self.assertIn("sync_deal_to_notion", tool_names)
 
     def test_ping(self):
         req = {
@@ -96,6 +99,36 @@ class TestMCPServer(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertIn("Xətai rayonunda", data["script"])
         self.assertFalse(data["is_fallback"])
+
+    def test_get_market_analysis_tool(self):
+        args = {
+            "location": "Nərimanov",
+            "price": "165.000 AZN",
+            "area": "65 m²"
+        }
+        res = handle_tool_call("get_market_analysis", args)
+        self.assertIn("content", res)
+        data = json.loads(res["content"][0]["text"])
+        self.assertTrue(data["success"])
+        self.assertEqual(data["analysis"]["district"], "Nərimanov")
+        self.assertEqual(data["analysis"]["m2_price"], 2538)
+        self.assertTrue(data["analysis"]["is_below_market"])
+
+    @patch("src.mcp_server.supabase_sync.sync_deal", return_value={"success": True, "bina_id": "777"})
+    def test_sync_deal_to_supabase_tool(self, mock_sync):
+        args = {"listing": {"bina_id": "777", "title": "Test"}}
+        res = handle_tool_call("sync_deal_to_supabase", args)
+        data = json.loads(res["content"][0]["text"])
+        self.assertTrue(data["success"])
+        self.assertEqual(data["bina_id"], "777")
+
+    @patch("src.mcp_server.notion_crm.sync_deal", return_value={"success": True, "mode": "mcp_ready"})
+    def test_sync_deal_to_notion_tool(self, mock_notion):
+        args = {"listing": {"bina_id": "777", "title": "Test"}}
+        res = handle_tool_call("sync_deal_to_notion", args)
+        data = json.loads(res["content"][0]["text"])
+        self.assertTrue(data["success"])
+        self.assertEqual(data["mode"], "mcp_ready")
 
 
 if __name__ == "__main__":

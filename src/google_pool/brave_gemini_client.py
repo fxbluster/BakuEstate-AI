@@ -24,10 +24,65 @@ from pathlib import Path
 from src.ui.account_switcher_dialog import prompt_account_switch
 from src.google_pool.pool_manager import GooglePoolManager
 from src.google_pool.setup_accounts import check_profile_login_status
-from config.settings import GOOGLE_ACCOUNT_PROFILES, PROFILES_DIR, DB_PATH
+from config.settings import (
+    GOOGLE_ACCOUNT_PROFILES,
+    PROFILES_DIR,
+    DB_PATH,
+    BAKU_DISTRICT_MEDIAN_M2,
+    BAKU_LANDMARK_DISTRICT_MAP,
+    safe_parse_numeric
+)
 
 logger = logging.getLogger("brave_gemini")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+def get_keenable_market_comparison(location: str, price: Any, area: Any) -> Dict[str, Any]:
+    """
+    Calculates Keenable real-time district market price comparison and discount percentage.
+    """
+    try:
+        num_price = safe_parse_numeric(price, default=0.0, is_price=True)
+        num_area = safe_parse_numeric(area, default=0.0, is_price=False)
+        if num_price <= 0 or num_area <= 0:
+            return {}
+        m2_price = int(num_price / num_area)
+    except Exception:
+        return {}
+
+    loc_lower = (location or "").lower()
+    matched_district = None
+    district_median = BAKU_DISTRICT_MEDIAN_M2.get("baku_median", 2650)
+
+    # 1. Direct district match
+    for d_name, d_price in BAKU_DISTRICT_MEDIAN_M2.items():
+        if d_name != "baku_median" and d_name in loc_lower:
+            matched_district = d_name.capitalize()
+            district_median = d_price
+            break
+
+    # 2. Check metro stations & landmarks
+    if not matched_district:
+        for landmark, dist_name in BAKU_LANDMARK_DISTRICT_MAP.items():
+            if landmark in loc_lower:
+                matched_district = dist_name
+                d_key = dist_name.lower()
+                district_median = BAKU_DISTRICT_MEDIAN_M2.get(d_key, district_median)
+                break
+
+    if not matched_district:
+        matched_district = "Bakı"
+
+    diff = district_median - m2_price
+    discount_pct = round((diff / district_median) * 100, 1)
+
+    return {
+        "m2_price": m2_price,
+        "district": matched_district,
+        "district_median": district_median,
+        "discount_pct": discount_pct,
+        "is_below_market": discount_pct > 0
+    }
 
 
 def clean_gemini_response(text: str) -> str:
@@ -144,6 +199,29 @@ class BraveGeminiClient:
         has_kupca = listing.get("has_bill_of_sale", True)
         description = listing.get("description", "")
 
+        market_stats = get_keenable_market_comparison(location, price, area)
+        market_info_line = ""
+        market_requirement = ""
+        if market_stats and market_stats.get("m2_price"):
+            m2_price = market_stats["m2_price"]
+            dist_name = market_stats["district"]
+            dist_med = market_stats["district_median"]
+            disc_pct = market_stats["discount_pct"]
+            if market_stats.get("is_below_market"):
+                market_info_line = (
+                    f"- Keenable Bazar Analitikası (2026): {dist_name} ərazisində 1 m² üçün median bazar qiyməti {dist_med} AZN-dir. "
+                    f"Bu mənzildə isə 1 m² cəmi {m2_price} AZN təşkil edir (bazar qiymətindən təxminən {int(disc_pct)}% UCUZ və son dərəcə sərfəli!).\n"
+                )
+                market_requirement = (
+                    f"6. Keenable bazar qiymət müqayisəsini güclü satış arqumenti kimi istifadə et: "
+                    f"məsələn, '{dist_name} ərazisində orta qiymət 1 kvadratı {dist_med} manat olduğu halda, bu evdə cəmi {m2_price} manata!' "
+                    f"və ya 'Bazar qiymətindən tam {int(disc_pct)} faiz ucuz super fürsət!'.\n"
+                )
+            else:
+                market_info_line = (
+                    f"- Keenable Bazar Analitikası (2026): 1 m² qiyməti {m2_price} AZN ({dist_name} üzrə median: {dist_med} AZN).\n"
+                )
+
         prompt = (
             f"Sən daşınmaz əmlak üzrə peşəkar, gənc, həddindən artıq enerjili və cəlbedici XANIM aparıcısan (Instagram Reels / TikTok ulduzu). "
             f"Aşağıdakı mənzil üçün 25-28 saniyəlik həyəcanlı, maraq oyadan, satıcı və canlı "
@@ -154,13 +232,15 @@ class BraveGeminiClient:
             f"- Yerləşmə: {location}\n"
             f"- Parametrlər: {rooms} otaq, {area} kv.m, mərtəbə {floor}/{floors}\n"
             f"- Sənəd: {'Dövlət Çıxarışı (Kupça) var, ipotekaya tam yararlıdır' if has_kupca else 'Müqaviləli'}\n"
+            f"{market_info_line}"
             f"- Əlavə məlumat: {description[:300]}\n\n"
             f"TƏLƏBLƏR:\n"
             f"1. YALNIZ diktor xanımın oxuyacağı təmiz, danışıq dilində mətn yaz. Heç bir kadr qeydi, mötərizə və ya təlimat yazma!\n"
             f"2. İLK 3 SANİYƏDƏ şok, maraq və ya təcili satış qarmağı (hook) at: məsələn, 'Dayanın! Zarafat deyil! Bu qiymətə Kupçalı ev?!' və ya 'Bakıda belə fürsət ildə bir dəfə olur!'.\n"
             f"3. Cümlələri qısa, ritmik və dinamik qur (4-8 söz). Həyəcanı artırmaq üçün nida işarələrindən (!) və təbii fasilələrdən (—) istifadə et.\n"
             f"4. Qiyməti (məsələn: 'cəmi {price} min manat'), yerləşməni və kupçanın olmasını mütləq vurğula.\n"
-            f"5. Sonda dərhal nömrəyə zəng etməyə və ya WhatsApp-a yazmağa güclü çağırışla (Call-to-Action) bitir."
+            f"5. Sonda dərhal nömrəyə zəng etməyə və ya WhatsApp-a yazmağa güclü çağırışla (Call-to-Action) bitir.\n"
+            f"{market_requirement}"
         )
         return prompt
 

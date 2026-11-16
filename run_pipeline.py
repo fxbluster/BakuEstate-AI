@@ -36,7 +36,11 @@ from config.settings import (
     FILTER_DIRECT_OWNER_ONLY,
     EDGE_TTS_VOICE,
     EDGE_TTS_RATE,
-    DEFAULT_BG_MUSIC
+    DEFAULT_BG_MUSIC,
+    TELEGRAM_MOCK_DISPATCH,
+    init_sentry,
+    SUPABASE_ENABLED,
+    NOTION_ENABLED
 )
 from src.database import (
     init_db,
@@ -53,6 +57,8 @@ from src.google_pool.pool_manager import GooglePoolManager
 from src.media.tts_service import generate_tts_for_listing
 from src.media.ffmpeg_compositor import VideoCompositor
 from src.dispatcher.telegram_crm import TelegramCRMDispatcher
+from src.dispatcher.supabase_sync import SupabaseSync
+from src.dispatcher.notion_crm import NotionCRMDispatcher
 from src.google_pool.brave_gemini_client import BraveGeminiClient
 
 logger = logging.getLogger("estate_pipeline")
@@ -63,16 +69,21 @@ class BakuEstatePipeline:
     def __init__(
         self,
         owner_only: bool = FILTER_DIRECT_OWNER_ONLY,
-        mock_dispatch: bool = True,
+        mock_dispatch: Optional[bool] = None,
         db_path: Path = DB_PATH,
         use_gemini: bool = False,
-        bg_music_path: Optional[str] = None
+        bg_music_path: Optional[str] = None,
+        enable_supabase: Optional[bool] = None,
+        enable_notion: Optional[bool] = None
     ):
         self.db_path = db_path
         self.owner_only = owner_only
-        self.mock_dispatch = mock_dispatch
+        self.mock_dispatch = TELEGRAM_MOCK_DISPATCH if mock_dispatch is None else mock_dispatch
         self.use_gemini = use_gemini
         self.bg_music_path = bg_music_path if bg_music_path is not None else DEFAULT_BG_MUSIC
+
+        # Initialize Sentry telemetry
+        init_sentry()
 
         # Ensure DB is initialized
         init_db(self.db_path)
@@ -81,6 +92,12 @@ class BakuEstatePipeline:
         self.gemini_client = BraveGeminiClient(pool_manager=self.pool_manager)
         self.compositor = VideoCompositor()
         self.dispatcher = TelegramCRMDispatcher(mock_mode=self.mock_dispatch)
+        
+        # Cloud integrations (independent of telegram mock dispatch)
+        is_supa_enabled = enable_supabase if enable_supabase is not None else SUPABASE_ENABLED
+        self.supabase_sync = SupabaseSync(enabled=is_supa_enabled)
+        is_notion_enabled = enable_notion if enable_notion is not None else NOTION_ENABLED
+        self.notion_crm = NotionCRMDispatcher(enabled=is_notion_enabled)
 
     def run_ingestion(self, pages: int = 1, limit_per_page: int = 3, specific_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Scrapes listings from bina.az and saves them to the SQLite database."""
@@ -116,95 +133,144 @@ class BakuEstatePipeline:
 
     def process_listing_video_and_dispatch(self, listing: Dict[str, Any]) -> Dict[str, Any]:
         """Runs the full pipeline for a single listing: TTS -> Video Composition -> Telegram Dispatch."""
-        bina_id = listing["bina_id"]
+        bina_id = listing.get("bina_id", "unknown")
         logger.info(f"=== Processing video pipeline for listing {bina_id} ===")
 
-        # 1. Download photos if not already downloaded
-        downloaded_photos = listing.get("downloaded_photos", [])
-        if not downloaded_photos and listing.get("photo_urls"):
-            logger.info(f"Downloading photos for {bina_id}...")
-            downloaded_photos = self.scraper.download_full_hd_photos(bina_id, listing["photo_urls"])
-            listing["downloaded_photos"] = downloaded_photos
-            update_listing_status(bina_id, "PHOTOS_READY", downloaded_photos, self.db_path)
+        try:
+            # 1. Download photos if not already downloaded
+            downloaded_photos = listing.get("downloaded_photos", [])
+            if not downloaded_photos and listing.get("photo_urls"):
+                logger.info(f"Downloading photos for {bina_id}...")
+                downloaded_photos = self.scraper.download_full_hd_photos(bina_id, listing["photo_urls"])
+                listing["downloaded_photos"] = downloaded_photos
+                update_listing_status(bina_id, "PHOTOS_READY", downloaded_photos, self.db_path)
 
-        if not downloaded_photos:
-            logger.warning(f"No photos available for listing {bina_id}. Cannot compose video.")
+            if not downloaded_photos:
+                logger.warning(f"No photos available for listing {bina_id}. Cannot compose video.")
+                update_listing_status(bina_id, "FAILED", db_path=self.db_path)
+                return {"status": "FAILED", "reason": "No photos"}
+
+            # 2. Generate Narration Script & Edge-TTS Speech with synchronized SRT
+            logger.info(f"--- [Phase 2/5: SCRIPT & TTS] Generating Azerbaijani voiceover for {bina_id} ---")
+            custom_script = None
+            if self.use_gemini:
+                if not self.gemini_client.is_connected():
+                    logger.info("Google AI Pro hovuzu yoxlanılır...")
+                    self.gemini_client.ensure_connected()
+
+                if self.gemini_client.is_connected():
+                    logger.info("Requesting viral AI script from Google AI Pro (Gemini Advanced)...")
+                    custom_script = self.gemini_client.generate_script(listing)
+                else:
+                    logger.info("Google AI Pro pool not active. Using built-in high-quality script generator.")
+
+            script_text, audio_path, srt_path, duration = generate_tts_for_listing(
+                listing=listing,
+                output_dir=OUTPUT_DIR,
+                voice=EDGE_TTS_VOICE,
+                rate=EDGE_TTS_RATE,
+                custom_script=custom_script
+            )
+            update_listing_status(bina_id, "TTS_READY", db_path=self.db_path)
+
+            # 3. 1080x1920 Vertical Video Composition with FFmpeg
+            logger.info(f"--- [Phase 3/5: VIDEO COMPOSITION] Rendering 9:16 vertical video with Ken Burns & Banners ---")
+            output_video_path = OUTPUT_DIR / f"video_{bina_id}.mp4"
+            self.compositor.build_video(
+                listing=listing,
+                image_paths=downloaded_photos,
+                audio_path=audio_path,
+                srt_path=srt_path,
+                output_video_path=output_video_path,
+                bg_music_path=self.bg_music_path,
+                duration=duration
+            )
+
+            # Record video in DB
+            db_listing = get_listing_by_bina_id(bina_id, self.db_path)
+            listing_row_id = db_listing["id"] if db_listing else 0
+
+            record_generated_video(
+                listing_id=listing_row_id,
+                video_path=str(output_video_path.resolve()),
+                audio_path=audio_path,
+                srt_path=srt_path,
+                script_text=script_text,
+                duration_seconds=duration,
+                status="COMPLETED",
+                db_path=self.db_path
+            )
+
+            # 4. Telegram CRM Dispatch
+            logger.info(f"--- [Phase 4/5: DISPATCH] Sending video lead to Telegram CRM ---")
+            dispatch_result = self.dispatcher.send_video_lead(
+                listing=listing,
+                video_path=str(output_video_path.resolve())
+            )
+
+            mark_video_dispatched(
+                listing_id=listing_row_id,
+                telegram_message_id=dispatch_result.get("message_id"),
+                db_path=self.db_path
+            )
+
+            # 5. Cloud Sync (Supabase Storage CDN, Supabase Deals DB, Notion Deals CRM)
+            video_cdn_url = None
+            supabase_res = None
+            if self.supabase_sync and self.supabase_sync.is_configured():
+                logger.info(f"--- [Phase 5/5: CLOUD SYNC] Uploading to Supabase Storage & Syncing Deals Table ---")
+                video_cdn_url = self.supabase_sync.upload_video(str(output_video_path.resolve()))
+                supabase_res = self.supabase_sync.sync_deal(
+                    listing=listing,
+                    video_cdn_url=video_cdn_url,
+                    video_duration=duration,
+                    script_text=script_text,
+                    status="DISPATCHED"
+                )
+
+            notion_res = None
+            if self.notion_crm and self.notion_crm.enabled:
+                logger.info(f"--- Syncing deal {bina_id} to Notion CRM database ---")
+                notion_res = self.notion_crm.sync_deal(
+                    listing=listing,
+                    video_cdn_url=video_cdn_url,
+                    script_text=script_text,
+                    status="Dispatched"
+                )
+
+            # Sentry Telemetry event
+            try:
+                import sentry_sdk
+                sentry_sdk.set_tag("bina_id", str(bina_id))
+                sentry_sdk.capture_message(
+                    f"Deal {bina_id} dispatched (Duration: {duration:.1f}s, Price: {listing.get('price')} AZN)",
+                    level="info"
+                )
+            except Exception:
+                pass
+
+            logger.info(f"=== Successfully completed pipeline for listing {bina_id}! ===")
+            return {
+                "bina_id": bina_id,
+                "video_path": str(output_video_path.resolve()),
+                "audio_path": audio_path,
+                "srt_path": srt_path,
+                "duration": duration,
+                "dispatch": dispatch_result,
+                "video_cdn_url": video_cdn_url,
+                "supabase": supabase_res,
+                "notion": notion_res
+            }
+        except Exception as e:
+            logger.error(f"Error processing listing {bina_id}: {e}", exc_info=True)
+            try:
+                import sentry_sdk
+                sentry_sdk.set_tag("bina_id", str(bina_id))
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             update_listing_status(bina_id, "FAILED", db_path=self.db_path)
-            return {"status": "FAILED", "reason": "No photos"}
-
-        # 2. Generate Narration Script & Edge-TTS Speech with synchronized SRT
-        logger.info(f"--- [Phase 2/5: SCRIPT & TTS] Generating Azerbaijani voiceover for {bina_id} ---")
-        custom_script = None
-        if self.use_gemini:
-            if not self.gemini_client.is_connected():
-                logger.info("Google AI Pro hovuzu yoxlanılır...")
-                self.gemini_client.ensure_connected()
-
-            if self.gemini_client.is_connected():
-                logger.info("Requesting viral AI script from Google AI Pro (Gemini Advanced)...")
-                custom_script = self.gemini_client.generate_script(listing)
-            else:
-                logger.info("Google AI Pro pool not active. Using built-in high-quality script generator.")
-
-        script_text, audio_path, srt_path, duration = generate_tts_for_listing(
-            listing=listing,
-            output_dir=OUTPUT_DIR,
-            voice=EDGE_TTS_VOICE,
-            rate=EDGE_TTS_RATE,
-            custom_script=custom_script
-        )
-        update_listing_status(bina_id, "TTS_READY", db_path=self.db_path)
-
-        # 3. 1080x1920 Vertical Video Composition with FFmpeg
-        logger.info(f"--- [Phase 3/5: VIDEO COMPOSITION] Rendering 9:16 vertical video with Ken Burns & Banners ---")
-        output_video_path = OUTPUT_DIR / f"video_{bina_id}.mp4"
-        self.compositor.build_video(
-            listing=listing,
-            image_paths=downloaded_photos,
-            audio_path=audio_path,
-            srt_path=srt_path,
-            output_video_path=output_video_path,
-            bg_music_path=self.bg_music_path,
-            duration=duration
-        )
-
-        # Record video in DB
-        db_listing = get_listing_by_bina_id(bina_id, self.db_path)
-        listing_row_id = db_listing["id"] if db_listing else 0
-
-        record_generated_video(
-            listing_id=listing_row_id,
-            video_path=str(output_video_path.resolve()),
-            audio_path=audio_path,
-            srt_path=srt_path,
-            script_text=script_text,
-            duration_seconds=duration,
-            status="COMPLETED",
-            db_path=self.db_path
-        )
-
-        # 4. Telegram CRM Dispatch
-        logger.info(f"--- [Phase 4/5: DISPATCH] Sending video lead to Telegram CRM ---")
-        dispatch_result = self.dispatcher.send_video_lead(
-            listing=listing,
-            video_path=str(output_video_path.resolve())
-        )
-
-        mark_video_dispatched(
-            listing_id=listing_row_id,
-            telegram_message_id=dispatch_result.get("message_id"),
-            db_path=self.db_path
-        )
-
-        logger.info(f"=== Successfully completed pipeline for listing {bina_id}! ===")
-        return {
-            "bina_id": bina_id,
-            "video_path": str(output_video_path.resolve()),
-            "audio_path": audio_path,
-            "srt_path": srt_path,
-            "duration": duration,
-            "dispatch": dispatch_result
-        }
+            return {"bina_id": bina_id, "status": "FAILED", "error": str(e)}
 
     def run_full_pipeline(self, pages: int = 1, limit: int = 1, specific_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """End-to-end execution across ingestion and video production."""
@@ -224,8 +290,17 @@ class BakuEstatePipeline:
 
         results = []
         for item in pending_listings[:limit]:
-            res = self.process_listing_video_and_dispatch(item)
-            results.append(res)
+            try:
+                res = self.process_listing_video_and_dispatch(item)
+                results.append(res)
+            except Exception as e:
+                logger.error(f"Unhandled exception in pipeline item {item.get('bina_id')}: {e}", exc_info=True)
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_exception(e)
+                except Exception:
+                    pass
+                results.append({"bina_id": item.get("bina_id"), "status": "FAILED", "error": str(e)})
 
         logger.info(f"--- Pipeline finished. Successfully processed {len(results)} videos ---")
         return results
@@ -242,6 +317,10 @@ def main():
     parser.add_argument("--live-dispatch", action="store_true", help="Send to real Telegram bot instead of mock")
     parser.add_argument("--use-gemini", action="store_true", help="Use active Google Pro (Gemini) session in Brave for scripts")
     parser.add_argument("--bg-music", type=str, default=None, help="Path to custom background music audio file")
+    parser.add_argument("--supabase", action="store_true", default=None, help="Force enable Supabase CDN and deals sync")
+    parser.add_argument("--no-supabase", action="store_false", dest="supabase", help="Disable Supabase CDN and deals sync")
+    parser.add_argument("--notion", action="store_true", default=None, help="Force enable Notion CRM deals sync")
+    parser.add_argument("--no-notion", action="store_false", dest="notion", help="Disable Notion CRM deals sync")
 
     args = parser.parse_args()
 
@@ -255,12 +334,16 @@ def main():
         print("Google account profiles successfully configured.")
         return
 
+    dispatch_mock = False if args.live_dispatch else TELEGRAM_MOCK_DISPATCH
+
     pipeline = BakuEstatePipeline(
         owner_only=not args.allow_agents,
-        mock_dispatch=not args.live_dispatch,
+        mock_dispatch=dispatch_mock,
         db_path=DB_PATH,
         use_gemini=args.use_gemini,
-        bg_music_path=args.bg_music
+        bg_music_path=args.bg_music,
+        enable_supabase=args.supabase,
+        enable_notion=args.notion
     )
 
     pipeline.run_full_pipeline(

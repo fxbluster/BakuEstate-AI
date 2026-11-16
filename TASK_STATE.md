@@ -1,8 +1,8 @@
 # Baku Estate AI — Cari İcraat Vəziyyəti (Task State)
 
-- **Son Yenilənmə:** 2026-11-11 20:10 (UTC+4 Baku)
-- **Aktiv Məqsəd:** Google AI Pro (Gemini Advanced 4) 6-hesablı hovuzunun izolyasiya olunmuş brauzer konteksti ilə tam işə salınması, `taskkill` və CDP port xətalarının ləğvi, yerli MCP serverin (`src/mcp_server.py`) inteqrasiyası və canlı ssenari generasiyası.
-- **Git Checkpoint:** `master`
+- **Son Yenilənmə:** 2026-11-16 21:50 (UTC+4 Baku)
+- **Aktiv Məqsəd:** Google AI Pro (Gemini Advanced 4) 6-hesablı hovuzu, Keenable bazar qiymət analitikası, Sentry telemetriyası, Supabase Storage CDN və Postgres deal sync, Notion Deals CRM Kanban inteqrasiyası və 6-alətli yerli MCP serverin (`src/mcp_server.py`) tam avtonom işə salınması.
+- **Git Checkpoint:** `master` (97/97 test OK, 0 failures, 0 errors)
 
 ---
 
@@ -30,7 +30,7 @@
   - Hesabın kvotası və 600 saniyəlik soyuma vaxtı bazada (`google_accounts`) qeydə alındı.
 
 - [x] **Tam Avtomatlaşdırılmış Testlər (Zero Failures)**:
-  - Bütün 74 unit və inteqrasiya testləri 100% uğurla keçdi (`Ran 74 tests in 18.351s -> OK`, 0 xəta).
+  - Bütün 97 unit və inteqrasiya testləri 100% uğurla keçdi (`Ran 97 tests in 28.454s -> OK`, 0 xəta).
 
 - [x] **OpenAI Studio HD Səsləndirmə İnteqrasiyası (`src/media/openai_tts.py`)**:
   - `tts-1-hd` modeli və `nova` qadın səsi inteqrasiya edildi.

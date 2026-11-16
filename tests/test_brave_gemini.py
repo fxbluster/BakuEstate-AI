@@ -56,6 +56,44 @@ class TestBraveGemini(unittest.TestCase):
         self.assertIn("120000 AZN", prompt)
         self.assertIn("Kupça", prompt)
         self.assertIn("Azərbaycan dilində", prompt)
+        self.assertIn("Keenable", prompt)
+
+    def test_keenable_market_comparison_calculation(self):
+        from src.google_pool.brave_gemini_client import get_keenable_market_comparison
+        stats = get_keenable_market_comparison("Nərimanov rayonu", 166000, 65)
+        self.assertEqual(stats["m2_price"], 2553)
+        self.assertEqual(stats["district"], "Nərimanov")
+        self.assertEqual(stats["district_median"], 3293)
+        self.assertTrue(stats["is_below_market"])
+        self.assertGreater(stats["discount_pct"], 20.0)
+
+    def test_keenable_market_comparison_with_dot_price_and_m2_unit(self):
+        from src.google_pool.brave_gemini_client import get_keenable_market_comparison
+        # Tests thousand-separated price ("180.000 AZN") and area with unit ("75 m2")
+        stats = get_keenable_market_comparison("Xətai r.", "180.000 AZN", "75 m2")
+        self.assertEqual(stats["m2_price"], 2400)
+        self.assertEqual(stats["district"], "Xətai")
+        self.assertEqual(stats["district_median"], 2647)
+        self.assertTrue(stats["is_below_market"])
+        self.assertAlmostEqual(stats["discount_pct"], 9.3, delta=0.2)
+
+    def test_keenable_market_comparison_with_metro_station_location(self):
+        from src.google_pool.brave_gemini_client import get_keenable_market_comparison
+        # "Gənclik m." should accurately resolve to Nərimanov district benchmark
+        stats = get_keenable_market_comparison("Gənclik metrosu yaxınlığında", "200000", "70")
+        self.assertEqual(stats["district"], "Nərimanov")
+        self.assertEqual(stats["district_median"], 3293)
+        self.assertEqual(stats["m2_price"], 2857)
+        self.assertTrue(stats["is_below_market"])
+
+    def test_keenable_market_comparison_with_corrupt_inputs(self):
+        from src.google_pool.brave_gemini_client import get_keenable_market_comparison
+        # Zero area or negative price should return empty dict safely
+        self.assertEqual(get_keenable_market_comparison("Nərimanov", 0, 60), {})
+        self.assertEqual(get_keenable_market_comparison("Nərimanov", 150000, 0), {})
+        self.assertEqual(get_keenable_market_comparison("Nərimanov", -100, 60), {})
+        self.assertEqual(get_keenable_market_comparison("Nərimanov", "unknown", "invalid"), {})
+        self.assertEqual(get_keenable_market_comparison(None, 150000, 60)["district"], "Bakı")
 
     @patch("src.google_pool.brave_gemini_client.is_brave_debugging_open", return_value=False)
     def test_fallback_when_brave_not_connected(self, mock_conn):

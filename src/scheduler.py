@@ -33,7 +33,8 @@ from config.settings import (
     SCHEDULE_LIMIT,
     SCHEDULE_RUN_ON_STARTUP,
     TELEGRAM_MOCK_DISPATCH,
-    DB_PATH
+    DB_PATH,
+    init_sentry
 )
 from run_pipeline import BakuEstatePipeline
 
@@ -118,6 +119,9 @@ class BakuEstateScheduler:
         self.mock_dispatch = TELEGRAM_MOCK_DISPATCH if mock_dispatch is None else mock_dispatch
         self.db_path = db_path
 
+        # Initialize Sentry telemetry
+        init_sentry()
+
         self._stop_event = threading.Event()
         self.pipeline: Optional[BakuEstatePipeline] = None
         self.total_runs_completed = 0
@@ -139,14 +143,39 @@ class BakuEstateScheduler:
         logger.info(f" Parameters: pages={self.pages}, limit={self.limit}, owner_only={self.owner_only}")
         logger.info("========================================================")
 
+        try:
+            import sentry_sdk
+            sentry_sdk.set_tag("component", "scheduler")
+            sentry_sdk.add_breadcrumb(
+                category="scheduler",
+                message=f"Starting job: pages={self.pages}, limit={self.limit}",
+                level="info"
+            )
+        except Exception:
+            pass
+
         pipeline = self._init_pipeline()
         try:
             results = pipeline.run_full_pipeline(pages=self.pages, limit=self.limit)
             self.total_runs_completed += 1
             self.last_run_time = datetime.now()
             logger.info(f" [SCHEDULER JOB FINISHED] Processed {len(results)} videos successfully.")
+            try:
+                import sentry_sdk
+                sentry_sdk.add_breadcrumb(
+                    category="scheduler",
+                    message=f"Job finished: {len(results)} videos produced",
+                    level="info"
+                )
+            except Exception:
+                pass
             return results
         except Exception as e:
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             logger.error(f" [SCHEDULER ERROR] Error during pipeline execution: {e}", exc_info=True)
             return []
 
