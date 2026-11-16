@@ -121,7 +121,7 @@ def check_profile_login_status(profile_name: str, profiles_dir: Optional[Path] =
 
     return {
         "exists": True,
-        "has_session": has_auth_session or (has_cookies and size_mb > 5.0),
+        "has_session": has_auth_session,
         "size_mb": size_mb
     }
 

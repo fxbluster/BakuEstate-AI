@@ -33,12 +33,14 @@ def print_status_table():
         st = check_profile_login_status(p_name)
         if st["has_session"]:
             sess_txt = "✅ Daxil olunub (Hazır)"
+        elif st["size_mb"] > 0:
+            sess_txt = "⚠️ Giriş bitməyib (Auth yoxdur)"
         elif st["exists"]:
             sess_txt = "⏳ Boş (Giriş edilməyib)"
         else:
             sess_txt = "❌ Qovluq yoxdur"
         size_txt = f"{st['size_mb']} MB"
-        print(f" [{i}]        {p_name:<12} {sess_txt:<22} {size_txt}")
+        print(f" [{i}]        {p_name:<12} {sess_txt:<32} {size_txt}")
     print("=" * 65)
 
 def main():
