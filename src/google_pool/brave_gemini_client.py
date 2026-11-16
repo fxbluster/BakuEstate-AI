@@ -353,6 +353,28 @@ class BraveGeminiClient:
             except Exception:
                 pass
 
+            # Dismiss any welcome overlays, dialogs or onboarding popups (cdk-overlay)
+            try:
+                for dismiss_selector in [
+                    "button[aria-label*='Close']",
+                    "button[aria-label*='Bağla']",
+                    "button:has-text('Got it')",
+                    "button:has-text('I agree')",
+                    "button:has-text('Accept')",
+                    "button:has-text('Continue')",
+                    "button:has-text('Anladım')",
+                    "button:has-text('Razıyam')",
+                    "button:has-text('Davam et')",
+                ]:
+                    btn = page.locator(dismiss_selector).first
+                    if btn.count() > 0 and btn.is_visible():
+                        btn.click(timeout=1500)
+                        time.sleep(0.5)
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+            except Exception:
+                pass
+
             # Locate editable input field
             input_selector = 'div[contenteditable="true"]'
             try:
@@ -364,10 +386,23 @@ class BraveGeminiClient:
 
             initial_msg_count = page.locator('message-content').count()
 
-            # Fill and submit prompt
-            input_elem.click()
+            # Fill and submit prompt with robust click
+            try:
+                input_elem.click(timeout=3000)
+            except Exception:
+                try:
+                    page.keyboard.press("Escape")
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+                input_elem.click(force=True)
+
             time.sleep(0.3)
-            input_elem.fill(prompt_text)
+            try:
+                input_elem.fill(prompt_text)
+            except Exception:
+                input_elem.focus()
+                page.keyboard.insert_text(prompt_text)
             time.sleep(0.5)
 
             # Look for send button or press enter
