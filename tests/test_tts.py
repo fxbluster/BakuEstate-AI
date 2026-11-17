@@ -132,5 +132,52 @@ class TestTTSService(unittest.TestCase):
 
         temp_dir.cleanup()
 
+    def test_elevenlabs_alignment_and_mocked_synthesis(self):
+        from unittest.mock import patch, MagicMock
+        from src.media.elevenlabs_tts import parse_alignment_to_words, build_word_level_srt, synthesize_elevenlabs_speech
+        import base64
+
+        # Test alignment parser
+        fake_alignment = {
+            "characters": ["B", "a", "k", "ı", " ", "e", "v"],
+            "character_start_times_seconds": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+        }
+        words = parse_alignment_to_words(fake_alignment)
+        self.assertEqual(len(words), 2)
+        self.assertEqual(words[0]["word"], "Bakı")
+        self.assertEqual(words[1]["word"], "ev")
+        self.assertAlmostEqual(words[0]["start"], 0.0)
+        self.assertAlmostEqual(words[1]["end"], 0.7)
+
+        srt = build_word_level_srt(words, words_per_chunk=2)
+        self.assertIn("Bakı ev", srt)
+
+        # Test mocked synthesis
+        temp_dir = tempfile.TemporaryDirectory()
+        out_dir = Path(temp_dir.name)
+        audio_p = out_dir / "test_eleven.mp3"
+        srt_p = out_dir / "test_eleven.srt"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "audio_base64": base64.b64encode(b"ID3FakeElevenLabsAudio").decode("utf-8"),
+            "alignment": fake_alignment
+        }
+
+        with patch("requests.post", return_value=mock_resp):
+            duration = synthesize_elevenlabs_speech(
+                text="Bakı ev",
+                output_audio_path=audio_p,
+                output_srt_path=srt_p,
+                api_key="xi-testkey123"
+            )
+            self.assertAlmostEqual(duration, 0.7)
+            self.assertTrue(audio_p.exists())
+            self.assertTrue(srt_p.exists())
+
+        temp_dir.cleanup()
+
 if __name__ == "__main__":
     unittest.main()

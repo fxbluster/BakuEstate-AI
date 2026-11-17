@@ -186,7 +186,7 @@ class BraveGeminiClient:
         """Ensures client is ready to process scripts."""
         return ensure_brave_ai_running()
 
-    def build_real_estate_prompt(self, listing: Dict[str, Any]) -> str:
+    def build_real_estate_prompt(self, listing: Dict[str, Any], has_photos: bool = False) -> str:
         """Constructs an ultra-engaging, viral Azerbaijani prompt for Gemini Advanced."""
         title = listing.get("title", "")
         price = listing.get("price", "")
@@ -222,6 +222,15 @@ class BraveGeminiClient:
                     f"- Keenable Bazar Analitikası (2026): 1 m² qiyməti {m2_price} AZN ({dist_name} üzrə median: {dist_med} AZN).\n"
                 )
 
+        photo_directive = ""
+        if has_photos:
+            photo_directive = (
+                "7. VİZUAL ANALİZ TƏLƏBİ: Mənzilin real çəkilmiş interyer fotoları yuxarıda əlavə edilib! "
+                "Fotolara diqqətlə bax: təmirin üslubunu (modern/neoklassika, asma tavan, gizli LED işıqlar, laminat/mərmər döşəmə, "
+                "geniş vitraj pəncərələr, mətbəx mebeli və ya mənzərə) birbaşa ssenariyə daxil et. "
+                "Şablon sözlər deyil, məhz fotoda GÖRÜNƏN real vizual üstünlükləri vurğula!\n"
+            )
+
         prompt = (
             f"Sən daşınmaz əmlak üzrə peşəkar, gənc, həddindən artıq enerjili və cəlbedici XANIM aparıcısan (Instagram Reels / TikTok ulduzu). "
             f"Aşağıdakı mənzil üçün 25-28 saniyəlik həyəcanlı, maraq oyadan, satıcı və canlı "
@@ -241,19 +250,39 @@ class BraveGeminiClient:
             f"4. Qiyməti (məsələn: 'cəmi {price} min manat'), yerləşməni və kupçanın olmasını mütləq vurğula.\n"
             f"5. Sonda dərhal nömrəyə zəng etməyə və ya WhatsApp-a yazmağa güclü çağırışla (Call-to-Action) bitir.\n"
             f"{market_requirement}"
+            f"{photo_directive}"
         )
         return prompt
 
-    def generate_script(self, listing: Dict[str, Any], max_account_retries: Optional[int] = None) -> Optional[str]:
+    def generate_script(
+        self,
+        listing: Dict[str, Any],
+        photo_paths: Optional[List[str]] = None,
+        max_account_retries: Optional[int] = None
+    ) -> Optional[str]:
         """
         Interacts with Google AI Pro (Gemini Advanced) via Playwright persistent context.
+        Supports multimodal photo upload: passes property photos directly into Gemini.
         Rotates accounts across the pool if quota is reached or errors occur.
         """
         if not self.is_connected():
             logger.warning("Google AI Pro pool not available. Using fallback template.")
             return None
 
-        prompt_text = self.build_real_estate_prompt(listing)
+        # Filter valid existing photos
+        valid_photos = []
+        if photo_paths:
+            for p in photo_paths:
+                try:
+                    fpath = Path(p)
+                    if fpath.is_file() and fpath.stat().st_size > 1000:
+                        valid_photos.append(str(fpath.resolve()))
+                except Exception:
+                    pass
+        # Limit to top 4 photos to optimize web upload latency
+        valid_photos = valid_photos[:4]
+
+        prompt_text = self.build_real_estate_prompt(listing, has_photos=bool(valid_photos))
         retries = max_account_retries if max_account_retries is not None else len(GOOGLE_ACCOUNT_PROFILES)
         attempted_profiles = set()
 
@@ -275,10 +304,10 @@ class BraveGeminiClient:
                 self.pool_manager.release_account(profile_name, success=False, custom_cooldown=3600)
                 continue
 
-            logger.info(f"Using Google AI Pro profile: {profile_name} (Attempt {attempt+1}/{retries})")
+            logger.info(f"Using Google AI Pro profile: {profile_name} (Attempt {attempt+1}/{retries}, photos: {len(valid_photos)})")
 
             try:
-                result = self._execute_gemini_prompt(profile_name, prompt_text)
+                result = self._execute_gemini_prompt(profile_name, prompt_text, photo_paths=valid_photos)
                 if result.get("quota_hit"):
                     logger.warning(f"Quota limit reached on {profile_name}. Putting into cooldown and rotating...")
                     self.pool_manager.release_account(profile_name, success=False, custom_cooldown=3600)
@@ -297,7 +326,7 @@ class BraveGeminiClient:
                 if result.get("success") and result.get("text"):
                     self.pool_manager.release_account(profile_name, success=True)
                     cleaned = clean_gemini_response(result["text"])
-                    logger.info(f"Successfully generated script via {profile_name} ({len(cleaned)} chars).")
+                    logger.info(f"Successfully generated multimodal script via {profile_name} ({len(cleaned)} chars).")
                     return cleaned
 
                 # If failed without quota hit (e.g. timeout)
@@ -311,10 +340,15 @@ class BraveGeminiClient:
         logger.warning("All attempted Google AI Pro accounts failed. Returning None for fallback.")
         return None
 
-    def _execute_gemini_prompt(self, profile_name: str, prompt_text: str) -> Dict[str, Any]:
+    def _execute_gemini_prompt(
+        self,
+        profile_name: str,
+        prompt_text: str,
+        photo_paths: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """
         Launches Playwright persistent context for profile_name, submits prompt,
-        and waits for response completion.
+        attaches multimodal property photos if available, and waits for response completion.
         """
         with self.pool_manager.persistent_playwright_context(profile_name, headless=True) as context:
             if not context:
@@ -385,6 +419,40 @@ class BraveGeminiClient:
                 return {"success": False, "reason": "Input element not found"}
 
             initial_msg_count = page.locator('message-content').count()
+
+            # If multimodal photos provided, upload them before submitting prompt
+            if photo_paths:
+                try:
+                    logger.info(f"Uploading {len(photo_paths)} property photos to Gemini chat for multimodal vision analysis...")
+                    file_input = page.locator('input[type="file"]').first
+                    if file_input.count() > 0:
+                        file_input.set_input_files(photo_paths)
+                        time.sleep(2.5)
+                    else:
+                        attach_selectors = [
+                            "button[aria-label*='Upload']",
+                            "button[aria-label*='Attach']",
+                            "button[aria-label*='Şəkil']",
+                            "button[aria-label*='şəkil']",
+                            "button[aria-label*='file']",
+                            "button[aria-label*='File']",
+                            "button[aria-label*='Add']",
+                            "button[aria-label*='Əlavə']",
+                            "button.uploader-button",
+                            "button.attach-button"
+                        ]
+                        for sel in attach_selectors:
+                            btn = page.locator(sel).first
+                            if btn.count() > 0 and btn.is_visible():
+                                btn.click(timeout=1500)
+                                time.sleep(1.0)
+                                file_input = page.locator('input[type="file"]').first
+                                if file_input.count() > 0:
+                                    file_input.set_input_files(photo_paths)
+                                    time.sleep(2.5)
+                                    break
+                except Exception as img_err:
+                    logger.warning(f"Failed to attach photos to Gemini prompt: {img_err}. Proceeding with text-only.")
 
             # Fill and submit prompt with robust click
             try:

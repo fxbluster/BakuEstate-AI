@@ -265,11 +265,26 @@ def generate_tts_for_listing(
     raw_script = custom_script or generate_azerbaijani_script(listing)
     script_text = normalize_azerbaijani_phonetics(raw_script)
 
-    # Check for OpenAI Studio Voiceover
+    # Check for ElevenLabs or OpenAI Studio Voiceover
+    eleven_key = os.getenv("ELEVENLABS_API_KEY", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
-    tts_engine = os.getenv("TTS_ENGINE", "openai" if openai_key else "edge").lower()
+    tts_engine = os.getenv("TTS_ENGINE", "elevenlabs" if eleven_key else ("openai" if openai_key else "edge")).lower()
 
-    if tts_engine == "openai" and openai_key:
+    if tts_engine == "elevenlabs" and eleven_key:
+        try:
+            from src.media.elevenlabs_tts import synthesize_elevenlabs_speech
+            logger.info("Using ElevenLabs Studio TTS for ultra-realistic human voiceover...")
+            duration = synthesize_elevenlabs_speech(
+                text=script_text,
+                output_audio_path=audio_path,
+                output_srt_path=srt_path,
+                api_key=eleven_key
+            )
+            return script_text, str(audio_path.resolve()), str(srt_path.resolve()), duration
+        except Exception as e:
+            logger.warning(f"ElevenLabs TTS failed: {e}. Falling back to secondary engine...")
+
+    if tts_engine in ("elevenlabs", "openai") and openai_key:
         try:
             from src.media.openai_tts import synthesize_openai_speech
             logger.info("Using OpenAI Studio TTS for natural professional voiceover...")

@@ -195,17 +195,25 @@ class VideoCompositor:
         srt_path: str,
         output_video_path: Path,
         bg_music_path: Optional[str] = None,
-        duration: Optional[float] = None
+        duration: Optional[float] = None,
+        use_cinematic_engine: bool = False
     ) -> Path:
         """
         Orchestrates full video compilation:
-        1. Calculates duration per slide.
-        2. Renders Ken Burns slide clips for all photos.
-        3. Concatenates slides.
-        4. Overlays Golden Price Banner, Kupça badge, Location banner, and dynamic subtitles.
-        5. Mixes voiceover audio (with auto-ducked background music if provided).
-        6. Produces final 1080x1920 MP4 video.
+        If use_cinematic_engine is True, delegates to build_cinematic_video.
+        Otherwise executes standard Ken Burns video composition.
         """
+        if use_cinematic_engine:
+            return self.build_cinematic_video(
+                listing=listing,
+                image_paths=image_paths,
+                audio_path=audio_path,
+                srt_path=srt_path,
+                output_video_path=output_video_path,
+                bg_music_path=bg_music_path,
+                duration=duration
+            )
+
         if not image_paths:
             raise ValueError("At least one image path is required to compose video.")
 
@@ -353,6 +361,7 @@ class VideoCompositor:
                     resolved_bg_music = str(fallback_music)
 
             chime_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "chime.mp3"
+            whoosh_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "whoosh.mp3"
 
             cmd = [
                 self.ffmpeg_exe, "-y",
@@ -363,23 +372,51 @@ class VideoCompositor:
             if resolved_bg_music and Path(resolved_bg_music).exists():
                 cmd.extend(["-stream_loop", "-1", "-i", str(resolved_bg_music)])
                 fade_start = max(1.0, total_duration - 1.2)
+                
+                # Check SFX availability
+                has_chime = chime_sfx.exists()
+                has_whoosh = whoosh_sfx.exists() and num_images > 1
 
-                if chime_sfx.exists():
+                audio_inputs = [
+                    f"[2:a]volume=0.22,lowpass=f=3800[bg_pre];"
+                    f"[bg_pre][1:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg];"
+                ]
+                mix_sources = ["[ducked_bg]", "[1:a]"]
+                next_input_idx = 3
+
+                if has_chime:
                     cmd.extend(["-i", str(chime_sfx)])
-                    audio_filter = (
-                        f"[2:a]volume=0.22,lowpass=f=3800[bg_pre];"
-                        f"[bg_pre][1:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg];"
-                        f"[3:a]adelay=500|500,volume=0.35[sfx_chime];"
-                        f"[ducked_bg][1:a][sfx_chime]amix=inputs=3:normalize=0[amixed];"
-                        f"[amixed]afade=t=out:st={fade_start:.2f}:d=1.2[aout]"
-                    )
-                else:
-                    audio_filter = (
-                        f"[2:a]volume=0.22,lowpass=f=3800[bg_pre];"
-                        f"[bg_pre][1:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg];"
-                        f"[ducked_bg][1:a]amix=inputs=2:normalize=0[amixed];"
-                        f"[amixed]afade=t=out:st={fade_start:.2f}:d=1.2[aout]"
-                    )
+                    audio_inputs.append(f"[{next_input_idx}:a]adelay=500|500,volume=0.35[sfx_chime];")
+                    mix_sources.append("[sfx_chime]")
+                    next_input_idx += 1
+
+                if has_whoosh:
+                    cmd.extend(["-i", str(whoosh_sfx)])
+                    num_transitions = num_images - 1
+                    transition_delays = [int(i * slide_duration * 1000) for i in range(1, num_images)]
+                    
+                    if num_transitions == 1:
+                        audio_inputs.append(
+                            f"[{next_input_idx}:a]adelay={transition_delays[0]}|{transition_delays[0]},volume=0.32[sfx_whooshes];"
+                        )
+                    else:
+                        whoosh_splits = "".join(f"[w{i}]" for i in range(num_transitions))
+                        split_chain = f"[{next_input_idx}:a]asplit={num_transitions}{whoosh_splits};"
+                        delay_chains = ";".join(
+                            f"[w{i}]adelay={transition_delays[i]}|{transition_delays[i]},volume=0.32[wd{i}]"
+                            for i in range(num_transitions)
+                        )
+                        mix_whoosh = "".join(f"[wd{i}]" for i in range(num_transitions)) + f"amix=inputs={num_transitions}:normalize=0[sfx_whooshes];"
+                        audio_inputs.append(f"{split_chain}{delay_chains};{mix_whoosh}")
+                    
+                    mix_sources.append("[sfx_whooshes]")
+                    next_input_idx += 1
+
+                num_mix = len(mix_sources)
+                mix_chain = "".join(mix_sources) + f"amix=inputs={num_mix}:normalize=0[amixed];"
+                fade_chain = f"[amixed]afade=t=out:st={fade_start:.2f}:d=1.2[aout]"
+                
+                audio_filter = "".join(audio_inputs) + mix_chain + fade_chain
 
                 cmd.extend([
                     "-filter_complex", f"[0:v]{final_vf}[vout];{audio_filter}",
@@ -416,6 +453,174 @@ class VideoCompositor:
 
         finally:
             # Clean up temp folder
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    def build_cinematic_video(
+        self,
+        listing: Dict[str, Any],
+        image_paths: List[str],
+        audio_path: str,
+        srt_path: str,
+        output_video_path: Path,
+        bg_music_path: Optional[str] = None,
+        duration: Optional[float] = None,
+        framing_mode: str = "smart_matte"
+    ) -> Path:
+        """
+        Next-generation cinematic video compositor:
+        1. Uses room-adaptive camera motion (pan/tilt/zoom) + FFmpeg xfade walkthrough transitions.
+        2. Renders floating glassmorphic hero badge (dissolves after 3.5s) and safe-zone CTA card.
+        3. Burns 2-3 word kinetic ASS subtitles with champagne gold & mint keyword highlights.
+        4. Mixes 4-tier audio: voiceover + sidechain ducked music + transition whooshes + chime.
+        """
+        from src.media.motion_engine import MotionEngine, render_cinematic_walkthrough
+        from src.media.glass_badge import create_hero_badge, create_cta_badge, get_hero_overlay_filter
+        from src.media.kinetic_subtitles import convert_srt_to_kinetic_ass
+
+        if not image_paths:
+            raise ValueError("At least one image path is required to compose video.")
+
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="estate_cinematic_"))
+
+        try:
+            total_duration = duration
+            if not total_duration or total_duration <= 0:
+                total_duration = self._probe_audio_duration(Path(audio_path))
+            if total_duration <= 0:
+                total_duration = len(image_paths) * SLIDE_DURATION
+
+            logger.info(f"Rendering cinematic walkthrough for listing {listing.get('bina_id', 'unknown')} (Duration: {total_duration:.2f}s, {len(image_paths)} slides)...")
+
+            # 1. Render motion walkthrough via render_cinematic_walkthrough
+            walkthrough_output = temp_dir / "walkthrough_raw.mp4"
+            walkthrough_res = render_cinematic_walkthrough(
+                image_paths=image_paths,
+                output_path=walkthrough_output,
+                total_duration=total_duration,
+                framing_mode=framing_mode,
+                ffmpeg_exe=self.ffmpeg_exe
+            )
+            walkthrough_raw = walkthrough_res["video_path"]
+            transitions = walkthrough_res.get("transitions", [])
+
+            # 2. Generate floating glassmorphic hero badge (t=0.2s to t=3.6s)
+            hero_badge_path = temp_dir / "hero_badge.png"
+            create_hero_badge(listing, hero_badge_path)
+
+            # 3. Generate safe-zone CTA badge
+            cta_badge_path = temp_dir / "cta_badge.png"
+            create_cta_badge(listing, cta_badge_path)
+
+            # 4. Convert subtitles to kinetic ASS
+            ass_path = temp_dir / "subtitles_kinetic.ass"
+            convert_srt_to_kinetic_ass(Path(srt_path), ass_path, margin_v=560)
+            escaped_ass = escape_ffmpeg_path(ass_path)
+
+            # Build video filtergraph
+            hero_end_time = min(3.6, total_duration - 1.5)
+            cta_start_time = max(0.5, total_duration - 6.5)
+
+            v_filters = [
+                f"[0:v][1:v]overlay=x=(W-w)/2:y='if(lt(t,0.55), 160-(0.55-t)*70, 160)':enable='between(t,0.2,{hero_end_time:.2f})':format=auto[v_hero]",
+                f"[v_hero][2:v]overlay=x=(W-w)/2:y=1380:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
+                f"[v_cta]subtitles='{escaped_ass}'[v_out]"
+            ]
+            filter_complex_v = ";".join(v_filters)
+
+            # 5. Background music and SFX configuration
+            resolved_bg_music = bg_music_path
+            if not resolved_bg_music or not Path(resolved_bg_music).exists():
+                fallback_music = Path(__file__).resolve().parent.parent.parent / "assets" / "music" / "luxury_beat.mp3"
+                if fallback_music.exists():
+                    resolved_bg_music = str(fallback_music)
+
+            chime_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "chime.mp3"
+            whoosh_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "whoosh.mp3"
+
+            cmd = [
+                self.ffmpeg_exe, "-y",
+                "-i", str(walkthrough_raw),
+                "-i", str(hero_badge_path),
+                "-i", str(cta_badge_path),
+                "-i", str(audio_path)
+            ]
+
+            if resolved_bg_music and Path(resolved_bg_music).exists():
+                cmd.extend(["-stream_loop", "-1", "-i", str(resolved_bg_music)])
+                next_in = 5
+                has_chime = chime_sfx.exists()
+                has_whoosh = whoosh_sfx.exists() and len(transitions) > 0
+
+                a_chains = [
+                    f"[4:a]volume=0.20,lowpass=f=3800[bg_pre]",
+                    f"[bg_pre][3:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg]"
+                ]
+                mix_sources = ["[ducked_bg]", "[3:a]"]
+
+                if has_chime:
+                    cmd.extend(["-i", str(chime_sfx)])
+                    a_chains.append(f"[{next_in}:a]adelay=400|400,volume=0.35[sfx_chime]")
+                    mix_sources.append("[sfx_chime]")
+                    next_in += 1
+
+                if has_whoosh:
+                    cmd.extend(["-i", str(whoosh_sfx)])
+                    n_trans = len(transitions)
+                    if n_trans == 1:
+                        del_ms = int(transitions[0]["timestamp"] * 1000)
+                        a_chains.append(f"[{next_in}:a]adelay={del_ms}|{del_ms},volume=0.32[sfx_whoosh]")
+                        mix_sources.append("[sfx_whoosh]")
+                    else:
+                        whoosh_splits = "".join(f"[w{i}]" for i in range(n_trans))
+                        a_chains.append(f"[{next_in}:a]asplit={n_trans}{whoosh_splits}")
+                        for i, trans_info in enumerate(transitions):
+                            del_ms = int(trans_info["timestamp"] * 1000)
+                            a_chains.append(f"[w{i}]adelay={del_ms}|{del_ms},volume=0.32[wd{i}]")
+                            mix_sources.append(f"[wd{i}]")
+                    next_in += 1
+
+                fade_start = max(1.0, total_duration - 1.2)
+                a_chains.append(f"{''.join(mix_sources)}amix=inputs={len(mix_sources)}:duration=first:dropout_transition=2,volume=1.0,afade=t=out:st={fade_start:.2f}:d=1.2[a_out]")
+
+                full_filter_complex = f"{filter_complex_v};{';'.join(a_chains)}"
+                cmd.extend([
+                    "-filter_complex", full_filter_complex,
+                    "-map", "[v_out]",
+                    "-map", "[a_out]"
+                ])
+            else:
+                cmd.extend([
+                    "-filter_complex", filter_complex_v,
+                    "-map", "[v_out]",
+                    "-map", "3:a"
+                ])
+
+            cmd.extend([
+                "-t", str(total_duration),
+                "-c:v", "libx264",
+                "-preset", "faster",
+                "-pix_fmt", "yuv420p",
+                "-b:v", "3500k",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(output_video_path)
+            ])
+
+            logger.info(f"Compiling next-gen cinematic video -> {output_video_path}...")
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if res.returncode != 0:
+                logger.error(f"FFmpeg cinematic composite failed: {res.stderr[-500:]}")
+                raise RuntimeError(f"FFmpeg cinematic composite failed: {res.stderr[-300:]}")
+
+            logger.info(f"Successfully rendered next-gen cinematic video: {output_video_path} ({output_video_path.stat().st_size} bytes)")
+            return output_video_path
+
+        finally:
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:

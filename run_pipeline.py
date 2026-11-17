@@ -118,6 +118,11 @@ class BakuEstatePipeline:
                         details["status"] = "PHOTOS_READY"
                 save_listing(details, self.db_path)
                 saved_listings.append(details)
+            else:
+                db_item = get_listing_by_bina_id(specific_id, self.db_path)
+                if db_item:
+                    logger.info(f"Listing {specific_id} fetched from local database cache.")
+                    saved_listings.append(db_item)
             return saved_listings
 
         for page in range(1, pages + 1):
@@ -159,8 +164,8 @@ class BakuEstatePipeline:
                     self.gemini_client.ensure_connected()
 
                 if self.gemini_client.is_connected():
-                    logger.info("Requesting viral AI script from Google AI Pro (Gemini Advanced)...")
-                    custom_script = self.gemini_client.generate_script(listing)
+                    logger.info("Requesting multimodal viral AI script from Google AI Pro (Gemini Advanced)...")
+                    custom_script = self.gemini_client.generate_script(listing, photo_paths=downloaded_photos)
                 else:
                     logger.info("Google AI Pro pool not active. Using built-in high-quality script generator.")
 
@@ -173,10 +178,10 @@ class BakuEstatePipeline:
             )
             update_listing_status(bina_id, "TTS_READY", db_path=self.db_path)
 
-            # 3. 1080x1920 Vertical Video Composition with FFmpeg
-            logger.info(f"--- [Phase 3/5: VIDEO COMPOSITION] Rendering 9:16 vertical video with Ken Burns & Banners ---")
+            # 3. 1080x1920 Next-Gen Cinematic Video Composition (FFmpeg Room-Adaptive Motion + Glass Badge + Kinetic ASS)
+            logger.info(f"--- [Phase 3/5: VIDEO COMPOSITION] Rendering Next-Gen Cinematic Walkthrough & Kinetic Subtitles ---")
             output_video_path = OUTPUT_DIR / f"video_{bina_id}.mp4"
-            self.compositor.build_video(
+            self.compositor.build_cinematic_video(
                 listing=listing,
                 image_paths=downloaded_photos,
                 audio_path=audio_path,
@@ -278,14 +283,15 @@ class BakuEstatePipeline:
         logger.info("   BAKU ESTATE AI - AUTOMATED SOCIAL MEDIA VIDEO PIPELINE       ")
         logger.info("=================================================================")
 
-        # Ingest listings
-        ingested = self.run_ingestion(pages=pages, limit_per_page=limit, specific_id=specific_id)
-
         # Prioritize specific requested ID if provided, otherwise fetch unprocessed items
         if specific_id:
             specific = get_listing_by_bina_id(specific_id, self.db_path)
+            if not specific or not specific.get("downloaded_photos"):
+                self.run_ingestion(pages=pages, limit_per_page=limit, specific_id=specific_id)
+                specific = get_listing_by_bina_id(specific_id, self.db_path)
             pending_listings = [specific] if specific else []
         else:
+            self.run_ingestion(pages=pages, limit_per_page=limit)
             pending_listings = get_unprocessed_listings(limit=limit, db_path=self.db_path)
 
         results = []

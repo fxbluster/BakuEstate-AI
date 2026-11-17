@@ -228,7 +228,7 @@ DEFAULT_HEADERS = {
 # Google Pool Settings
 GOOGLE_POOL_SIZE = int(os.getenv("GOOGLE_POOL_SIZE", "6"))
 GOOGLE_ACCOUNT_PROFILES = [f"acc_{i+1}" for i in range(GOOGLE_POOL_SIZE)]
-ACCOUNT_COOLDOWN_SECONDS = int(os.getenv("ACCOUNT_COOLDOWN_SECONDS", "600"))  # 10 minutes
+ACCOUNT_COOLDOWN_SECONDS = int(os.getenv("ACCOUNT_COOLDOWN_SECONDS", "15"))  # 15 seconds natural pacing between requests
 ACCOUNT_DAILY_QUOTA = int(os.getenv("ACCOUNT_DAILY_QUOTA", "50"))
 
 # Microsoft Edge-TTS Settings

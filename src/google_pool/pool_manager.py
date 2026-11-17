@@ -70,20 +70,35 @@ class GooglePoolManager:
                     ORDER BY COALESCE(last_used_at, '1970-01-01') ASC, id ASC
                 """, (now_iso,)).fetchall()
 
-                if not rows:
-                    logger.warning("No Google accounts currently available (all cooling down or at quota limit).")
-                    return None
-
                 selected = None
                 from src.google_pool.setup_accounts import check_profile_login_status
-                if prioritize_sessions or require_session:
+                if rows and (prioritize_sessions or require_session):
                     for r in rows:
                         status = check_profile_login_status(r["profile_name"], self.profiles_dir)
                         if status.get("has_session", False):
                             selected = dict(r)
                             break
 
+                # Fallback: if all accounts in cooldown or none had session in uncooled rows,
+                # check if an authenticated account with quota left exists
+                if not selected and (prioritize_sessions or require_session):
+                    fallback_auth_rows = conn.execute("""
+                        SELECT * FROM google_accounts
+                        WHERE is_active = 1
+                          AND quota_used_today < max_daily_quota
+                        ORDER BY COALESCE(cooldown_until, '1970-01-01') ASC, id ASC
+                    """).fetchall()
+                    for r in fallback_auth_rows:
+                        status = check_profile_login_status(r["profile_name"], self.profiles_dir)
+                        if status.get("has_session", False):
+                            logger.info(f"Using authenticated profile {r['profile_name']} (active session available).")
+                            selected = dict(r)
+                            break
+
                 if not selected:
+                    if not rows:
+                        logger.warning("No Google accounts currently available (all cooling down or at quota limit).")
+                        return None
                     if require_session:
                         logger.warning("No authenticated Google accounts available with active sessions.")
                         return None
