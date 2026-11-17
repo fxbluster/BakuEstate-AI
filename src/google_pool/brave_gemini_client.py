@@ -186,18 +186,32 @@ class BraveGeminiClient:
         """Ensures client is ready to process scripts."""
         return ensure_brave_ai_running()
 
-    def build_real_estate_prompt(self, listing: Dict[str, Any], has_photos: bool = False) -> str:
-        """Constructs an ultra-engaging, viral Azerbaijani prompt for Gemini Advanced."""
+    def build_real_estate_prompt(
+        self,
+        listing: Dict[str, Any],
+        has_photos: bool = False,
+        archetype: Optional[str] = None
+    ) -> str:
+        """Constructs an ultra-engaging, archetype-specific Azerbaijani prompt for Gemini Advanced."""
+        from src.media.tts_service import (
+            canonicalize_location_phrase,
+            detect_listing_archetype,
+            verbalize_baku_price
+        )
+
         title = listing.get("title", "")
         price = listing.get("price", "")
         currency = listing.get("currency", "AZN")
-        location = listing.get("location") or listing.get("address") or "Bakı"
+        raw_location = listing.get("location") or listing.get("address") or "Bakı"
+        location = canonicalize_location_phrase(raw_location)
         rooms = listing.get("rooms", "")
         area = listing.get("area", "")
         floor = listing.get("floor", "")
         floors = listing.get("floors", "")
         has_kupca = listing.get("has_bill_of_sale", True)
         description = listing.get("description", "")
+        spoken_price = verbalize_baku_price(price)
+        arch = archetype or detect_listing_archetype(listing)
 
         market_stats = get_keenable_market_comparison(location, price, area)
         market_info_line = ""
@@ -222,6 +236,23 @@ class BraveGeminiClient:
                     f"- Keenable Bazar Analitikası (2026): 1 m² qiyməti {m2_price} AZN ({dist_name} üzrə median: {dist_med} AZN).\n"
                 )
 
+        floor_objection_directive = ""
+        if floor and floors and str(floor) == str(floors) and int(floors) <= 5:
+            floor_objection_directive = (
+                "- MƏRTƏBƏ / DAM TƏMİNATI: Mənzil 5 mərtəbəli binanın 5-ci mərtəbəsində yerləşir. "
+                "Alıcıların tərəddüdünü aradan qaldırmaq üçün dam örtüyünün tamamilə yeniləndiyini və "
+                "üst mərtəbədə ayaq səsi olmadan sakit ailə həyatı təmin etdiyini xüsusi vurğula!\n"
+            )
+
+        desc_lower = (str(description) + " " + str(title)).lower()
+        is_stone = any(kw in desc_lower for kw in ["daş", "minsk", "leninqrad", "eksperimental", "xruşşov"])
+        stone_directive = ""
+        if is_stone:
+            stone_directive = (
+                "- DAŞ BİNA ÜSTÜNLÜYÜ: Bina tam daşdır! Qalın daş divarların yayda təbii sərinlik, "
+                "qışda isə ideal istilik saxladığını, panel binalardan fərqli olaraq yüksək səs izolyasiyasına malik olduğunu vurğula!\n"
+            )
+
         photo_directive = ""
         if has_photos:
             photo_directive = (
@@ -231,23 +262,49 @@ class BraveGeminiClient:
                 "Şablon sözlər deyil, məhz fotoda GÖRÜNƏN real vizual üstünlükləri vurğula!\n"
             )
 
+        if arch == "luxury":
+            persona_desc = (
+                "Sən elit daşınmaz əmlak üzrə yüksək statuslu, dərin və təmkinli aparıcısan (Architectural Digest / Luxury Real Estate). "
+                "Heç vaxt qışqırma və ya ucuz şablonlar ('Dayanın!', 'Şok təklif!') işlətmə. "
+                "Sakit, dəbdəbəli, vitraj pəncərələri, tavan hündürlüyünü və prestijli ünvanı vurğulayan 25-28 saniyəlik zərif, canlı Azərbaycan dilində ssenari yaz."
+            )
+            hook_guidance = "İlk 3 saniyədə elit layihənin arxitekturasını və eksklüzivliyini zərif vurğula."
+        elif arch == "villa":
+            persona_desc = (
+                "Sən bağ evləri və villalar üzrə aparıcısan. "
+                "Şəhərin səs-küyündən uzaqlaşmaq, təmiz hava, filterli hovuz, abad bağça və 4 fəsil kurort rahatlığı hissini yaradan 25-28 saniyəlik canlı Azərbaycan dilində ssenari yaz."
+            )
+            hook_guidance = "İlk 3 saniyədə şəhərdən kənar istirahət və ailə komfortu hissini canlandır."
+        elif arch == "commercial":
+            persona_desc = (
+                "Sən kommersiya daşınmaz əmlakı və investisiya üzrə analitik işgüzar ekspertsən. "
+                "Rəqəmlərlə danış: yüksək piyada axını, aylıq stabil icarə gəliri, payback müddəti və likvidliyi ön plana çıxaran 25-28 saniyəlik işgüzar, canlı Azərbaycan dilində ssenari yaz."
+            )
+            hook_guidance = "İlk 3 saniyədə aylıq nağd icarə gəlirini və yüksək rentabellik rəqəmini qarmaq kimi at."
+        else:
+            persona_desc = (
+                "Sən daşınmaz əmlak üzrə səmimi, ailəvi və etibarlı aparıcısan. "
+                "Ucuz süni şou və ya qışqırıq ('Dayanın!', 'Şok!') deyil, real alıcıya sərfəli ailə evi təqdim edən, metroya yaxınlığı, daş binanın istiliyini və ipoteka rahatlığını vurğulayan 25-28 saniyəlik canlı Azərbaycan dilində ssenari yaz."
+            )
+            hook_guidance = f"İlk 3 saniyədə metroya yaxınlıq və ya büdcə qənaətini səmimi dildə vurğula (məsələn: '{location} ərazisində daş binada hazır kupçalı ailə mənzili!')."
+
         prompt = (
-            f"Sən daşınmaz əmlak üzrə peşəkar, gənc, həddindən artıq enerjili və cəlbedici XANIM aparıcısan (Instagram Reels / TikTok ulduzu). "
-            f"Aşağıdakı mənzil üçün 25-28 saniyəlik həyəcanlı, maraq oyadan, satıcı və canlı "
-            f"Azərbaycan dilində səsli videoçarx ssenarisi yaz.\n\n"
+            f"{persona_desc}\n\n"
             f"MƏNZİL MƏLUMATLARI:\n"
             f"- Başlıq: {title}\n"
-            f"- Qiymət: {price} {currency}\n"
+            f"- Qiymət: {spoken_price} ({price} {currency})\n"
             f"- Yerləşmə: {location}\n"
             f"- Parametrlər: {rooms} otaq, {area} kv.m, mərtəbə {floor}/{floors}\n"
             f"- Sənəd: {'Dövlət Çıxarışı (Kupça) var, ipotekaya tam yararlıdır' if has_kupca else 'Müqaviləli'}\n"
+            f"{floor_objection_directive}"
+            f"{stone_directive}"
             f"{market_info_line}"
             f"- Əlavə məlumat: {description[:300]}\n\n"
             f"TƏLƏBLƏR:\n"
-            f"1. YALNIZ diktor xanımın oxuyacağı təmiz, danışıq dilində mətn yaz. Heç bir kadr qeydi, mötərizə və ya təlimat yazma!\n"
-            f"2. İLK 3 SANİYƏDƏ şok, maraq və ya təcili satış qarmağı (hook) at: məsələn, 'Dayanın! Zarafat deyil! Bu qiymətə Kupçalı ev?!' və ya 'Bakıda belə fürsət ildə bir dəfə olur!'.\n"
-            f"3. Cümlələri qısa, ritmik və dinamik qur (4-8 söz). Həyəcanı artırmaq üçün nida işarələrindən (!) və təbii fasilələrdən (—) istifadə et.\n"
-            f"4. Qiyməti (məsələn: 'cəmi {price} min manat'), yerləşməni və kupçanın olmasını mütləq vurğula.\n"
+            f"1. YALNIZ diktorun oxuyacağı təmiz, danışıq dilində mətn yaz. Heç bir kadr qeydi, mötərizə və ya təlimat yazma!\n"
+            f"2. {hook_guidance}\n"
+            f"3. Cümlələri qısa, ritmik və dinamik qur (4-8 söz). Nida işarələrindən (!) və təbii fasilələrdən (—) istifadə et.\n"
+            f"4. Qiyməti ('cəmi {spoken_price}'), yerləşməni və kupçanın olmasını mütləq vurğula.\n"
             f"5. Sonda dərhal nömrəyə zəng etməyə və ya WhatsApp-a yazmağa güclü çağırışla (Call-to-Action) bitir.\n"
             f"{market_requirement}"
             f"{photo_directive}"

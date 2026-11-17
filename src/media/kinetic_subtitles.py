@@ -6,6 +6,8 @@ Generates modern 2-3 word rhythmic subtitle bursts with:
 - Architectural DIN / Bahnschrift font with soft Gaussian drop shadow
 - Zero cartoon black strokes (Outline=1.8, Shadow=2.2 with alpha transparency)
 - Mobile safe-zone positioning (MarginV=580)
+- CTA Phase Safe-Shift: automatically shifts subtitles upward to MarginV=700 (y=1220)
+  when the CTA card appears in the final seconds, preventing visual overlap.
 """
 
 import os
@@ -126,7 +128,6 @@ def split_srt_block_into_chunks(text: str, start_s: float, end_s: float, max_wor
             "text": text.strip()
         }]
 
-    # Chunk words
     chunks = []
     chunk_words = []
     for w in words:
@@ -136,7 +137,6 @@ def split_srt_block_into_chunks(text: str, start_s: float, end_s: float, max_wor
             chunk_words = []
     if chunk_words:
         if len(chunks) > 0 and len(chunk_words) == 1:
-            # Merge single trailing word into previous chunk
             chunks[-1] += " " + chunk_words[0]
         else:
             chunks.append(" ".join(chunk_words))
@@ -150,7 +150,6 @@ def split_srt_block_into_chunks(text: str, start_s: float, end_s: float, max_wor
         c_count = len(c_text.split())
         c_dur = total_duration * (c_count / total_word_count)
         c_end = current_time + c_dur
-        # Cap final chunk to end_s
         if i == len(chunks) - 1:
             c_end = end_s
         results.append({
@@ -167,6 +166,8 @@ def convert_srt_to_kinetic_ass(
     srt_path: Path,
     ass_path: Path,
     margin_v: int = 580,
+    margin_v_cta: int = 700,
+    cta_start_time: Optional[float] = None,
     font_size: int = 50
 ) -> Path:
     """
@@ -174,7 +175,8 @@ def convert_srt_to_kinetic_ass(
     - 2 to 3-word rhythmic chunks
     - Micro-bounce spring pop animation: {\\t(0,90,\\fscx108\\fscy108)\\t(90,180,\\fscx100\\fscy100)}
     - Champagne gold & mint emerald keyword highlights
-    - Clean safe-zone placement (MarginV=580)
+    - Clean safe-zone placement (MarginV=580 default)
+    - If cta_start_time is given, subtitles during CTA shift upward to margin_v_cta (700)
     """
     font_name = get_font_name()
 
@@ -188,6 +190,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v},1
+Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v_cta},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -214,10 +217,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         ass_end = format_ass_time(chunk["end"])
                         chunk_text = az_upper(chunk["text"])
 
+                        # Pick style: if during CTA phase, use elevated KineticSubCTA
+                        style_name = "KineticSub"
+                        if cta_start_time is not None and chunk["start"] >= (cta_start_time - 0.2):
+                            style_name = "KineticSubCTA"
+
                         # Add micro-bounce spring effect + keyword styling
                         styled_body = highlight_keywords_in_text(chunk_text)
                         kinetic_line = f"{{\\t(0,90,\\fscx108\\fscy108)\\t(90,180,\\fscx100\\fscy100)}}{styled_body}"
-                        dialogues.append(f"Dialogue: 0,{ass_start},{ass_end},KineticSub,,0,0,0,,{kinetic_line}")
+                        dialogues.append(f"Dialogue: 0,{ass_start},{ass_end},{style_name},,0,0,0,,{kinetic_line}")
 
     ass_path.parent.mkdir(parents=True, exist_ok=True)
     with open(ass_path, "w", encoding="utf-8") as f:
@@ -231,6 +239,8 @@ def build_kinetic_ass_from_words(
     words_with_timestamps: List[Dict[str, Any]],
     ass_path: Path,
     margin_v: int = 580,
+    margin_v_cta: int = 700,
+    cta_start_time: Optional[float] = None,
     font_size: int = 50
 ) -> Path:
     """
@@ -249,6 +259,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v},1
+Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v_cta},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -267,9 +278,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             ass_start = format_ass_time(chunk_start)
             ass_end = format_ass_time(chunk_end)
 
+            style_name = "KineticSub"
+            if cta_start_time is not None and chunk_start >= (cta_start_time - 0.2):
+                style_name = "KineticSubCTA"
+
             styled_body = highlight_keywords_in_text(chunk_text)
             kinetic_line = f"{{\\t(0,90,\\fscx108\\fscy108)\\t(90,180,\\fscx100\\fscy100)}}{styled_body}"
-            dialogues.append(f"Dialogue: 0,{ass_start},{ass_end},KineticSub,,0,0,0,,{kinetic_line}")
+            dialogues.append(f"Dialogue: 0,{ass_start},{ass_end},{style_name},,0,0,0,,{kinetic_line}")
             chunk = []
 
     ass_path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,3 +293,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     logger.info(f"Built {len(dialogues)} word-aligned kinetic lines in {ass_path}")
     return ass_path
+
+
+def get_bottom_scrim_overlay_filter(scrim_path: Path) -> Tuple[str, str]:
+    """Returns FFmpeg overlay expression and escaped path for bottom gradient scrim."""
+    escaped = escape_ffmpeg_path(scrim_path)
+    return "overlay=0:0:format=auto", escaped

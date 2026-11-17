@@ -11,12 +11,19 @@ if str(BASE_DIR) not in sys.path:
 
 from PIL import Image
 
-from src.media.glass_badge import create_hero_badge, create_cta_badge, get_hero_overlay_filter
+from src.media.glass_badge import (
+    create_hero_badge,
+    create_cta_badge,
+    create_bottom_scrim_png,
+    get_hero_overlay_filter,
+    ARCHETYPE_STYLES
+)
 from src.media.kinetic_subtitles import (
     convert_srt_to_kinetic_ass,
     build_kinetic_ass_from_words,
     highlight_keywords_in_text,
     split_srt_block_into_chunks,
+    get_bottom_scrim_overlay_filter,
     escape_ffmpeg_path
 )
 
@@ -28,7 +35,7 @@ class TestTypographyUI(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_create_hero_badge(self):
+    def test_create_hero_badge_archetypes(self):
         listing = {
             "price": "285000",
             "currency": "AZN",
@@ -39,14 +46,15 @@ class TestTypographyUI(unittest.TestCase):
             "is_urgent": True,
             "is_owner": True
         }
-        out_badge = self.temp_dir / "hero.png"
-        res = create_hero_badge(listing, output_path=out_badge, width=960, height=240)
-        self.assertTrue(res.exists())
-        self.assertGreater(res.stat().st_size, 1000)
+        for arch in ["budget", "luxury", "villa", "commercial"]:
+            out_badge = self.temp_dir / f"hero_{arch}.png"
+            res = create_hero_badge(listing, output_path=out_badge, width=960, height=240, archetype=arch)
+            self.assertTrue(res.exists())
+            self.assertGreater(res.stat().st_size, 1000)
 
-        with Image.open(res) as img:
-            self.assertEqual(img.size, (960, 240))
-            self.assertEqual(img.mode, "RGBA")
+            with Image.open(res) as img:
+                self.assertEqual(img.size, (960, 240))
+                self.assertEqual(img.mode, "RGBA")
 
     def test_create_cta_badge(self):
         listing = {
@@ -61,21 +69,29 @@ class TestTypographyUI(unittest.TestCase):
             self.assertEqual(img.size, (920, 150))
             self.assertEqual(img.mode, "RGBA")
 
-    def test_get_hero_overlay_filter(self):
+    def test_create_bottom_scrim_png(self):
+        out_scrim = self.temp_dir / "scrim.png"
+        res = create_bottom_scrim_png(output_path=out_scrim, width=1080, height=1920)
+        self.assertTrue(res.exists())
+        self.assertGreater(res.stat().st_size, 1000)
+
+        with Image.open(res) as img:
+            self.assertEqual(img.size, (1080, 1920))
+            self.assertEqual(img.mode, "RGBA")
+
+    def test_get_hero_overlay_filter_25s_timing(self):
         badge_path = self.temp_dir / "badge.png"
         badge_path.write_text("dummy")
-        filter_str, esc_path = get_hero_overlay_filter(badge_path, start_time=0.2, end_time=3.5)
+        filter_str, esc_path = get_hero_overlay_filter(badge_path, start_time=0.2, end_time=2.5)
         self.assertIn("overlay=x=(W-w)/2", filter_str)
-        self.assertIn("between(t,0.20,3.50)", filter_str)
+        self.assertIn("between(t,0.20,2.50)", filter_str)
         self.assertIn("format=auto", filter_str)
         self.assertTrue(len(esc_path) > 0)
 
     def test_highlight_keywords_in_text(self):
         sample = "NƏRİMANOVDA KUPÇALI 3 OTAQLI MƏNZİL"
         res = highlight_keywords_in_text(sample)
-        # Nərimanovda should have gold tag
         self.assertIn("&H0080C0E6&", res)
-        # Kupçalı should have mint tag
         self.assertIn("&H0099D334&", res)
 
     def test_split_srt_block_into_chunks(self):
@@ -86,24 +102,28 @@ class TestTypographyUI(unittest.TestCase):
             words = c["text"].split()
             self.assertLessEqual(len(words), 4)
 
-    def test_convert_srt_to_kinetic_ass(self):
+    def test_convert_srt_to_kinetic_ass_with_cta_shift(self):
         srt_content = """1
 00:00:01,000 --> 00:00:04,000
 Təcili satılır! Nərimanov metrosu yaxınlığında 3 otaqlı kupçalı mənzil.
+
+2
+00:00:26,000 --> 00:00:30,000
+Ətraflı məlumat üçün dərhal bizimlə əlaqə saxlayın.
 """
         srt_file = self.temp_dir / "test.srt"
         srt_file.write_text(srt_content, encoding="utf-8")
 
         ass_file = self.temp_dir / "test_kinetic.ass"
-        res = convert_srt_to_kinetic_ass(srt_file, ass_file, margin_v=580)
+        res = convert_srt_to_kinetic_ass(srt_file, ass_file, margin_v=580, margin_v_cta=700, cta_start_time=26.5)
         self.assertTrue(res.exists())
 
         content = ass_file.read_text(encoding="utf-8")
         self.assertIn("[Script Info]", content)
         self.assertIn("Style: KineticSub", content)
-        self.assertIn("MarginV, 580" if "MarginV, 580" in content else "580", content)
-        self.assertIn(r"\fscx108\fscy108", content)  # Micro-bounce spring pop
-        self.assertIn("Dialogue:", content)
+        self.assertIn("Style: KineticSubCTA", content)
+        self.assertIn(r"\fscx108\fscy108", content)
+        self.assertIn("KineticSubCTA", content)
 
     def test_build_kinetic_ass_from_words(self):
         words = [

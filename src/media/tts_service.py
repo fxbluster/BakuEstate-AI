@@ -62,6 +62,55 @@ def azerbaijani_ordinal_suffix(n: int) -> str:
     return "-ci"
 
 
+def verbalize_baku_price(price: Any) -> str:
+    """Formats numeric prices into natural spoken Azerbaijani words for clear TTS."""
+    if not price:
+        return "münasib qiymət"
+    try:
+        val = float(price)
+        if val >= 1_000_000:
+            millions = int(val // 1_000_000)
+            remainder = int((val % 1_000_000) // 1_000)
+            if remainder > 0:
+                return f"{millions} milyon {remainder} min manat"
+            return f"{millions} milyon manat"
+        elif val >= 1_000:
+            thousands = int(val // 1_000)
+            remainder = int(val % 1_000)
+            if remainder > 0:
+                return f"{thousands} min {remainder} manat"
+            return f"{thousands} min manat"
+        else:
+            return f"{int(val)} manat"
+    except Exception:
+        return f"{price} manat"
+
+
+def canonicalize_location_phrase(location: str) -> str:
+    """Cleans location text into natural phrasing, eliminating redundant locatives."""
+    if not location:
+        return "Bakı şəhərində"
+    loc = location.strip()
+    loc = re.sub(r'\bm\.(?:\s*yaxınlığında)?', 'metrosu yaxınlığında', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'\bq\.(?:\s*ərazisində)?', 'qəsəbəsində', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'\bküç\.', 'küçəsində', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'\bpr\.', 'prospektində', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'\br-nu', 'rayonunda', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'\s+', ' ', loc).strip()
+    # Remove awkward duplicate suffixes
+    loc = re.sub(r'yaxınlığında ərazisində', 'yaxınlığında', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'qəsəbəsində ərazisində', 'qəsəbəsində', loc, flags=re.IGNORECASE)
+    loc = re.sub(r'rayonunda ərazisində', 'rayonunda', loc, flags=re.IGNORECASE)
+    return loc
+
+
+def format_location_intro(clean_loc: str) -> str:
+    """Formats location into natural sentence introductory phrasing."""
+    if any(clean_loc.endswith(suffix) for suffix in ["yaxınlığında", "qəsəbəsində", "küçəsində", "prospektində", "rayonunda", "şəhərində"]):
+        return clean_loc
+    return f"{clean_loc} ərazisində"
+
+
 def normalize_azerbaijani_phonetics(text: str) -> str:
     """Normalizes abbreviations, numbers, and units for natural speech synthesis."""
     if not text:
@@ -72,10 +121,14 @@ def normalize_azerbaijani_phonetics(text: str) -> str:
         (r'\bAZN\b', 'manat'),
         (r'\bkv\.?\s*m\b', 'kvadrat metr'),
         (r'\bm²\b', 'kvadrat metr'),
+        (r'\bq\.(?=\s*ərazisində)', 'qəsəbəsi'),
+        (r'\bm\.(?=\s*ərazisində)', 'metrosu'),
         (r'\bq\.(?=\s|$|[,\.!])', 'qəsəbəsində'),
         (r'\bm\.(?=\s|$|[,\.!])', 'metrosu yaxınlığında'),
         (r'\bküç\.(?=\s|$|[,\.!])', 'küçəsində'),
         (r'\bpr\.(?=\s|$|[,\.!])', 'prospektində'),
+        (r'metrosu yaxınlığında ərazisində', 'metrosu yaxınlığında'),
+        (r'qəsəbəsində ərazisində', 'qəsəbəsində'),
         (r'\b(\d+)/(\d+)\b', r'\2 mərtəbəli binanın \1-ci mərtəbəsində'),
     ]
     for pattern, repl in replacements:
@@ -83,52 +136,120 @@ def normalize_azerbaijani_phonetics(text: str) -> str:
     return text
 
 
-def generate_azerbaijani_script(listing: Dict[str, Any]) -> str:
+def detect_listing_archetype(listing: Dict[str, Any]) -> str:
+    """Detects real estate archetype: budget, luxury, villa, or commercial."""
+    title_desc = (str(listing.get("title", "")) + " " + str(listing.get("description", ""))).lower()
+    loc = (str(listing.get("location", "")) + " " + str(listing.get("address", ""))).lower()
+    l_type = str(listing.get("type", "")).lower()
+
+    if l_type in ("villa", "bag") or any(w in title_desc for w in ["villa", "bağ evi", "həyət evi", "sot", "hovuzlu"]):
+        return "villa"
+    if l_type in ("obyekt", "ofis", "torpaq", "kommersiya") or any(w in title_desc for w in ["obyekt", "ofis", "icarə gəliri", "qeyri-yaşayış"]):
+        return "commercial"
+    
+    price = 0.0
+    try:
+        price = float(listing.get("price") or 0.0)
+    except Exception:
+        pass
+
+    if price >= 320_000 or any(w in loc for w in ["ağ şəhər", "white city", "port baku", "bayıl", "badamdar"]) or any(w in title_desc for w in ["penthouse", "premium", "rezidens", "lüks", "panoramik dəniz"]):
+        return "luxury"
+
+    return "budget"
+
+
+def generate_azerbaijani_script(listing: Dict[str, Any], archetype: Optional[str] = None) -> str:
     """
     Generates an energetic, high-converting Azerbaijani narration script for a real estate listing.
-    Features dynamic hooks, emotional emphasis, price clarity, and clear call-to-action.
+    Features archetype-specific storytelling, honest objection handling (roof, stone building),
+    price clarity, and clear call-to-action without cheap spammy clickbait.
     """
+    arch = archetype or detect_listing_archetype(listing)
     parts = []
 
-    # Dynamic Hook
-    loc = listing.get("location") or listing.get("address") or "Bakı"
-    parts.append(f"Dayanın! {loc} ərazisində qaçırılmayacaq şok təklif!")
+    raw_loc = listing.get("location") or listing.get("address") or "Bakı"
+    loc_clean = canonicalize_location_phrase(raw_loc)
+    loc_intro = format_location_intro(loc_clean)
 
-    # Location & parameters
     rooms = listing.get("rooms")
     area = listing.get("area")
     floor = listing.get("floor")
     floors = listing.get("floors")
-
-    if rooms and area:
-        parts.append(f"Tam {rooms} otaqlı, {int(area)} kvadrat metr sahəsi olan möhtəşəm mənzil satılır!")
-    elif rooms:
-        parts.append(f"{rooms} otaqlı, tam təmirli və çox rahat mənzil təklif olunur!")
-    else:
-        parts.append("Tam təmirli, dərhal köçüb yaşamağa hazır gözəl bir ev!")
-
-    if floor and floors:
-        suffix = azerbaijani_ordinal_suffix(floor)
-        parts.append(f"Mənzil {floors} mərtəbəli binanın {floor}{suffix} mərtəbəsində yerləşir.")
-
-    # Kupça badge statement
-    if listing.get("has_bill_of_sale"):
-        parts.append("Ən əsası nədir bilirsiniz? Dövlət çıxarışı, yəni kupçası var! İpotekaya tam hazırdır!")
-
-    # Price statement
     price = listing.get("price")
-    if price and price > 0:
-        price_in_thousands = int(price / 1000) if price >= 1000 else int(price)
-        parts.append(f"Qiyməti cəmi {price_in_thousands} min manat!")
+    spoken_price = verbalize_baku_price(price)
+    has_kupca = listing.get("has_bill_of_sale", True)
 
-    # Direct owner statement
-    if listing.get("is_owner"):
-        parts.append("Birbaşa sahibindən satılır, heç bir vasitəçi komissiyası yoxdur!")
+    desc_lower = (str(listing.get("description", "")) + " " + str(listing.get("title", ""))).lower()
+    is_stone = any(kw in desc_lower for kw in ["daş", "minsk", "leninqrad", "eksperimental", "xruşşov"])
+
+    if arch == "luxury":
+        # Luxury Penthouse / High-End Tower Archetype
+        parts.append(f"{loc_intro} premium səviyyəli möhtəşəm mənzil təqdim olunur.")
+        if rooms and area:
+            parts.append(f"Geniş {rooms} otaqlı, {int(area)} kvadrat metr sahəsi olan bu mənzil xüsusi zövqlə layihələndirilib.")
+        elif rooms:
+            parts.append(f"Geniş {rooms} otaqlı, panoramik vitraj pəncərəli yüksək səviyyəli mənzil.")
+        if floor and floors:
+            suffix = azerbaijani_ordinal_suffix(floor)
+            parts.append(f"Mənzil müasir elit kompleksin {floor}{suffix} mərtəbəsində yerləşir.")
+        parts.append("Yüksək tavanlar, bahalı təmir materialları və 24 saat qorunan həyəti ilə şəxsi statusunuzun ən gözəl təcəssümüdür.")
+        if has_kupca:
+            parts.append("Mülkiyyət sənədi çıxarışdır, ipotekaya tam yararlıdır.")
+        parts.append(f"Təklif olunan qiymət {spoken_price}.")
+        parts.append("Eksklüziv baxış və ətraflı məlumat üçün dərhal əlaqə saxlayın!")
+
+    elif arch == "villa":
+        # Villa / Country House Archetype
+        parts.append(f"{loc_intro} dörd fəsil yaşamaq üçün ideal lüks villa satışa çıxarıldı.")
+        if rooms and area:
+            parts.append(f"Geniş {rooms} otaqlı, {int(area)} kvadrat metr yaşayış sahəsi və abadlaşdırılmış həyətyanı sahəsi var.")
+        parts.append("Təmiz hava, filterli hovuz, söhbətgah və rahat ailə istirahəti üçün hər bir şərait qurulub.")
+        if has_kupca:
+            parts.append("Həm torpağın, həm tikilinin tam dövlət çıxarışı var.")
+        parts.append(f"Qiyməti {spoken_price}.")
+        parts.append("Ailənizlə kurort rahatlığı yaşamaq üçün bu gün zəng edin!")
+
+    elif arch == "commercial":
+        # Commercial / Investment Archetype
+        parts.append(f"{loc_intro} yüksək piyada axınına malik hazır gəlirli obyekt təklif olunur.")
+        if area:
+            parts.append(f"Ümumi sahəsi {int(area)} kvadrat metr olan bu obyekt stabil icarə potensialına malikdir.")
+        parts.append("Geniş vitraj fasad və əlverişli infrastruktur investisiyanın sürətli geri qayıtmasını təmin edir.")
+        if has_kupca:
+            parts.append("Qeyri-yaşayış sənədi tam qaydasındadır.")
+        parts.append(f"İnvestisiya dəyəri {spoken_price}.")
+        parts.append("Gəlirli biznes fürsəti üçün dərhal WhatsApp-a yazın!")
+
     else:
-        parts.append("Bu qiymətə belə ev bazarda nadir hallarda çıxır!")
+        # Budget / Family Stone Home Archetype
+        parts.append(f"{loc_intro} ailəniz üçün çox sərfəli və rahat bir mənzil təklif olunur.")
+        if rooms and area:
+            parts.append(f"Tam {rooms} otaqlı, {int(area)} kvadrat metr sahəsi olan işıqlı və rahat mənzildir.")
+        elif rooms:
+            parts.append(f"{rooms} otaqlı, tam təmirli və səliqəli ailə mənzili.")
 
-    # Call to action
-    parts.append("Tələsin! Ətraflı məlumat üçün dərhal WhatsApp-a yazın və ya zəng edin!")
+        # Floor and stone details with roof objection reassurance
+        if floor and floors:
+            suffix = azerbaijani_ordinal_suffix(floor)
+            parts.append(f"Mənzil {floors} mərtəbəli binanın {floor}{suffix} mərtəbəsində yerləşir.")
+            if int(floor) == int(floors) and int(floors) <= 5:
+                parts.append("Dam örtüyü tamamilə yenilənib, üst mərtəbədə ayaq səsi olmadan sakit ailə həyatı təmin olunur.")
+
+        if is_stone:
+            parts.append("Bina tam daşdır — qalın daş divarlar yayda təbii sərinlik, qışda isə ideal istilik saxlayır.")
+
+        if has_kupca:
+            parts.append("Ən əsası nədir bilirsiniz? Dövlət çıxarışı, yəni kupçası var! İpotekaya tam hazırdır!")
+
+        parts.append(f"Qiyməti cəmi {spoken_price}!")
+
+        if listing.get("is_owner"):
+            parts.append("Birbaşa sahibindən satılır, vasitəçi komissiyası yoxdur.")
+        else:
+            parts.append("Bu ərazidə bu qiymətə belə ev nadir hallarda satışa çıxır.")
+
+        parts.append("Ətraflı məlumat və baxış üçün dərhal WhatsApp-a yazın və ya zəng edin!")
 
     return " ".join(parts)
 

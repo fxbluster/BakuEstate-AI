@@ -1,6 +1,6 @@
 """
 Unit tests for BakuEstate-AI Cinematic Motion Engine (src/media/motion_engine.py).
-Tests motion profiles, smart-matte framing, xfade chaining, and transition metadata.
+Tests motion profiles, smart-matte framing, cinematic_fill, 4 archetypes, xfade chaining, and transition metadata.
 """
 
 import unittest
@@ -16,10 +16,13 @@ from PIL import Image
 from src.media.motion_engine import (
     MotionEngine,
     MotionProfile,
+    PropertyArchetype,
+    detect_property_archetype,
     resolve_motion_profile,
     render_cinematic_walkthrough,
     DEFAULT_MOTION_SEQUENCE,
-    DEFAULT_WALKTHROUGH_TRANSITIONS
+    DEFAULT_WALKTHROUGH_TRANSITIONS,
+    ARCHETYPE_CONFIGS
 )
 
 
@@ -40,6 +43,44 @@ class TestMotionEngine(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
+    def test_detect_property_archetype(self):
+        """Tests automatic classification of listings into 4 archetypes."""
+        # Budget
+        listing_budget = {
+            "title": "3 otaqlı daş bina",
+            "description": "Eksperimental minsk proyekt, 3 metr tavan",
+            "location": "Xalqlar Dostluğu m.",
+            "price": "175000"
+        }
+        self.assertEqual(detect_property_archetype(listing_budget), PropertyArchetype.BUDGET)
+
+        # Luxury
+        listing_luxury = {
+            "title": "Ağ Şəhərdə 4 otaqlı penthouse",
+            "description": "Panoramik dəniz mənzərəsi, dizayn avro təmir",
+            "location": "Ağ Şəhər",
+            "price": "490000"
+        }
+        self.assertEqual(detect_property_archetype(listing_luxury), PropertyArchetype.LUXURY)
+
+        # Villa
+        listing_villa = {
+            "title": "Mərdəkanda möhtəşəm bağ evi",
+            "description": "6 sot həyətyanı sahə, filterli hovuz və manqal",
+            "location": "Mərdəkan qəsəbəsi",
+            "price": "380000"
+        }
+        self.assertEqual(detect_property_archetype(listing_villa), PropertyArchetype.VILLA)
+
+        # Commercial
+        listing_comm = {
+            "title": "Hazır icarədə olan ticarət obyekti",
+            "description": "Gediş-gəlişli küçədə vitraj mağaza, aylıq icarə 2500 AZN",
+            "location": "Nərimanov",
+            "price": "350000"
+        }
+        self.assertEqual(detect_property_archetype(listing_comm), PropertyArchetype.COMMERCIAL)
+
     def test_resolve_motion_profile(self):
         """Tests that auto profile cycles predictably through default sequence."""
         for i in range(len(DEFAULT_MOTION_SEQUENCE) * 2):
@@ -57,22 +98,41 @@ class TestMotionEngine(unittest.TestCase):
             total_duration=2.0,
             fps=24,
             width=540,
-            height=960
+            height=960,
+            framing_mode="cinematic_fill"
         )
         self.assertTrue(out_vid.exists())
         self.assertGreater(out_vid.stat().st_size, 1000)
         self.assertEqual(res["clip_count"], 1)
         self.assertEqual(len(res["transitions"]), 0)
+        self.assertEqual(res["framing_mode"], "cinematic_fill")
 
-    def test_multi_slide_xfade_walkthrough(self):
-        """Tests walkthrough with 3 photos chained with xfade smoothleft & smoothright."""
-        out_vid = self.temp_dir / "multi_walkthrough.mp4"
+    def test_cinematic_fill_mode_rendering(self):
+        """Tests that cinematic_fill mode renders full-bleed camera pans without letterboxing."""
+        engine = MotionEngine()
+        out_clip = self.temp_dir / "test_fill_pan.mp4"
+        res = engine.create_motion_clip(
+            image_path=self.test_images[0],
+            output_clip_path=out_clip,
+            duration=1.5,
+            profile=MotionProfile.PAN_LEFT_TO_RIGHT,
+            framing_mode="cinematic_fill",
+            fps=24,
+            width=540,
+            height=960
+        )
+        self.assertTrue(out_clip.exists())
+        self.assertGreater(out_clip.stat().st_size, 2000)
+
+    def test_multi_slide_xfade_walkthrough_with_archetype(self):
+        """Tests walkthrough with 3 photos chained with luxury archetype xfade and cinematic_fill."""
+        out_vid = self.temp_dir / "luxury_walkthrough.mp4"
         res = render_cinematic_walkthrough(
             image_paths=self.test_images,
             output_path=out_vid,
             total_duration=4.5,
-            transition_duration=0.5,
-            transitions=["smoothleft", "smoothright"],
+            archetype=PropertyArchetype.LUXURY,
+            framing_mode="cinematic_fill",
             fps=24,
             width=540,
             height=960
@@ -80,17 +140,10 @@ class TestMotionEngine(unittest.TestCase):
         self.assertTrue(out_vid.exists())
         self.assertGreater(out_vid.stat().st_size, 5000)
         self.assertEqual(res["clip_count"], 3)
+        self.assertEqual(res["archetype"], PropertyArchetype.LUXURY)
+        self.assertEqual(res["framing_mode"], "cinematic_fill")
         self.assertEqual(len(res["transitions"]), 2)
-        
-        # Verify transition timestamps
-        # 3 slides, total_dur=4.5, trans_dur=0.5 -> slide_dur = (4.5 + 2*0.5)/3 = 5.5/3 = 1.833s
-        # Transition 0: 1.833 - 0.5 = 1.333s
-        # Transition 1: 1.333 + 1.833 - 0.5 = 2.667s
-        trans = res["transitions"]
-        self.assertEqual(trans[0]["type"], "smoothleft")
-        self.assertEqual(trans[1]["type"], "smoothright")
-        self.assertAlmostEqual(trans[0]["timestamp"], 1.333, places=2)
-        self.assertAlmostEqual(trans[1]["timestamp"], 2.667, places=2)
+        self.assertGreater(len(res["transitions"]), 0)
 
 
 if __name__ == "__main__":

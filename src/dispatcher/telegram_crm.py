@@ -152,6 +152,50 @@ def generate_public_caption(listing: Dict[str, Any]) -> str:
     return "\n".join(caption_lines)
 
 
+def build_inline_keyboard(listing: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Builds the 4-row interactive inline keyboard for Telegram:
+    Row 1: [ 🔄 Yenidən Render Et ], [ ✍️ Ssenarini Dəyiş ]
+    Row 2: [ 🎙️ Səsi Dəyiş ], [ 📊 Keenable Hesabatı ]
+    Row 3: [ 💬 WhatsApp Sahibinə ], [ 🌐 Bina.az Elanı ]
+    Row 4: [ 🚀 Təsdiqlə və Paylaş ], [ ❌ Arxivlə ]
+    """
+    bina_id = str(listing.get("bina_id", ""))
+    raw_phone = listing.get("owner_phone", "")
+    normalized_phone = clean_phone_number(raw_phone)
+    wa_digits = normalized_phone.lstrip("+")
+    prop_type = get_property_type(listing)
+
+    if wa_digits:
+        wa_text = f"Salam, bina.az-dakı {bina_id} nömrəli {prop_type.lower()} elanınızla bağlı yazıram."
+        wa_url = f"https://wa.me/{wa_digits}?text={urllib.parse.quote(wa_text)}"
+    else:
+        wa_url = f"https://bina.az/items/{bina_id}"
+
+    bina_url = f"https://bina.az/items/{bina_id}"
+
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 Yenidən Render Et", "callback_data": f"rerender_{bina_id}"},
+                {"text": "✍️ Ssenarini Dəyiş", "callback_data": f"scriptmenu_{bina_id}"}
+            ],
+            [
+                {"text": "🎙️ Səsi Dəyiş", "callback_data": f"voicemenu_{bina_id}"},
+                {"text": "📊 Keenable Hesabatı", "callback_data": f"keenable_{bina_id}"}
+            ],
+            [
+                {"text": "💬 WhatsApp Sahibinə", "url": wa_url},
+                {"text": "🌐 Bina.az Elanı", "url": bina_url}
+            ],
+            [
+                {"text": "🚀 Təsdiqlə və Paylaş", "callback_data": f"publish_{bina_id}"},
+                {"text": "❌ Arxivlə", "callback_data": f"archive_{bina_id}"}
+            ]
+        ]
+    }
+
+
 def generate_social_caption(listing: Dict[str, Any]) -> str:
     """Returns the combined caption for backward-compatibility or full display."""
     crm = generate_crm_caption(listing)
@@ -187,6 +231,7 @@ class TelegramCRMDispatcher:
         crm_caption = generate_crm_caption(listing)
         public_caption = custom_caption or generate_public_caption(listing)
         video_file = Path(video_path)
+        reply_markup = build_inline_keyboard(listing)
 
         if not video_file.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -200,6 +245,7 @@ class TelegramCRMDispatcher:
                 "owner_phone": listing.get("owner_phone"),
                 "crm_caption": crm_caption,
                 "public_caption": public_caption,
+                "reply_markup": reply_markup,
                 "dispatched_at": json.dumps(str(Path(video_path).stat().st_mtime))
             }
             with open(lead_dump_path, "w", encoding="utf-8") as f:
@@ -210,11 +256,12 @@ class TelegramCRMDispatcher:
                 "message_id": f"mock_msg_{listing.get('bina_id')}",
                 "lead_dump": str(lead_dump_path.resolve()),
                 "crm_caption": crm_caption,
-                "public_caption": public_caption
+                "public_caption": public_caption,
+                "reply_markup": reply_markup
             }
 
-        # 1. Real Telegram API: Send Video with CRM Lead Card
-        logger.info(f"Uploading video {video_path} to Telegram chat {self.chat_id}...")
+        # 1. Real Telegram API: Send Video with CRM Lead Card & Interactive Inline Keyboard
+        logger.info(f"Uploading video {video_path} to Telegram chat {self.chat_id} with interactive buttons...")
         api_video_url = f"https://api.telegram.org/bot{self.bot_token}/sendVideo"
 
         with open(video_file, "rb") as vf:
@@ -222,7 +269,8 @@ class TelegramCRMDispatcher:
                 "chat_id": self.chat_id,
                 "caption": crm_caption,
                 "parse_mode": "HTML",
-                "supports_streaming": True
+                "supports_streaming": True,
+                "reply_markup": json.dumps(reply_markup)
             }
             files = {"video": (video_file.name, vf, "video/mp4")}
             resp = requests.post(api_video_url, data=payload, files=files, timeout=120)
@@ -259,5 +307,6 @@ class TelegramCRMDispatcher:
             "message_id": msg_id,
             "public_message_id": public_msg_id,
             "crm_caption": crm_caption,
-            "public_caption": public_caption
+            "public_caption": public_caption,
+            "reply_markup": reply_markup
         }

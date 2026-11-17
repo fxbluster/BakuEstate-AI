@@ -14,7 +14,10 @@ from src.media.tts_service import (
     format_srt_time,
     convert_cues_to_word_level_srt,
     generate_tts_for_listing,
-    azerbaijani_ordinal_suffix
+    azerbaijani_ordinal_suffix,
+    verbalize_baku_price,
+    canonicalize_location_phrase,
+    detect_listing_archetype
 )
 
 class MockCue:
@@ -24,6 +27,29 @@ class MockCue:
         self.end = timedelta(seconds=end_sec)
 
 class TestTTSService(unittest.TestCase):
+    def test_verbalize_baku_price(self):
+        self.assertEqual(verbalize_baku_price(175000), "175 min manat")
+        self.assertEqual(verbalize_baku_price(240500), "240 min 500 manat")
+        self.assertEqual(verbalize_baku_price(1500000), "1 milyon 500 min manat")
+        self.assertEqual(verbalize_baku_price(850), "850 manat")
+
+    def test_canonicalize_location_phrase(self):
+        loc1 = "Xalqlar Dostluğu m."
+        clean1 = canonicalize_location_phrase(loc1)
+        self.assertEqual(clean1, "Xalqlar Dostluğu metrosu yaxınlığında")
+        self.assertNotIn("yaxınlığında ərazisində", clean1)
+
+        loc2 = "Nizami r-nu, Qara Qarayev pr."
+        clean2 = canonicalize_location_phrase(loc2)
+        self.assertIn("rayonunda", clean2)
+        self.assertIn("prospektində", clean2)
+
+    def test_detect_listing_archetype(self):
+        self.assertEqual(detect_listing_archetype({"price": 450000, "location": "Ağ Şəhər"}), "luxury")
+        self.assertEqual(detect_listing_archetype({"title": "Mərdəkanda 6 sotda hovuzlu villa"}), "villa")
+        self.assertEqual(detect_listing_archetype({"title": "28 Mayda hazır icarədə obyekt"}), "commercial")
+        self.assertEqual(detect_listing_archetype({"price": 140000, "location": "Xalqlar Dostluğu"}), "budget")
+
     def test_azerbaijani_ordinal_suffix(self):
         self.assertEqual(azerbaijani_ordinal_suffix(1), "-ci")
         self.assertEqual(azerbaijani_ordinal_suffix(2), "-ci")
@@ -46,19 +72,36 @@ class TestTTSService(unittest.TestCase):
             "location": "Nərimanov m.",
             "rooms": 2,
             "area": 85,
-            "floor": 6,
-            "floors": 14,
+            "floor": 5,
+            "floors": 5,
+            "title": "Daş binada mənzil",
+            "description": "Eksperimental daş bina, minsk layihə",
             "has_bill_of_sale": True,
             "is_owner": True
         }
         script = generate_azerbaijani_script(sample)
-        self.assertIn("Nərimanov m.", script)
+        self.assertIn("Nərimanov metrosu", script)
         self.assertIn("2 otaqlı", script)
         self.assertIn("85 kvadrat metr", script)
-        self.assertIn("6-cı mərtəbəsində", script)
+        self.assertIn("5-ci mərtəbəsində", script)
+        self.assertIn("Dam örtüyü tamamilə yenilənib", script)
+        self.assertIn("Bina tam daşdır", script)
         self.assertIn("kupçası var", script.lower())
-        self.assertIn("185", script)
-        self.assertIn("sahibindən", script.lower())
+        self.assertIn("185 min manat", script)
+        self.assertNotIn("yaxınlığında ərazisində", script)
+
+    def test_archetype_scripts(self):
+        lux = generate_azerbaijani_script({"price": 500000, "location": "Ağ Şəhər", "rooms": 4, "area": 200}, archetype="luxury")
+        self.assertIn("premium", lux.lower())
+        self.assertIn("500 min manat", lux)
+
+        vil = generate_azerbaijani_script({"price": 380000, "location": "Mərdəkan", "rooms": 5, "area": 280}, archetype="villa")
+        self.assertIn("villa", vil.lower())
+        self.assertIn("hovuz", vil.lower())
+
+        com = generate_azerbaijani_script({"price": 250000, "location": "Nizami", "area": 60}, archetype="commercial")
+        self.assertIn("obyekt", com.lower())
+        self.assertIn("250 min manat", com)
 
     def test_format_srt_time(self):
         td = timedelta(seconds=65, milliseconds=250)
