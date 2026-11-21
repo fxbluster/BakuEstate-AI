@@ -5,7 +5,8 @@
  * with built-in Supabase session injection, error handling, and wire contracts.
  */
 
-export type AgentPersonaId = "mudir" | "farabi" | "teymur" | "usta";
+import type { AgentPersonaId } from "./agent-personas";
+export type { AgentPersonaId } from "./agent-personas";
 
 export type ActionCardPayload =
   | {
@@ -24,10 +25,16 @@ export type ActionCardPayload =
     }
   | {
       type: "SAVE_INSIGHT";
-      agent_id: AgentPersonaId;
+      agent_id: AgentPersonaId | string;
       domain: string;
       insight_text: string;
       confidence_score: number;
+    }
+  | {
+      type: "OPEN_STAGE_CARD";
+      cardType: "VIDEO_INSPECTION" | "ANALYTICS_TELEMETRY" | "CRM_NEGOTIATION";
+      targetEntityId: string;
+      payload?: Record<string, unknown>;
     };
 
 export interface AgentChatMessage {
@@ -41,7 +48,7 @@ export interface AgentChatMessage {
 
 export interface AgentChatResult {
   conversation_id: string;
-  agent_id: AgentPersonaId;
+  agent_id: AgentPersonaId | string;
   message: AgentChatMessage;
   suggested_followups?: string[];
 }
@@ -50,7 +57,7 @@ export type CopilotActionPayload =
   | {
       action: "agent_chat";
       conversation_id?: string;
-      agent_id: AgentPersonaId;
+      agent_id: AgentPersonaId | string;
       message: string;
       context?: {
         lead_id?: string;
@@ -60,11 +67,20 @@ export type CopilotActionPayload =
     }
   | {
       action: "get_conversation";
-      agent_id: AgentPersonaId;
+      agent_id: AgentPersonaId | string;
     }
   | {
       action: "reset_conversation";
-      agent_id: AgentPersonaId;
+      agent_id: AgentPersonaId | string;
+    }
+  | {
+      action: "save_insight";
+      agent_id: AgentPersonaId | string;
+      domain: string;
+      insight_text: string;
+      confidence_score?: number;
+      persona_scope?: "crm" | "analytics" | "general" | string;
+      metadata?: Record<string, unknown>;
     }
   | {
       action: "scribe_response";
@@ -140,6 +156,36 @@ export interface StrategistCockpitResult {
   total_candidates?: number;
   top_cards: Record<string, unknown>[];
   executive_summary?: string;
+}
+
+export interface TelegramDispatchPayload {
+  listing_id: string;
+  render_version_id?: string;
+  target_account?: string;
+  custom_caption?: string;
+  force_queue?: boolean;
+}
+
+export interface TelegramDispatchResponse {
+  success: boolean;
+  dispatch_mode: "DIRECT_URL" | "QUEUED_WORKER";
+  telegram_message_id?: number;
+  job_id?: string;
+  target_chat_id: string;
+  error?: string;
+}
+
+export interface QueueRenderPayload {
+  listing_id: string;
+  bina_id?: string;
+  target_account?: string;
+  voice_preset?: string;
+}
+
+export interface QueueRenderResponse {
+  success: boolean;
+  job_id?: string;
+  error?: string;
 }
 
 /**
@@ -229,7 +275,7 @@ export async function invokeCopilot<T = unknown>(
  * Loads the latest active conversation thread for a given agent persona.
  */
 export async function getAgentConversation(
-  agentId: AgentPersonaId
+  agentId: AgentPersonaId | string
 ): Promise<{ conversation_id: string | null; messages: AgentChatMessage[] }> {
   try {
     const res = await invokeCopilot<{
@@ -252,7 +298,7 @@ export async function getAgentConversation(
  * Resets / clears the conversation history for a given agent persona.
  */
 export async function resetAgentConversation(
-  agentId: AgentPersonaId
+  agentId: AgentPersonaId | string
 ): Promise<boolean> {
   try {
     const res = await invokeCopilot<{ reset: boolean }>({
@@ -263,5 +309,113 @@ export async function resetAgentConversation(
   } catch (err) {
     console.debug("Failed to reset agent conversation:", err);
     return false;
+  }
+}
+
+/**
+ * Dispatches a rendered video to Telegram via /api/telegram/dispatch-video.
+ */
+export async function dispatchTelegramVideo(
+  listingId: string,
+  renderVersionId?: string,
+  customCaption?: string,
+  targetAccount?: string
+): Promise<TelegramDispatchResponse> {
+  const payload: TelegramDispatchPayload = {
+    listing_id: listingId,
+    render_version_id: renderVersionId,
+    custom_caption: customCaption,
+    target_account: targetAccount,
+  };
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (typeof window !== "undefined") {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        // Fallback to cookie-based auth
+      }
+    }
+
+    const response = await fetch("/api/telegram/dispatch-video", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    return data as TelegramDispatchResponse;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      dispatch_mode: "DIRECT_URL",
+      target_chat_id: "",
+      error: message || "Telegram göndəriş xətası baş verdi.",
+    };
+  }
+}
+
+/**
+ * Enqueues an unrendered listing for background video rendering.
+ */
+export async function queueRenderInitial(
+  listingId: string,
+  binaId?: string,
+  targetAccount?: string,
+  voicePreset?: string
+): Promise<QueueRenderResponse> {
+  const payload: QueueRenderPayload = {
+    listing_id: listingId,
+    bina_id: binaId,
+    target_account: targetAccount,
+    voice_preset: voicePreset,
+  };
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (typeof window !== "undefined") {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        // Fallback to cookie-based auth
+      }
+    }
+
+    const response = await fetch("/api/pipeline/queue-render", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    return data as QueueRenderResponse;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      error: message || "Montaj növbəsinə əlavə edilərkən xəta baş verdi.",
+    };
   }
 }

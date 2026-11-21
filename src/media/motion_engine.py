@@ -126,20 +126,35 @@ def detect_property_archetype(listing: Dict[str, Any]) -> str:
     - 'luxury': Premium yeni tikili, penthouse, Ağ Şəhər, qiymət >= 300 000 AZN
     - 'budget': Köhnə tikili, daş bina, minsk, kiyev, leninqrad, xruşşov, büdcəli
     """
-    text = " ".join([
+    override = str(listing.get("archetype_override", "")).lower().strip()
+    if override in (PropertyArchetype.BUDGET, PropertyArchetype.LUXURY, PropertyArchetype.VILLA, PropertyArchetype.COMMERCIAL):
+        return override
+
+    title_text = " ".join([
         str(listing.get("title", "")),
-        str(listing.get("description", "")),
-        str(listing.get("location", "")),
-        str(listing.get("address", "")),
+        str(listing.get("type", "")),
         str(listing.get("building_type", ""))
     ]).lower()
 
-    # 1. Commercial Check
-    if any(k in text for k in ["obyekt", "kommersiya", "mağaza", "ofis", "ticarət", "anbar", "klinika", "restoran"]):
+    full_text = " ".join([
+        title_text,
+        str(listing.get("description", "")),
+        str(listing.get("location", "")),
+        str(listing.get("address", ""))
+    ]).lower()
+
+    is_apartment_title = "mənzil" in title_text or "menzil" in title_text
+
+    # 1. Commercial Check (check title/type first; avoid false positives from nearby shops/clinics in apartment descriptions)
+    if any(k in title_text for k in ["obyekt", "kommersiya", "mağaza", "ofis", "ticarət", "anbar", "klinika", "restoran", "qeyri-yaşayış"]):
+        return PropertyArchetype.COMMERCIAL
+    if not is_apartment_title and any(k in full_text for k in ["obyekt satılır", "kommersiya obyekti", "qeyri-yaşayış sahəsi"]):
         return PropertyArchetype.COMMERCIAL
 
     # 2. Villa / Yard House Check
-    if any(k in text for k in ["bağ evi", "villa", "həyət evi", "sot", "mərdəkan", "bilgəh", "şüvəlan", "badamdar", "novxanı"]):
+    if any(k in title_text for k in ["bağ evi", "villa", "həyət evi", "sot"]):
+        return PropertyArchetype.VILLA
+    if not is_apartment_title and any(k in full_text for k in ["bağ evi", "villa", "həyət evi", "sot", "mərdəkan", "bilgəh", "şüvəlan", "novxanı"]):
         return PropertyArchetype.VILLA
 
     # 3. Luxury Check (Explicit keywords or high ticket >= 300,000 AZN)
@@ -149,7 +164,7 @@ def detect_property_archetype(listing: Dict[str, Any]) -> str:
     except (ValueError, TypeError):
         num_price = 0.0
 
-    if num_price >= 300000.0 or any(k in text for k in ["ağ şəhər", "white city", "penthouse", "lüks", "premium", "port baku", "vitraj"]):
+    if num_price >= 300000.0 or any(k in full_text for k in ["ağ şəhər", "white city", "penthouse", "lüks", "premium", "port baku", "vitraj"]):
         return PropertyArchetype.LUXURY
 
     # 4. Default to Budget Stone / Standard

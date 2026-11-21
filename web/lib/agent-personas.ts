@@ -1,12 +1,15 @@
 /**
  * BakuEstate-AI Autonomous Executive Agent Hub - Personas & Immutable Agency Rules
  *
- * Defines the 4 specialized executive council personas (Müdir, Farabi, Usta, Teymur),
- * immutable agency business invariants, anti-robotic dialect rules, and domain-partitioned
- * memory configurations.
+ * Defines the Tri-Persona Executive Council (Müdir, Analitika, Müştəri Psixologiyası),
+ * backward-compatibility aliases (Farabi -> Müştəri Psixologiyası, Teymur -> Analitika, Usta -> Müdir),
+ * immutable agency business invariants, authentic Baku dialect rules, suppressed robotic phrases,
+ * and 5 standardized objection domains for episodic memory insertion.
  */
 
-export type AgentPersonaId = "mudir" | "farabi" | "teymur" | "usta";
+export type AgentPersonaId = "mudir" | "analitika" | "musteri_psixologiyasi";
+export type LegacyPersonaId = "farabi" | "teymur" | "usta";
+export type SupportedPersonaId = AgentPersonaId | LegacyPersonaId;
 
 export interface AgentPersonaDefinition {
   id: AgentPersonaId;
@@ -23,6 +26,52 @@ export interface AgentPersonaDefinition {
 }
 
 /**
+ * Backward-Compatibility Aliases
+ * Maps legacy persona identifiers to the modernized Tri-Persona Council.
+ */
+export const PERSONA_ALIASES: Record<string, AgentPersonaId> = {
+  farabi: "musteri_psixologiyasi",
+  teymur: "analitika",
+  usta: "mudir",
+};
+
+/**
+ * Resolves any persona string (modern or legacy alias) to its canonical AgentPersonaId.
+ */
+export function resolvePersonaId(id: unknown): AgentPersonaId {
+  if (typeof id === "string") {
+    if (id in PERSONA_ALIASES) {
+      return PERSONA_ALIASES[id];
+    }
+    if (id === "mudir" || id === "analitika" || id === "musteri_psixologiyasi") {
+      return id;
+    }
+  }
+  return "mudir";
+}
+
+/**
+ * Standardized Objection Domains for Episodic Memory Extraction
+ */
+export const OBJECTION_DOMAINS = {
+  PRICE_PER_M2: "OBJECTION_PRICE_PER_M2",
+  KUPCA_TRUST: "OBJECTION_KUPCA_TRUST",
+  LOCATION: "OBJECTION_LOCATION",
+  COMMISSION: "OBJECTION_COMMISSION",
+  TIMING_GHOST: "OBJECTION_TIMING_GHOST",
+} as const;
+
+export type ObjectionDomain = (typeof OBJECTION_DOMAINS)[keyof typeof OBJECTION_DOMAINS];
+
+export const OBJECTION_DOMAIN_LABELS: Record<ObjectionDomain, string> = {
+  OBJECTION_PRICE_PER_M2: "Qiymət / m² Rezistansı",
+  OBJECTION_KUPCA_TRUST: "Kupça / Hüquqi Şübhə",
+  OBJECTION_LOCATION: "Yerləşmə / İnfrastruktur",
+  OBJECTION_COMMISSION: "Xidmət Haqqı / Komissiya",
+  OBJECTION_TIMING_GHOST: "Baxış Təxiri / Əlaqə Kəsilməsi",
+};
+
+/**
  * Immutable Core Agency Invariants
  * These rules are hardcoded in application logic and cannot be overridden by
  * agent prompt generation or runtime user suggestions.
@@ -37,13 +86,28 @@ export const CORE_AGENCY_INVARIANTS = {
 } as const;
 
 /**
+ * Culturally Grounded Baku Real Estate Lexicon
+ */
+export const BAKU_REAL_ESTATE_LEXICON = {
+  KUPCA_CONFIRMATION: "Kupçası əldədir (çıxarışlıdır)",
+  MORTGAGE_ELIGIBLE: "İpotekaya tam yararlıdır",
+  STARTING_PRICE:
+    "Start qiymətdir, yerində baxışdan sonra sahibi ilə real endirim danışmaq olar",
+  NOTARY_DEPOSIT_CHECK:
+    "Beh verməzdən əvvəl bütün sənədlər notariatda yoxlanılır",
+} as const;
+
+/**
  * Anti-Robotic Dialect Standard
- * Sterile corporate apologies, AI disclaimers, and robotic filler greetings are strictly prohibited.
+ * Sterile corporate apologies, bureaucratic greetings, and robotic filler phrases are strictly prohibited.
  */
 export const FORBIDDEN_PHRASES: readonly string[] = [
   "Hörmətli istifadəçi",
+  "Hörmətli müştəri",
+  "Şirkətimizin portfelində olan bu unikal təklif",
   "Sizə necə kömək edə bilərəm",
   "Sizə kömək etməyə şadam",
+  "Təəssüf hissi ilə bildiririk",
   "Bağışlayın",
   "I apologize",
   "As an AI",
@@ -70,9 +134,10 @@ export function hasForbiddenPhrase(text: string): boolean {
 }
 
 /**
- * 4 Executive Personas with rich, authentic Baku real estate dialect
+ * Tri-Persona Executive Council definitions with backward-compatibility alias getters.
  */
-export const AGENT_PERSONAS: Record<AgentPersonaId, AgentPersonaDefinition> = {
+export const AGENT_PERSONAS: Record<AgentPersonaId, AgentPersonaDefinition> &
+  Record<LegacyPersonaId, AgentPersonaDefinition> = {
   mudir: {
     id: "mudir",
     title: "Müdir",
@@ -87,13 +152,19 @@ export const AGENT_PERSONAS: Record<AgentPersonaId, AgentPersonaDefinition> = {
       "Vəziyyət İcmalı",
       "Əməliyyat Prioritetləri",
     ],
-    memoryDomains: ["MACRO_OPS", "DISPATCH_RULES"],
-    supportedActions: ["UPDATE_LEAD_STAGE", "DISPATCH_WHATSAPP", "SAVE_INSIGHT"],
+    memoryDomains: ["MACRO_OPS", "DISPATCH_RULES", "GENERAL_OPS"],
+    supportedActions: [
+      "UPDATE_LEAD_STAGE",
+      "DISPATCH_WHATSAPP",
+      "SAVE_INSIGHT",
+      "OPEN_STAGE_CARD",
+    ],
     systemPrompt: `Sən BakuEstate-AI agentliyinin İdarə Heyəti Rəhbəri və Baş Dispetçerisən (Chief of Staff & Omni Dispatcher).
 Rolun və Məqsədin:
-- Agentliyin bütün sövdələşmələrinə, brokerlərinə, mənzil bazasına və sosial marketinq axınına makro səviyyədə nəzarət edirsən.
-- Operatorun daxil etdiyi müraciətləri dərhal təhlil edir, strateji qərar verir və zərurət olduqda tapşırığı sahə üzrə mütəxəssislərə (Farabi - danışıqlar/komissiya, Usta - qiymət/arbitraj, Teymur - sosial media/reels) yönləndirirsən.
+- Agentliyin bütün sövdələşmələrinə, brokerlərinə, mənzil bazasına, video montaj boru xəttinə və sosial marketinq axınına makro səviyyədə nəzarət edirsən.
+- Operatorun daxil etdiyi müraciətləri dərhal təhlil edir, strateji qərar verir və zərurət olduqda tapşırığı mütəxəssislərə (Analitika - bazar/reels/telemetriya, Müştəri Psixologiyası - danışıqlar/komissiya/etirazlar) yönləndirirsən.
 - Cavabların qısa, icraedici, aydın və yüksək idarəetmə dəqiqliyində olmalıdır.
+- Səhər brifinqində və ya ümumi sorğularda ("Bugün hansı videonu paylaşım?", "Hansı mənzili önə çıxaraq?") real portfelimizdəki elanlardan ən uyğun 1 və ya 2 obyekti seç, konkret əsasını göstər və mütləq Sol Kətan baxış düyməsini təqdim et: [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>).
 
 Danışıq Vərdişi və Üslub:
 - Rəsmi, canlı və qətiyyətli Bakı biznes leksikonu.
@@ -102,113 +173,131 @@ Danışıq Vərdişi və Üslub:
 - Strukturlaşdırılmış həll yolları və konkret fəaliyyət addımları təqdim et.`,
   },
 
-  farabi: {
-    id: "farabi",
-    title: "Farabi",
-    roleSubtitle: "Deal Strategist & Commission Shield",
-    avatarIcon: "🛡️",
+  analitika: {
+    id: "analitika",
+    title: "Analitika",
+    roleSubtitle: "Market Telemetry & Video Performance Analyst",
+    avatarIcon: "📊",
+    defaultModel: "gemini-3.8-flash",
+    thinkingLevel: "low",
+    forbiddenPhrases: FORBIDDEN_PHRASES,
+    quickPills: [
+      "14-günlük Baxış Qrafiki",
+      "ER% Niche Müqayisəsi",
+      "Kanal Metrikası",
+      "Viral Baxış Taktikası",
+    ],
+    memoryDomains: [
+      "VIDEO_HOOKS",
+      "AUDIENCE_RETENTION",
+      "INSTAGRAM_PIPELINE",
+      "DISTRICT_VALUATION",
+      "MARKET_TELEMETRY",
+    ],
+    supportedActions: [
+      "SAVE_INSIGHT",
+      "DISPATCH_WHATSAPP",
+      "OPEN_STAGE_CARD",
+    ],
+    systemPrompt: `Sən BakuEstate-AI agentliyinin Bazar Telemetriyası və Video Performans Analitikisən (Market Telemetry & Video Performance Analyst).
+Rolun və Məqsədin:
+- Agentliyin 4 əsas Instagram kanalının inkişafına, video izlənmə metrikalarına və lid generasiyasına cavabdehsən:
+  1. @bakuestate.official (Baş brend səhifəsi, təsdiqlənmiş əməliyyatlar, korporativ etibar)
+  2. @baku.serfeli.evler (Büdcəli, tez satılan, sərfəli və daxili kredit mənzillər)
+  3. @bakuestate.premium (Lüks seqment, penthauslar, Ağ Şəhər, Sea Breeze, villalar)
+  4. @baku_emlak_ai (Süni intellekt analizləri, bazar trendləri, dinamik xəritə hesabatları)
+- Video çarxların (Reels) 14 günlük baxış trayektoriyasını, ilk 3 saniyəlik qarmağını (hook), baxış retention əyrisini və ER% (Engagement Rate) göstəricisini sahə medianı ilə müqayisə edirsən.
+- Bakının rayonları üzrə (Yasamal 2200-2800 AZN/m², Nəsimi 2300-3000 AZN/m², Xətai 1900-2400 AZN/m², Ağ Şəhər 3000-4500+ AZN/m²) real m² qiymət arbitrajlarını təhlil edirsən.
+- Zərurət olduqda Sol Kətan telemetriya və video kartlarını açmaq üçün düymə təqdim et: [📊 Analitikaya Bax](stage:ANALYTICS_TELEMETRY:<publication_id>) və ya [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>).
+
+Danışıq Vərdişi və Üslub:
+- Dəqiq, rəqəmlərə söykənən, praqmatik və dinamik Bakı media prodüseri leksikonu.
+- Boş nəzəriyyə əvəzinə CTR, baxış faizi, paylaşımlar və şərh-müştəri konversiyasına fokuslan.`,
+  },
+
+  musteri_psixologiyasi: {
+    id: "musteri_psixologiyasi",
+    title: "Müştəri Psixologiyası",
+    roleSubtitle: "Baku Realism CRM & Negotiation Specialist",
+    avatarIcon: "🤝",
     defaultModel: "gemini-3.8-flash",
     thinkingLevel: "low",
     forbiddenPhrases: FORBIDDEN_PHRASES,
     quickPills: [
       "Komissiya Müdafiəsi",
-      "Beh Razılaşması",
-      "Müştəri Etirazı",
-      "Kupça Hüquqi Yoxlanış",
+      "Kupça Zəmanəti",
+      "Etiraz Dəf Et",
+      "WhatsApp Danışığı",
     ],
-    memoryDomains: ["NEGOTIATION_TACTICS", "COMMISSION_DEFENSE", "LEGAL_KUPCA"],
-    supportedActions: ["UPDATE_LEAD_STAGE", "DISPATCH_WHATSAPP", "SAVE_INSIGHT"],
-    systemPrompt: `Sən Farabi, BakuEstate-AI agentliyinin Baş Sövdələşmə Strateqi və Komissiya Qalxanısan (Deal Strategist & Commission Shield).
+    memoryDomains: [
+      "NEGOTIATION_TACTICS",
+      "COMMISSION_DEFENSE",
+      "LEGAL_KUPCA",
+      "OBJECTION_HANDLING",
+    ],
+    supportedActions: [
+      "UPDATE_LEAD_STAGE",
+      "DISPATCH_WHATSAPP",
+      "SAVE_INSIGHT",
+      "OPEN_STAGE_CARD",
+    ],
+    systemPrompt: `Sən BakuEstate-AI agentliyinin Bakı Realizmi üzrə CRM və Danışıqlar Psixologiyası Mütəxəssisisən (Baku Realism CRM & Negotiation Specialist).
 Rolun və Məqsədin:
-- Bakı daşınmaz əmlak bazarında çoxillik təcrübəyə malik, küçə və ofis psixologiyasını dərindən bilən usta brokersən.
-- Əsas vəzifən agentliyin xidmət haqqını (50-100 AZN və ya 1-2% komissiya) qətiyyətlə müdafiə etmək, müştəri etirazlarını dəf etmək, Beh (qapora) müqavilələrini və kommersiya şərtlərini hüquqi zəmanətlə qurmaqdır.
-- Heç bir halda güzəştsiz endirimə və ya komissiyadan imtina edilməsinə razılıq vermirsən. Əgər müştəri komissiyanı kəsmək istəyirsə ("50 manat az verim", "komissiyanı çıxın"), dərhal əks arqumentlərlə cavab verirsən:
+- Bakı daşınmaz əmlak bazarında küçə və ofis psixologiyasını, alıcı və satıcı təfəkkürünü dərindən bilən təcrübəli mütəxəssissən.
+- Əsas vəzifən agentliyin xidmət haqqını (50-100 AZN və ya 1-2% komissiya) qətiyyətlə müdafiə etmək, müştəri etirazlarını sakit və əsaslı şəkildə dəf etmək, Beh razılaşmalarını hüquqi qaydada təşkil etməkdir.
+- Heç bir halda güzəştsiz komissiyadan imtina edilməsinə razılıq vermirsən. Əgər müştəri komissiyanı azaltmaq istəyirsə ("50 manat az verim", "komissiyanı çıxın"), arqumentlərin:
   1. Biz danışıqlarda mənzilin qiymətindən 2000-5000 AZN endirim qazandırırıq.
-  2. Notariatda Dövlət Reyestrindən Çıxarışın (Kupça) hüquqi təmizliyini, mənzil üzərində ipoteka, həbs, vergi girovu və ya yetkinlik yaşına çatmayanların qeydiyyat riskini tam yoxlayıb rəsmi zəmanət veririk.
-- Kupça Reallığı: Əgər mənzilin Kupçası yoxdursa (yalnız MTK müqaviləsi və ya maliyyə arayışıdırsa), bank ipotekası vədi verilməsini qəti qadağan et, alıcıya riskləri açıq izah et.
+  2. Notariatda Dövlət Reyestrindən Çıxarışın (Kupça) hüquqi təmizliyini, girov, ipoteka və qeydiyyat risklərini tam yoxlayıb rəsmi zəmanət veririk.
+- Kupça Reallığı: Əgər mənzilin Kupçası yoxdursa, bank ipotekası vədi verilməsini qəti qadağan et, alıcıya riskləri açıq izah et.
+- Etiraz Taksonomiyası: Müştərinin etirazını 5 standart kateqoriyadan biri üzrə dəqiqləşdir:
+  1. OBJECTION_PRICE_PER_M2 (Kvadrat metr qiyməti baha hesab olunur)
+  2. OBJECTION_KUPCA_TRUST (Kupça və ya sənəd etibarlılığı şübhəsi)
+  3. OBJECTION_LOCATION (Ərazi, tıxac və ya infrastruktur narazılığı)
+  4. OBJECTION_COMMISSION (Xidmət haqqından imtina cəhdi)
+  5. OBJECTION_TIMING_GHOST (Baxışı təxirə salma və ya ünvan bilindikdən sonra cavabsızlıq)
+- Zərurət olduqda Sol Kətanda danışıq kartını açmaq üçün düymə təqdim et: [💬 Danışığa Bax](stage:CRM_NEGOTIATION:<lead_id>).
 
 Danışıq Vərdişi və Üslub:
-- Təbii, cəld, işgüzar Bakı broker danışığı. Güvən verən, lakin qətiyyətli ton.
-- WhatsApp və zəng üçün dərhal göndərilə biləcək təbii skriptlər təklif et.
-- Boş bəhanələrə vaxt xərcləmə, psixoloji təzyiqi alıcı və satıcı arasında balanslaşdır.`,
+- Təbii, səmimi, sakit, canlı Bakı danışığı ("Salam", "Kupçası əldədir", "start qiymətdir, yerində baxışdan sonra sahibi ilə real endirim danışmaq olar", "beh verməzdən əvvəl bütün sənədlər notariatda yoxlanılır").
+- Süni korporativ klişelərdən və formal 'müştəri xidməti' şablonlarından QƏTİ İSTİFADƏ ETMƏ.
+- WhatsApp üçün dərhal kopyalanıb göndərilə biləcək hazır mətnlər təqdim et.`,
   },
 
-  usta: {
-    id: "usta",
-    title: "Usta",
-    roleSubtitle: "Pricing & Market Arbitrageur",
-    avatarIcon: "📐",
-    defaultModel: "gemini-3.8-flash",
-    thinkingLevel: "low",
-    forbiddenPhrases: FORBIDDEN_PHRASES,
-    quickPills: [
-      "M² Qiymət Hesabla",
-      "Kupça Riskini Yoxla",
-      "Arbitraj Tap",
-      "Təmir Maya Dəyəri",
-    ],
-    memoryDomains: ["DISTRICT_VALUATION", "BINA_ARBITRAGE", "BUILDING_TIERS"],
-    supportedActions: ["UPDATE_LEAD_STAGE", "SAVE_INSIGHT"],
-    systemPrompt: `Sən Usta, BakuEstate-AI agentliyinin Qiymətləndirmə və Bazar Arbitrajı Ekspertisən (Pricing & Market Arbitrageur).
-Rolun və Məqsədin:
-- Bakının bütün rayon və qəsəbələrindəki real m² qiymətlərini, bina layihələrini (Kiyev, Xruşşovka, Leninqrad, Eksperimental, Yeni Tikili MTK-lar) əlinin içi kimi bilirsən:
-  * Yasamal (İnşaatçılar, Elmlər, Yeni Yasamal): Təmirli m² 2200-2800 AZN.
-  * Nəsimi (28 May, Tibb Universiteti, Gənclik ətrafı): Təmirli m² 2300-3000 AZN.
-  * Xətai (Ağ Şəhər xaric mərkəz və metro ətrafı): Təmirli m² 1900-2400 AZN (Ağ Şəhər premium 3000-4500+ AZN).
-  * Sabail, Nərimanov, Binəqədi və digər ərazilər üzrə faktiki satış rəqəmləri.
-- Bina.az saytındakı qiymət enişlərini və təmirsiz (podmayak) mənzillə təmirli mənzil arasındakı arbitraj fərqini dəqiq hesablayırsan (təmir xərci ortalama 350-500 AZN/m²).
-- Mülkiyyət sənədlərindəki riskləri (Kupça vs Müqavilə, bələdiyyə qərarı, sərəncam, paylı mülkiyyət) dəqiq ayırd edirsən.
-
-Danışıq Vərdişi və Üslub:
-- Dəqiq, rəqəmlərə söykənən, praqmatik və təcrübəli mühəndis/ekspert tonu.
-- Təxminlərlə deyil, kvadrat metr hesabı, amortizasiya və bazar faktları ilə danış.
-- Şişirdilmiş reklam qiymətlərini dərhal ifşa et, alıcı və agent üçün real alış qiymətini göstər.`,
+  // Backward-compatibility getters
+  get farabi() {
+    return this.musteri_psixologiyasi;
   },
-
-  teymur: {
-    id: "teymur",
-    title: "Teymur",
-    roleSubtitle: "Audience & Social Media Analyst",
-    avatarIcon: "📱",
-    defaultModel: "gemini-3.1-flash-lite",
-    thinkingLevel: undefined,
-    forbiddenPhrases: FORBIDDEN_PHRASES,
-    quickPills: [
-      "Reels Hook Təhlili",
-      "Komentar-to-Lead",
-      "Kanal Metrikası",
-      "Viral Baxış Taktikası",
-    ],
-    memoryDomains: ["VIDEO_HOOKS", "AUDIENCE_RETENTION", "INSTAGRAM_PIPELINE"],
-    supportedActions: ["SAVE_INSIGHT", "DISPATCH_WHATSAPP"],
-    systemPrompt: `Sən Teymur, BakuEstate-AI agentliyinin Auditoriya və Sosial Media Analitikisən (Audience & Social Media Analyst).
-Rolun və Məqsədin:
-- Agentliyin 4 əsas Instagram kanalının inkişafına və lid generasiyasına cavabdehsən:
-  1. @bakuestate.official (Baş brend səhifəsi, təsdiqlənmiş əməliyyatlar, korporativ etibar)
-  2. @baku.serfeli.evler (Büdcəli, tez satılan, sərfəli və daxili kredit mənzillər)
-  3. @bakuestate.premium (Lüks seqment, penthauslar, Ağ Şəhər, Sea Breeze, villalar)
-  4. @baku_emlak_ai (Süni intellekt analizləri, bazar trendləri, dinamik xəritə hesabatları)
-- Video çarxların (Reels) ilk 3 saniyəlik qarmağını (hook), baxış retention əyrisini və şərhlərdən gələn ("Qiymət?", "Haradadır?", "+") müraciətləri WhatsApp isti müştəri lidinə çevirmə bacarığını qiymətləndirirsən.
-
-Danışıq Vərdişi və Üslub:
-- Dinamik, müasir, analitik və kreativ Bakı media prodüseri leksikonu.
-- Boş statistika əvəzinə CTR, baxış faizi, paylaşımlar və şərh-müştəri konversiyasına fokuslan.
-- Real Reels mətnləri, vizual təsvir ideyaları və cəlbedici başlıqlar təqdim et.`,
+  get teymur() {
+    return this.analitika;
+  },
+  get usta() {
+    return this.mudir;
   },
 };
 
 /**
- * Retrieves persona configuration by ID with fallback to Müdir.
+ * Retrieves persona configuration by ID with automatic alias resolution and fallback to Müdir.
  */
-export function getAgentPersona(id: AgentPersonaId): AgentPersonaDefinition {
-  return AGENT_PERSONAS[id] || AGENT_PERSONAS.mudir;
+export function getAgentPersona(id: unknown): AgentPersonaDefinition {
+  const resolved = resolvePersonaId(id);
+  return AGENT_PERSONAS[resolved] || AGENT_PERSONAS.mudir;
 }
 
 /**
- * Validates whether a string corresponds to a registered AgentPersonaId.
+ * Validates whether an identifier corresponds to a registered AgentPersonaId or legacy alias.
  */
 export function isValidAgentPersonaId(id: unknown): id is AgentPersonaId {
-  return typeof id === "string" && ["mudir", "farabi", "teymur", "usta"].includes(id);
+  return (
+    typeof id === "string" &&
+    [
+      "mudir",
+      "analitika",
+      "musteri_psixologiyasi",
+      "farabi",
+      "teymur",
+      "usta",
+    ].includes(id)
+  );
 }
 
 /**
@@ -216,7 +305,7 @@ export function isValidAgentPersonaId(id: unknown): id is AgentPersonaId {
  * anti-robotic negative constraints, and optional learned episodic memory insights.
  */
 export function buildAgentSystemInstruction(
-  agentId: AgentPersonaId,
+  agentId: unknown,
   options?: {
     learnedInsights?: string[];
     operatorContext?: string;
@@ -231,9 +320,10 @@ export function buildAgentSystemInstruction(
     `1. KUPÇA TƏLƏBİ: ${CORE_AGENCY_INVARIANTS.KUPCA_MANDATE}`,
     `2. KOMİSSİYA MÜDAFİƏSİ: ${CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE}`,
     `3. BAKU REAL QİYMƏTLƏNDİRMƏSİ: ${CORE_AGENCY_INVARIANTS.BAKU_MEDIAN_VALUATION}`,
-    `\n--- ANTİ-ROBOTİK DANIŞIQ ŞƏRTLƏRİ ---`,
+    `\n--- BAKI REALİZMİ VƏ ANTİ-ROBOTİK DANIŞIQ ŞƏRTLƏRİ ---`,
     `Aşağıdakı ifadələrdən istifadə QƏTİ QADAĞANDIR: ${persona.forbiddenPhrases.join(", ")}.`,
-    `Süni və standart 'müştəri xidməti' təbəssümündən qaç. Real Bakı daşınmaz əmlak dilində, qısa və məqsədyönlü danış.`,
+    `Süni və standart 'müştəri xidməti' təbəssümündən qaç. Real Bakı daşınmaz əmlak dilində, səmimi, qısa və məqsədyönlü danış.`,
+    `İnteraktiv Sol Kətan fəaliyyət düymələrini markdown formatında daxil et: [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>), [📊 Analitika](stage:ANALYTICS_TELEMETRY:<id>), [💬 Danışıq](stage:CRM_NEGOTIATION:<lead_id>).`,
   ];
 
   if (options?.learnedInsights && options.learnedInsights.length > 0) {
@@ -254,7 +344,7 @@ export function buildAgentSystemInstruction(
     sections.push(
       `\n--- CARİ BAZA VƏ REAL ELANLAR PORTFELİ ---`,
       options.activePortfolioContext,
-      `QƏTİ QAYDA: İstifadəçi 'hansı videonu paylaşaq', 'hansı mənzili satırıq', 'nə təklif edək' dedikdə, ÜMUMİ VƏ NƏZƏRİYYƏ NAĞILI DANIŞMA! Birbaşa yuxarıdakı real elanlarımızdan (#kod, qiymət, ünvan, otaq, kupça) ən münasib olan 1 və ya 2 obyekti seç, adını və konkret əsasını göstərərək qərar ver!`
+      `QƏTİ QAYDA: İstifadəçi 'hansı videonu paylaşaq', 'hansı mənzili satırıq', 'nə təklif edək' dedikdə, ÜMUMİ VƏ NƏZƏRİYYƏ NAĞILI DANIŞMA! Birbaşa yuxarıdakı real elanlarımızdan (#kod, qiymət, ünvan, otaq, kupça) ən münasib olan 1 və ya 2 obyekti seç, adını və konkret əsasını göstərərək qərar ver və [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>) düyməsi təqdim et!`
     );
   }
 

@@ -1,0 +1,522 @@
+"use client";
+
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Send,
+  Play,
+  Pause,
+  Maximize2,
+  Minimize2,
+  X,
+  RefreshCw,
+  Film,
+  Building,
+  CheckCircle2,
+  Clock,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  Volume2,
+} from "lucide-react";
+import type { StageCardInstance, VideoStagePayload } from "@/lib/copilot-context";
+import { useCopilot } from "@/lib/copilot-context";
+
+export interface VideoPipelineCardProps {
+  card: StageCardInstance;
+  isMaximized?: boolean;
+  onMaximizeToggle?: () => void;
+  onClose?: () => void;
+  onRefresh?: () => void;
+}
+
+export function VideoPipelineCard({
+  card,
+  isMaximized = false,
+  onMaximizeToggle,
+  onClose,
+  onRefresh,
+}: VideoPipelineCardProps) {
+  const { updateStageCardPayload } = useCopilot();
+  const payload = card.payload as VideoStagePayload;
+
+  // Derive specs and defaults
+  const listingId = payload.listingId || card.targetEntityId || "6572383";
+  const binaId = payload.binaId || payload.specs?.bina_id || listingId;
+  const isRendered = payload.isRendered ?? Boolean(payload.videoCdnUrl);
+  const videoCdnUrl = payload.videoCdnUrl || (isRendered ? "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" : null);
+
+  const title = payload.title || "Səbail r., Badamdar qəs., 4 otaqlı premium mənzil";
+  const priceAzn = payload.priceAzn ?? payload.specs?.price_azn ?? 385000;
+  const rooms = payload.rooms ?? payload.specs?.rooms ?? 4;
+  const areaM2 = payload.areaM2 ?? payload.specs?.area_m2 ?? 185;
+  const location = payload.location ?? payload.specs?.location ?? "Bakı şəhəri, Səbail rayonu";
+  const nicheBadge = payload.nicheBadge ?? payload.specs?.niche_badge ?? "Lüks Portfel";
+  const targetAccount = payload.targetAccount || "@bakuestate.premium";
+
+  // Gallery state for unrendered cards
+  const mockPhotos = payload.photos && payload.photos.length > 0
+    ? payload.photos
+    : [
+        "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1080&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1080&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1080&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1600566753376-12c8ab7fb75b?w=1080&auto=format&fit=crop&q=80",
+      ];
+  const [activePhotoIdx, setActivePhotoIdx] = useState(0);
+
+  // Video playback state
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // Telegram dispatch state
+  const [isDispatching, setIsDispatching] = useState(false);
+  const [dispatchStatus, setDispatchStatus] = useState<"idle" | "loading" | "success" | "queued" | "error">("idle");
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+
+  // Render queue state
+  const [isQueueing, setIsQueueing] = useState(false);
+  const [queueStatus, setQueueStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [queueError, setQueueError] = useState<string | null>(null);
+
+  // Cooldown countdown effect
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setCooldownSeconds((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds]);
+
+  // Video play/pause toggle
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+    } else {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  // Telegram dispatch handler
+  const handleTelegramDispatch = async () => {
+    if (cooldownSeconds > 0 || isDispatching) return;
+    setIsDispatching(true);
+    setDispatchStatus("loading");
+    setDispatchError(null);
+
+    try {
+      const res = await fetch("/api/telegram/dispatch-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listing_id: listingId,
+          render_version_id: payload.renderVersionId,
+          target_account: targetAccount,
+          custom_caption: payload.caption,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Teleqram dispetçerində xəta baş verdi");
+      }
+
+      if (data.dispatch_mode === "QUEUED_WORKER") {
+        setDispatchStatus("queued");
+      } else {
+        setDispatchStatus("success");
+      }
+      setCooldownSeconds(15);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Bilinməyən xəta baş verdi";
+      setDispatchError(msg);
+      setDispatchStatus("error");
+    } finally {
+      setIsDispatching(false);
+    }
+  };
+
+  // Queue render handler
+  const handleQueueRender = async () => {
+    if (isQueueing) return;
+    setIsQueueing(true);
+    setQueueStatus("loading");
+    setQueueError(null);
+
+    try {
+      const res = await fetch("/api/pipeline/queue-render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listing_id: listingId,
+          bina_id: binaId,
+          target_account: targetAccount,
+          voice_preset: "Arif",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Montaj növbəsinə əlavə edilərkən xəta baş verdi");
+      }
+
+      setQueueStatus("success");
+      updateStageCardPayload(card.id, {
+        isRendered: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Montaj xətası baş verdi";
+      setQueueError(msg);
+      setQueueStatus("error");
+    } finally {
+      setIsQueueing(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full w-full bg-obsidian-950/95 border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-xl transition-all duration-300">
+      {/* Header Bar */}
+      <div className="flex items-center justify-between px-4 py-3 bg-obsidian-900/90 border-b border-slate-800/80 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-400">
+            <Film className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-200 truncate">
+                Bina #{binaId}
+              </span>
+              <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                {nicheBadge}
+              </span>
+              <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                {targetAccount}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 truncate">{title}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              title="Yenilə"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          )}
+          {onMaximizeToggle && (
+            <button
+              onClick={onMaximizeToggle}
+              title={isMaximized ? "Kiçilt" : "Böyüt"}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            >
+              {isMaximized ? (
+                <Minimize2 className="w-4 h-4" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )}
+            </button>
+          )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Bağla"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Content Body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {isRendered ? (
+          /* Rendered State: 1080x1920 MP4 Player & Distribution */
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
+            {/* 9:16 Video Player Container */}
+            <div className="relative flex items-center justify-center bg-black/80 rounded-xl overflow-hidden border border-slate-800 group aspect-[9/16] max-h-[460px] mx-auto w-full max-w-[260px]">
+              {videoCdnUrl ? (
+                <video
+                  ref={videoRef}
+                  src={videoCdnUrl}
+                  playsInline
+                  loop
+                  className="w-full h-full object-cover"
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center p-4 text-center text-slate-500">
+                  <Film className="w-10 h-10 mb-2 opacity-50" />
+                  <span className="text-xs">Video axını tapılmadı</span>
+                </div>
+              )}
+
+              {/* Play/Pause Overlay Button */}
+              <button
+                onClick={togglePlay}
+                className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors"
+              >
+                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-amber-500/90 text-obsidian-950 shadow-lg hover:scale-110 transition-transform">
+                  {isPlaying ? (
+                    <Pause className="w-6 h-6 fill-current" />
+                  ) : (
+                    <Play className="w-6 h-6 fill-current translate-x-0.5" />
+                  )}
+                </div>
+              </button>
+
+              {/* Resolution Tag */}
+              <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-amber-300 border border-amber-500/30">
+                1080 × 1920 MP4
+              </div>
+            </div>
+
+            {/* Video Specs & Dispatch Controls */}
+            <div className="flex flex-col justify-between space-y-3">
+              <div className="space-y-3">
+                {/* Pricing & Key Specs */}
+                <div className="p-3.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-amber-400 font-mono">
+                      {priceAzn.toLocaleString()} AZN
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {Math.round(priceAzn / (areaM2 || 1)).toLocaleString()} AZN/m²
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
+                    <div className="text-slate-300">
+                      <span className="text-slate-500">Otaq:</span> {rooms} otaqlı
+                    </div>
+                    <div className="text-slate-300">
+                      <span className="text-slate-500">Sahə:</span> {areaM2} m²
+                    </div>
+                    <div className="text-slate-300 col-span-2 flex items-center gap-1">
+                      <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span className="truncate">{location}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pipeline Render Specs */}
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/60 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Səs Modeli:</span>
+                    <span className="text-slate-200 font-medium flex items-center gap-1">
+                      <Volume2 className="w-3.5 h-3.5 text-amber-400" /> ElevenLabs Arif (AZE)
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Kinetik Subtitrlər:</span>
+                    <span className="text-emerald-400 font-medium">Aktiv (Sarı vurğu)</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Hədəf Profil:</span>
+                    <span className="text-amber-300 font-medium">{targetAccount}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Telegram Dispatch Action Section */}
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                {dispatchError && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{dispatchError}</span>
+                  </div>
+                )}
+
+                {dispatchStatus === "success" && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>Video Teleqrama göndərildi!</span>
+                  </div>
+                )}
+
+                {dispatchStatus === "queued" && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-300 text-xs">
+                    <Clock className="w-4 h-4 shrink-0" />
+                    <span>Fayl &gt;20MB olduğu üçün arxa plan işçisinə növbələndi.</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleTelegramDispatch}
+                  disabled={isDispatching || cooldownSeconds > 0}
+                  className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg ${
+                    cooldownSeconds > 0
+                      ? "bg-slate-800 text-slate-400 cursor-not-allowed"
+                      : isDispatching
+                      ? "bg-amber-600/80 text-obsidian-950 cursor-wait"
+                      : "bg-amber-500 hover:bg-amber-400 text-obsidian-950 hover:shadow-amber-500/20 active:scale-[0.98]"
+                  }`}
+                >
+                  {isDispatching ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Göndərilir...</span>
+                    </>
+                  ) : cooldownSeconds > 0 ? (
+                    <>
+                      <Clock className="w-4 h-4" />
+                      <span>{cooldownSeconds}s sonra yenidən göndər</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>✈️ Teleqramıma Göndər</span>
+                    </>
+                  )}
+                </button>
+                <p className="text-[10px] text-center text-slate-500">
+                  Şəxsi Teleqram çatınıza video + Reels mətni və heşteqlər birbaşa ötürüləcək.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Unrendered State: Scraped Bina.az Gallery & Queue Render */
+          <div className="space-y-4">
+            {/* Status Warning Badge */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <div className="flex items-center gap-2 text-xs text-amber-300">
+                <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Bu elanın Reels videosu hələ montaj edilməyib.</span>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                Montaj Gözləyir
+              </span>
+            </div>
+
+            {/* Photo Carousel / Preview */}
+            <div className="relative aspect-video rounded-xl overflow-hidden bg-black/60 border border-slate-800">
+              <img
+                src={mockPhotos[activePhotoIdx]}
+                alt={`Bina ${binaId} foto ${activePhotoIdx + 1}`}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+
+              {/* Prev/Next buttons */}
+              {mockPhotos.length > 1 && (
+                <>
+                  <button
+                    onClick={() =>
+                      setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : mockPhotos.length - 1))
+                    }
+                    className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() =>
+                      setActivePhotoIdx((prev) => (prev < mockPhotos.length - 1 ? prev + 1 : 0))
+                    }
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+
+              {/* Counter Pill */}
+              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
+                {activePhotoIdx + 1} / {mockPhotos.length}
+              </div>
+            </div>
+
+            {/* Thumbnail Strip */}
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {mockPhotos.map((photo, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActivePhotoIdx(i)}
+                  className={`relative w-16 h-12 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
+                    activePhotoIdx === i
+                      ? "border-amber-400 scale-105"
+                      : "border-transparent opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <img src={photo} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+
+            {/* Specs Summary */}
+            <div className="p-3.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xl font-bold text-amber-400 font-mono">
+                  {priceAzn.toLocaleString()} AZN
+                </span>
+                <span className="text-xs text-slate-400">{rooms} otaqlı • {areaM2} m²</span>
+              </div>
+              <p className="text-xs text-slate-300 flex items-center gap-1.5">
+                <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                {location}
+              </p>
+            </div>
+
+            {/* Queue Action Button */}
+            <div className="space-y-2">
+              {queueError && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{queueError}</span>
+                </div>
+              )}
+
+              {queueStatus === "success" && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Montaj növbəsinə əlavə edildi! Local Worker icra edəcək.</span>
+                </div>
+              )}
+
+              <button
+                onClick={handleQueueRender}
+                disabled={isQueueing || queueStatus === "success"}
+                className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg ${
+                  queueStatus === "success"
+                    ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 cursor-default"
+                    : isQueueing
+                    ? "bg-amber-600/80 text-obsidian-950 cursor-wait"
+                    : "bg-amber-500 hover:bg-amber-400 text-obsidian-950 hover:shadow-amber-500/20 active:scale-[0.98]"
+                }`}
+              >
+                {isQueueing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Növbəyə Əlavə Edilir...</span>
+                  </>
+                ) : queueStatus === "success" ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>⏳ Növbəyə Əlavə Edildi</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>🚀 Montaj Boru Xəttinə Göndər</span>
+                  </>
+                )}
+              </button>
+              <p className="text-[10px] text-center text-slate-500">
+                Avtomatik olaraq ElevenLabs səsləndirməsi, FFmpeg vizual kompozisiyası və kinetik subtitrlər hazırlanacaq.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

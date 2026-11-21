@@ -7,6 +7,8 @@ TTS options, video parameters, and Telegram CRM credentials.
 from pathlib import Path
 import os
 import sys
+import socket
+import logging
 from typing import Optional, Dict, Any
 
 # Ensure UTF-8 on Windows environments
@@ -236,8 +238,15 @@ EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "az-AZ-BabekNeural")
 EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "+10%")
 EDGE_TTS_VOLUME = os.getenv("EDGE_TTS_VOLUME", "+0%")
 
+# ElevenLabs Studio SOTA TTS Settings
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "ZQJv3hwvRAIC7fvWZ1Qr")
+ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")
+ELEVENLABS_VOICE_BANU = os.getenv("ELEVENLABS_VOICE_BANU", "EXAVITQu4vr4xnSDxMaL")
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+
 # OpenAI Professional Studio TTS Settings
-TTS_ENGINE = os.getenv("TTS_ENGINE", "openai" if os.getenv("OPENAI_API_KEY") else "edge").lower()
+TTS_ENGINE = os.getenv("TTS_ENGINE", "elevenlabs" if os.getenv("ELEVENLABS_API_KEY") else ("openai" if os.getenv("OPENAI_API_KEY") else "edge")).lower()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "tts-1")  # 'tts-1' or 'tts-1-hd'
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "onyx")   # onyx, alloy, echo, nova, shimmer
@@ -270,6 +279,7 @@ BLUR_FILTER = "boxblur=25:5"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_MOCK_DISPATCH = os.getenv("TELEGRAM_MOCK_DISPATCH", "true").lower() in ("1", "true", "yes")
+AGENCY_WHATSAPP_PHONE = os.getenv("AGENCY_WHATSAPP_PHONE", "994501234567")
 
 # Sentry Telemetry and Crash Reporting Settings
 SENTRY_DSN = os.getenv("SENTRY_DSN", "https://768f921e07aae7c82a4ea793e61a45b1@o4512418793586688.ingest.de.sentry.io/4512441253298256")
@@ -299,19 +309,39 @@ def init_sentry() -> bool:
     except Exception:
         return False
 
-# Supabase Cloud Storage & Database Sync Settings
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ejsaccbeatmwqodwwzwu.supabase.co")
-SUPABASE_KEY = os.getenv(
-    "SUPABASE_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqc2FjY2JlYXRtd3FvZHd3end1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzk2NDM0MCwiZXhwIjoyMDk5NTQwMzQwfQ.6zSCmucOFXrbeyq_-_WlxwLNIX8mj4q6Y7FvtnUUet8"
-)
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "baku-estate-media")
+# Supabase Cloud Storage & Database Sync Settings (Fail-closed: read ONLY from environment)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+).strip()
+SUPABASE_KEY = SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "baku-estate-media").strip()
 SUPABASE_ENABLED = os.getenv("SUPABASE_ENABLED", "true").lower() in ("1", "true", "yes")
+
+# Cloud Backend, Deduplication & Rejim 3 Auto-Render Guardrails
+USE_CLOUD_BACKEND = os.getenv("USE_CLOUD_BACKEND", "true").lower() in ("1", "true", "yes")
+USD_TO_AZN_RATE = _safe_float(os.getenv("USD_TO_AZN_RATE"), 1.70)
+EUR_TO_AZN_RATE = _safe_float(os.getenv("EUR_TO_AZN_RATE"), 1.85)
+PRICE_DROP_TRIGGER_PCT = _safe_float(os.getenv("PRICE_DROP_TRIGGER_PCT"), 5.0)
+DAILY_AUTO_RENDER_LIMIT = _safe_int(os.getenv("DAILY_AUTO_RENDER_LIMIT"), 5)
+AUTO_RENDER_COOLDOWN_HOURS = _safe_int(os.getenv("AUTO_RENDER_COOLDOWN_HOURS"), 24)
+AUTO_JOB_TTL_HOURS = _safe_int(os.getenv("AUTO_JOB_TTL_HOURS"), 24)
+STORAGE_PRUNE_DAYS = _safe_int(os.getenv("STORAGE_PRUNE_DAYS"), 14)
+WORKER_ID = (os.getenv("WORKER_ID") or socket.gethostname() or "win-local-worker").strip()
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+BAKU_QUIET_START = os.getenv("BAKU_QUIET_START", "21:30").strip()
+BAKU_QUIET_END = os.getenv("BAKU_QUIET_END", "09:00").strip()
+
+if USE_CLOUD_BACKEND and (not SUPABASE_URL or not SUPABASE_KEY):
+    logging.getLogger("config.settings").warning(
+        "USE_CLOUD_BACKEND is enabled, but SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/SUPABASE_KEY is unset (fail-closed)."
+    )
 
 # Notion CRM Database Settings
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "41a7b510-0e72-81f5-9270-eb56eb3cc2af")
 NOTION_DATA_SOURCE_ID = os.getenv("NOTION_DATA_SOURCE_ID", "41a7b510-0e72-8179-99a5-000bff2d8a14")
-NOTION_ENABLED = os.getenv("NOTION_ENABLED", "true").lower() in ("1", "true", "yes")
+NOTION_ENABLED = os.getenv("NOTION_ENABLED", "false").lower() in ("1", "true", "yes")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 
 # Keenable Real-Time Baku Real Estate Market Averages (AZN / m², Oct-Nov 2026)
@@ -454,3 +484,14 @@ SCHEDULE_INTERVAL_HOURS = _safe_float(os.getenv("SCHEDULE_INTERVAL_HOURS"), 0.0)
 SCHEDULE_PAGES = _safe_int(os.getenv("SCHEDULE_PAGES"), 1)
 SCHEDULE_LIMIT = _safe_int(os.getenv("SCHEDULE_LIMIT"), 3)
 SCHEDULE_RUN_ON_STARTUP = os.getenv("SCHEDULE_RUN_ON_STARTUP", "true").lower() in ("1", "true", "yes")
+
+# Social Lifecycle & Telemetry Observer Settings
+SOCIAL_TELEMETRY_ENABLED = os.getenv("SOCIAL_TELEMETRY_ENABLED", "true").lower() == "true"
+SOCIAL_CIRCUIT_BREAKER_HOURS = int(os.getenv("SOCIAL_CIRCUIT_BREAKER_HOURS", "4"))
+SOCIAL_POLL_BUDGET_MAX = int(os.getenv("SOCIAL_POLL_BUDGET_MAX", "11"))
+SOCIAL_SCRAPER_TIMEOUT_SECONDS = int(os.getenv("SOCIAL_SCRAPER_TIMEOUT_SECONDS", "60"))
+SOCIAL_OBSERVER_PROVIDER = os.getenv("SOCIAL_OBSERVER_PROVIDER", "apify").strip()
+
+INSTAGRAM_REEL_PATTERN = re.compile(r"^https?:\/\/(www\.)?instagram\.com\/reel\/([A-Za-z0-9_-]+)")
+TIKTOK_VIDEO_PATTERN = re.compile(r"^https?:\/\/(www\.)?tiktok\.com\/@([A-Za-z0-9_.-]+)\/video\/([0-9]+)")
+

@@ -80,73 +80,73 @@ ARCHETYPE_STYLES = {
 def create_hero_badge(
     listing: Dict[str, Any],
     output_path: Optional[Path] = None,
-    width: int = 960,
-    height: int = 240,
+    width: int = 920,
+    height: int = 176,
     archetype: str = "budget"
 ) -> Path:
     """
-    Renders an ephemeral floating frosted-glass hero pill with 4 Visual Archetypes:
-    - budget: Royal Cobalt & Fresh Emerald (Daş Bina, İpotekaya Yararlı)
-    - luxury: Obsidian Slate & Champagne Gold (Premium Dizayn, Panoramik)
-    - villa: Warm Terracotta Sand & Olive (Filterli Hovuz, 6 Sot Həyət)
-    - commercial: Deep Navy & Electric Cyan (Gur İnsan Axını, İllik 10% ROI)
+    Renders a minimal editorial real estate title strip (zero heavy AI-box look):
+    - Lightly frosted translucent dark ribbon with a vertical architectural accent bar
+    - Clean uppercase micro-tags separated by dots (no bulky pill buttons)
+    - Bold editorial price and concise 1-line specs
     """
     style_key = archetype.lower() if archetype.lower() in ARCHETYPE_STYLES else "budget"
     style = ARCHETYPE_STYLES[style_key]
 
+    accent_map = {
+        "budget": (255, 212, 59, 245),      # Vibrant Gold
+        "luxury": (245, 215, 145, 245),     # Champagne Gold
+        "villa": (52, 211, 153, 245),       # Emerald Mint
+        "commercial": (56, 189, 248, 245),  # Sky Cyan
+    }
+    accent_color = accent_map.get(style_key, (255, 212, 59, 245))
+
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Frosted Glass Container with Archetype Colors
+    # 1. Minimal Frosted Editorial Ribbon (translucent charcoal, thin hairline border)
     draw.rounded_rectangle(
         [0, 0, width, height],
-        radius=36,
-        fill=style["container_fill"],
-        outline=style["container_outline"],
-        width=2
+        radius=20,
+        fill=(10, 14, 22, 148),
+        outline=(255, 255, 255, 42),
+        width=1
     )
 
-    # Fonts (Specs increased to 28pt for 6-inch phone screen legibility)
-    font_price = get_best_font(size=46, bold=True)
-    font_specs = get_best_font(size=28, bold=False)
-    font_pill = get_best_font(size=19, bold=True)
+    # Vertical architectural accent bar on the left
+    bar_pad_y = max(20, int(height * 0.14))
+    draw.rounded_rectangle(
+        [20, bar_pad_y, 27, height - bar_pad_y],
+        radius=4,
+        fill=accent_color
+    )
 
-    # 2. Status Pills (Top Row: y=26)
-    x_cursor = 36
-    pill_y = 26
-    pill_h = 36
+    # Fonts scaled cleanly to container height
+    font_tag = get_best_font(size=20, bold=True)
+    font_price = get_best_font(size=50, bold=True)
+    font_specs = get_best_font(size=27, bold=False)
 
+    # 2. Minimal Micro-Tag Row (clean text, zero bulky pills)
     has_kupca = listing.get("has_bill_of_sale", True)
     is_urgent = listing.get("is_urgent", False)
-
-    # Determine custom or archetype pills
-    rendered_pills: List[Tuple[str, Tuple[int, int, int, int]]] = []
-
+    tags: List[str] = []
     if is_urgent:
-        rendered_pills.append(("TƏCİLİ SATIŞ", (225, 29, 72, 225)))
-
+        tags.append("TƏCİLİ")
     if has_kupca:
-        rendered_pills.append(("KUPÇALI", (16, 185, 129, 225)))
+        tags.append("KUPÇALI")
+    for pill_name, _ in style["default_pills"]:
+        if len(tags) < 3 and pill_name not in tags:
+            tags.append(pill_name)
 
-    # Add archetype-specific signature pills
-    for pill_name, pill_color in style["default_pills"]:
-        if len(rendered_pills) < 3 and not any(p[0] == pill_name for p in rendered_pills):
-            rendered_pills.append((pill_name, pill_color))
+    tag_str = "   ·   ".join(tags)
+    x_text = 46
+    y_tag = max(18, int(height * 0.13))
+    y_price = max(50, int(height * 0.32))
+    y_specs = max(116, int(height * 0.68))
 
-    for pill_text, fill_color in rendered_pills:
-        bbox = draw.textbbox((0, 0), pill_text, font=font_pill)
-        text_w = bbox[2] - bbox[0]
-        pill_w = max(110, text_w + 28)
+    draw.text((x_text, y_tag), tag_str, font=font_tag, fill=accent_color)
 
-        draw.rounded_rectangle(
-            [x_cursor, pill_y, x_cursor + pill_w, pill_y + pill_h],
-            radius=18,
-            fill=fill_color
-        )
-        draw.text((x_cursor + 14, pill_y + 7), pill_text, font=font_pill, fill=(255, 255, 255, 255))
-        x_cursor += pill_w + 12
-
-    # 3. Price Display (Middle Row: y=86)
+    # 3. Bold Editorial Price
     price = listing.get("price")
     curr = listing.get("currency") or "AZN"
     try:
@@ -156,9 +156,9 @@ def create_hero_badge(
         formatted_price = "Münasib Qiymət"
 
     price_str = f"{formatted_price} {curr}"
-    draw.text((36, 86), price_str, font=font_price, fill=style["price_color"])
+    draw.text((x_text, y_price), price_str, font=font_price, fill=(255, 255, 255, 255))
 
-    # 4. Specs Line (Bottom Row: y=166, font size 28pt)
+    # 4. Clean Specs Line
     raw_loc = listing.get("location") or listing.get("address") or "Bakı şəhəri"
     loc_clean = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəs.', raw_loc, flags=re.IGNORECASE).strip()
     loc_clean = re.sub(r'\bm\.(?=\s|$|[,\.!])', 'm.', loc_clean, flags=re.IGNORECASE).strip()
@@ -174,28 +174,99 @@ def create_hero_badge(
             specs_parts.append(f"{int(float(area))} m²")
         except Exception:
             specs_parts.append(f"{area} m²")
-    specs_display = "  •  ".join(specs_parts)
+    specs_display = "  ·  ".join(specs_parts)
 
-    draw.text((36, 166), specs_display, font=font_specs, fill=style["specs_color"])
+    draw.text((x_text, y_specs), specs_display, font=font_specs, fill=(235, 240, 248, 245))
 
     # Save output
     if not output_path:
         output_path = Path("data/output/hero_badge.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(output_path), "PNG")
-    logger.info(f"Created {archetype} glassmorphic hero badge: {output_path} ({width}x{height})")
+    logger.info(f"Created {archetype} editorial hero strip: {output_path} ({width}x{height})")
+    return output_path
+
+
+def create_logo_watermark(
+    output_path: Optional[Path] = None,
+    logo_path: Optional[Path] = None,
+    brand_text: str = "BAKU ESTATE",
+    opacity: float = 0.78
+) -> Path:
+    """
+    Generates a sleek, semi-transparent brand logo watermark pill (icon + brand name)
+    for anti-theft content protection across the full video duration.
+    Expanded dimensions: 330x74 for content portability across all channels.
+    """
+    if logo_path is None:
+        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo.png"
+
+    w, h = 330, 74
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Subtle translucent dark smoked glass pill
+    draw.rounded_rectangle(
+        [0, 0, w, h],
+        radius=37,
+        fill=(10, 14, 22, 130),
+        outline=(245, 215, 145, 95),
+        width=1
+    )
+
+    icon_size = 54
+    icon_x, icon_y = 10, (h - icon_size) // 2
+
+    if logo_path.exists():
+        try:
+            with Image.open(logo_path) as raw_logo:
+                logo = raw_logo.convert("RGBA")
+                # Center-crop slightly to focus tightly on the emblem
+                lw, lh = logo.size
+                margin = int(min(lw, lh) * 0.14)
+                logo = logo.crop((margin, margin, lw - margin, lh - margin))
+                logo = logo.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+
+                # Apply circular mask for clean modern badge look
+                mask = Image.new("L", (icon_size, icon_size), 0)
+                ImageDraw.Draw(mask).ellipse([0, 0, icon_size, icon_size], fill=255)
+                img.paste(logo, (icon_x, icon_y), mask)
+        except Exception as e:
+            logger.warning(f"Could not embed logo image {logo_path}: {e}")
+
+    font_brand = get_best_font(size=21, bold=True)
+    font_sub = get_best_font(size=14, bold=False)
+
+    draw.text((76, 15), brand_text, font=font_brand, fill=(255, 245, 215, 240))
+    draw.text((77, 43), "VERIFIED LISTING", font=font_sub, fill=(210, 220, 235, 230))
+
+    # Apply global subtle opacity so watermark protects video without distracting
+    if 0.0 < opacity < 1.0:
+        alpha = img.getchannel("A")
+        alpha = alpha.point(lambda p: int(p * opacity))
+        img.putalpha(alpha)
+
+    if not output_path:
+        output_path = Path("data/output/logo_watermark.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(str(output_path), "PNG")
+    logger.info(f"Created brand logo watermark: {output_path} ({w}x{h})")
     return output_path
 
 
 def create_cta_badge(
-    listing: Dict[str, Any],
+    listing: Optional[Dict[str, Any]] = None,
     output_path: Optional[Path] = None,
     width: int = 920,
     height: int = 150
 ) -> Path:
     """
     Renders a sleek, mobile safe-zone Call-to-Action badge for the final 3.5 seconds.
+    Standardized kinetic CTA:
+      Line 1: 'DƏQİQ ÜNVAN VƏ BAXIŞ ÜÇÜN'
+      Line 2: 'ŞƏRHƏ \'EV\' YAZIN VƏ YA DM GÖNDƏRİN'
     Positioned at y=1380 to keep the bottom 390px free from TikTok/Reels UI button collisions.
+    Strictly 0 owner phone leakage.
     """
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -209,29 +280,25 @@ def create_cta_badge(
     )
 
     font_top = get_best_font(size=23, bold=True)
-    font_phone = get_best_font(size=34, bold=True)
+    font_sub = get_best_font(size=30, bold=True)
 
-    phone = listing.get("owner_phone") or listing.get("phone") or ""
-    if phone:
-        line2 = f"ƏLAQƏ / WHATSAPP: {phone}"
-    else:
-        line2 = "ƏLAQƏ / WHATSAPP ÜÇÜN DM YAZIN"
-    line1 = "BİRBAŞA SAHİBİNDƏN  •  KOMİSSİYASIZ"
+    line1 = "DƏQİQ ÜNVAN VƏ BAXIŞ ÜÇÜN"
+    line2 = "ŞƏRHƏ 'EV' YAZIN VƏ YA DM GÖNDƏRİN"
 
     # Center text
     bbox1 = draw.textbbox((0, 0), line1, font=font_top)
     w1 = bbox1[2] - bbox1[0]
     draw.text(((width - w1) // 2, 28), line1, font=font_top, fill=(245, 215, 145, 255))
 
-    bbox2 = draw.textbbox((0, 0), line2, font=font_phone)
+    bbox2 = draw.textbbox((0, 0), line2, font=font_sub)
     w2 = bbox2[2] - bbox2[0]
-    draw.text(((width - w2) // 2, 74), line2, font=font_phone, fill=(255, 255, 255, 255))
+    draw.text(((width - w2) // 2, 74), line2, font=font_sub, fill=(255, 255, 255, 255))
 
     if not output_path:
         output_path = Path("data/output/cta_badge.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(output_path), "PNG")
-    logger.info(f"Created glassmorphic CTA badge: {output_path}")
+    logger.info(f"Created standardized kinetic CTA badge: {output_path}")
     return output_path
 
 
@@ -271,10 +338,11 @@ def get_hero_overlay_filter(
     video_height: int = 1920,
     start_time: float = 0.2,
     end_time: float = 2.5,
-    target_y: int = 160
+    target_y: int = 186
 ) -> Tuple[str, str]:
     """
     Returns (filter_str, escaped_path) for FFmpeg with optimized 2.5s hero timing:
+    - Centered at x=80 px, y=186 px (for w=920, h=176 inside 1080x1920)
     - Smooth slide-down in first 0.35s
     - Floats proudly for ~2.0s to hook viewer attention
     - Dissolves / disappears cleanly at 2.5s into the apartment walkthrough

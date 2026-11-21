@@ -14,6 +14,7 @@ venv/
 # Data and browser profiles
 data/profiles/
 data/downloads/
+data/test_*
 data/output/*.mp4
 data/output/*.mp3
 data/output/*.srt
@@ -22,9 +23,15 @@ data/output/*.json
 data/output/*.jpg
 data/output/*.png
 data/database.sqlite
+.coverage
 
 # IDE & OS
 .vscode/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Netlify local state
+.netlify
+web/.netlify
+web/.env.local

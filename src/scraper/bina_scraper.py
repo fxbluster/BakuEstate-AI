@@ -16,9 +16,10 @@ import os
 import re
 import time
 import json
+import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Iterable, Union
 import requests
 from bs4 import BeautifulSoup
 
@@ -47,6 +48,44 @@ OWNER_KEYWORDS = [
     "öz evim",
     "özüm satıram"
 ]
+
+# Liveness check return states
+LIVENESS_ACTIVE = "ACTIVE"
+LIVENESS_REMOVED = "REMOVED_ON_BINA"
+LIVENESS_TRANSIENT_ERROR = "TRANSIENT_ERROR"
+
+REMOVED_DOM_PHRASES = (
+    "elan tapılmadı",
+    "elan tapilmadi",
+    "elan silinib",
+    "elan silinmişdir",
+    "elan silinmisdir",
+    "elan artıq mövcud deyil",
+    "elan artiq movcud deyil",
+    "bu elan artıq aktiv deyil",
+    "bu elan artiq aktiv deyil",
+    "elan müddəti bitib",
+    "elan muddeti bitib",
+    "объявление не найдено",
+    "объявление удалено",
+)
+
+BOT_CHALLENGE_PHRASES = (
+    "just a moment...",
+    "cf-browser-verification",
+    "attention required! | cloudflare",
+    "checking your browser",
+)
+
+
+def _hash_photo_urls(photo_urls: Optional[List[str]]) -> str:
+    """Local SHA-256 digest of normalized sorted photo URLs (avoids circular imports)."""
+    if not photo_urls:
+        return ""
+    cleaned = sorted({str(u).strip() for u in photo_urls if u and str(u).strip()})
+    if not cleaned:
+        return ""
+    return hashlib.sha256("\n".join(cleaned).encode("utf-8")).hexdigest()
 
 
 def clean_phone_number(raw_phone: Optional[str]) -> str:
@@ -267,6 +306,7 @@ class BinaScraper:
             "contact_name": contact_name,
             "description": description,
             "photo_urls": photo_urls,
+            "photo_urls_hash": _hash_photo_urls(photo_urls),
             "downloaded_photos": [],
             "owner_phone": "",
             "status": "NEW"
@@ -330,6 +370,7 @@ class BinaScraper:
             "contact_name": contact_name,
             "description": description,
             "photo_urls": photo_urls,
+            "photo_urls_hash": _hash_photo_urls(photo_urls),
             "downloaded_photos": [],
             "owner_phone": "",
             "status": "NEW"
@@ -360,20 +401,111 @@ class BinaScraper:
 
         return None
 
-    def download_full_hd_photos(self, bina_id: str, photo_urls: List[str], max_photos: int = 8) -> List[str]:
+    def check_listing_liveness(self, bina_id: str) -> str:
+        """
+        Checks whether a listing is still live on bina.az.
+        Returns strictly one of:
+          - 'ACTIVE'
+          - 'REMOVED_ON_BINA' (ONLY on HTTP 404/410 or explicit removed/deleted DOM/Next.js state)
+          - 'TRANSIENT_ERROR' (on HTTP 429/403/5xx, bot challenge, or network errors)
+        """
+        detail_url = f"{BINA_BASE_URL}/items/{str(bina_id).strip()}"
+        try:
+            resp = self.session.get(detail_url, timeout=15, allow_redirects=True)
+        except Exception as exc:
+            logger.warning(f"Liveness check network error for {bina_id}: {exc}")
+            return LIVENESS_TRANSIENT_ERROR
+
+        status_code = getattr(resp, "status_code", 0)
+        if status_code in (404, 410):
+            logger.info(f"Liveness check: {bina_id} returned HTTP {status_code} -> {LIVENESS_REMOVED}")
+            return LIVENESS_REMOVED
+
+        if status_code in (429, 403) or status_code >= 500 or status_code != 200:
+            logger.warning(f"Liveness check: {bina_id} returned HTTP {status_code} -> {LIVENESS_TRANSIENT_ERROR}")
+            return LIVENESS_TRANSIENT_ERROR
+
+        html = resp.text or ""
+        html_lower = html.lower()
+
+        if any(marker in html_lower for marker in BOT_CHALLENGE_PHRASES):
+            logger.warning(f"Liveness check: {bina_id} hit bot challenge -> {LIVENESS_TRANSIENT_ERROR}")
+            return LIVENESS_TRANSIENT_ERROR
+
+        soup = BeautifulSoup(html, "html.parser")
+        next_script = soup.find("script", id="__NEXT_DATA__")
+        has_active_next_item = False
+        if next_script and next_script.string:
+            try:
+                raw_data = json.loads(next_script.string)
+                page_props = raw_data.get("props", {}).get("pageProps", {})
+                current_item = page_props.get("currentItemData")
+                if isinstance(current_item, dict) and current_item:
+                    item_status = str(current_item.get("status") or "").strip().lower()
+                    if item_status in ("deleted", "removed", "expired", "archived", "sold", "inactive"):
+                        return LIVENESS_REMOVED
+                    if current_item.get("isDeleted") or current_item.get("isExpired"):
+                        return LIVENESS_REMOVED
+                    has_active_next_item = True
+                elif page_props.get("statusCode") in (404, 410):
+                    return LIVENESS_REMOVED
+            except Exception:
+                pass
+
+        if not has_active_next_item:
+            body_text = soup.get_text(" ", strip=True).lower()
+            if any(phrase in body_text for phrase in REMOVED_DOM_PHRASES):
+                logger.info(f"Liveness check: {bina_id} matched removed DOM phrase -> {LIVENESS_REMOVED}")
+                return LIVENESS_REMOVED
+
+        return LIVENESS_ACTIVE
+
+    check_liveness = check_listing_liveness
+
+    def download_full_hd_photos(
+        self,
+        bina_id: str,
+        photo_urls: List[str],
+        max_photos: int = 8,
+        photo_urls_hash: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> List[str]:
         """
         Downloads Full HD images to data/downloads/{bina_id}/
+        Refreshes cached photos automatically when photo_urls_hash changes or force_refresh=True.
         Returns list of downloaded file paths.
         """
         target_dir = DOWNLOADS_DIR / str(bina_id)
         target_dir.mkdir(parents=True, exist_ok=True)
+
+        current_hash = (photo_urls_hash or _hash_photo_urls(photo_urls) or "").strip()
+        hash_marker = target_dir / ".photo_urls_hash"
+        previous_hash = ""
+        if hash_marker.is_file():
+            try:
+                previous_hash = hash_marker.read_text(encoding="utf-8").strip()
+            except Exception:
+                previous_hash = ""
+
+        should_refresh = bool(force_refresh) or (
+            bool(previous_hash) and bool(current_hash) and previous_hash != current_hash
+        )
+        if should_refresh:
+            logger.info(
+                f"Photo hash changed for {bina_id} ({previous_hash[:8]} -> {current_hash[:8]}). Refreshing cached photos..."
+            )
+            for old_file in target_dir.glob("photo_*.jpg"):
+                try:
+                    old_file.unlink()
+                except Exception:
+                    pass
 
         downloaded_paths = []
         for idx, url in enumerate(photo_urls[:max_photos]):
             file_name = f"photo_{idx+1:02d}.jpg"
             file_path = target_dir / file_name
 
-            if file_path.exists() and file_path.stat().st_size > 1000:
+            if not should_refresh and file_path.exists() and file_path.stat().st_size > 1000:
                 downloaded_paths.append(str(file_path.resolve()))
                 continue
 
@@ -391,42 +523,128 @@ class BinaScraper:
 
             time.sleep(0.2)
 
+        if downloaded_paths and current_hash:
+            try:
+                hash_marker.write_text(current_hash, encoding="utf-8")
+            except Exception:
+                pass
+
         return downloaded_paths
 
-    def scrape_and_process_page(self, page: int = 1, limit: int = 5) -> List[Dict[str, Any]]:
+    def scrape_and_process_page(
+        self,
+        page: int = 1,
+        limit: int = 5,
+        known_bina_ids: Optional[Union[Iterable[str], Dict[str, Dict[str, Any]]]] = None,
+        repo: Optional[Any] = None,
+        check_existing_for_changes: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Scrapes a page, filters direct owners (if configured), fetches phones and photos.
-        Returns processed listing dictionaries.
+        Pre-scrape skips known unchanged bina_ids so they do NOT consume `limit`
+        (eliminating page-1 starvation).
+
+        Args:
+            page: Search results page number (1-indexed).
+            limit: Maximum number of new (or changed) listings to return.
+            known_bina_ids: Optional set/list of already-known bina_ids to skip pre-scrape,
+                or dict mapping bina_id -> existing listing row.
+            repo: Optional SupabaseRepo instance. When provided and known_bina_ids is None,
+                performs 1 batch lookup (`get_listings_by_bina_ids`) and touches `last_seen_at`
+                for unchanged known listings.
+            check_existing_for_changes: When True and existing listing dicts are available,
+                fetches detail pages for known IDs to detect price/kupça/photo changes;
+                unchanged listings still do not consume `limit`.
         """
         item_ids = self.fetch_item_ids_from_page(page)
-        processed_listings = []
+        if not item_ids:
+            return []
+
+        existing_map: Dict[str, Dict[str, Any]] = {}
+        known_id_set = set()
+
+        if isinstance(known_bina_ids, dict):
+            existing_map = {str(k): v for k, v in known_bina_ids.items()}
+            known_id_set = set(existing_map.keys())
+        elif known_bina_ids is not None:
+            known_id_set = {str(bid).strip() for bid in known_bina_ids if str(bid).strip()}
+        elif repo is not None and hasattr(repo, "get_listings_by_bina_ids"):
+            existing_map = repo.get_listings_by_bina_ids(item_ids) or {}
+            known_id_set = set(existing_map.keys())
+
+        processed_listings: List[Dict[str, Any]] = []
+        unchanged_seen_ids: List[str] = []
 
         for item_id in item_ids:
             if len(processed_listings) >= limit:
                 break
 
-            details = self.fetch_item_details(item_id)
+            item_id_str = str(item_id).strip()
+
+            # Pre-scrape skip for known IDs when not scanning existing items for changes
+            if item_id_str in known_id_set and not (check_existing_for_changes and item_id_str in existing_map):
+                logger.info(f"Pre-scrape skipping known bina_id {item_id_str} (does not consume limit).")
+                unchanged_seen_ids.append(item_id_str)
+                continue
+
+            details = self.fetch_item_details(item_id_str)
             if not details:
                 continue
 
-            # Check owner filter
+            existing_row = existing_map.get(item_id_str)
+            if existing_row is not None and check_existing_for_changes:
+                from src.dedup.change_detector import detect_listing_changes
+
+                changes = detect_listing_changes(existing_row, details)
+                if not changes["has_changes"]:
+                    logger.info(
+                        f"Known bina_id {item_id_str} unchanged (AZN={changes['new_price_azn']}); touching last_seen_at."
+                    )
+                    unchanged_seen_ids.append(item_id_str)
+                    continue
+
+                # Listing changed (price drop, kupça, or photos): refresh photos if hash changed
+                details["_existing"] = existing_row
+                details["_changes"] = changes
+                if details.get("photo_urls"):
+                    downloaded = self.download_full_hd_photos(
+                        item_id_str,
+                        details["photo_urls"],
+                        photo_urls_hash=details.get("photo_urls_hash"),
+                        force_refresh=bool(changes.get("photos_changed")),
+                    )
+                    details["downloaded_photos"] = downloaded
+                    if downloaded:
+                        details["status"] = "PHOTOS_READY"
+                processed_listings.append(details)
+                time.sleep(0.5)
+                continue
+
+            # Check owner filter for new listings
             if self.owner_only and not details.get("is_owner"):
-                logger.info(f"Skipping ID {item_id}: Not direct owner (type: {details.get('contact_type_name')})")
+                logger.info(f"Skipping ID {item_id_str}: Not direct owner (type: {details.get('contact_type_name')})")
                 continue
 
             # Fetch phone
-            phone = self.fetch_contact_phone(item_id)
+            phone = self.fetch_contact_phone(item_id_str)
             if phone:
                 details["owner_phone"] = phone
 
             # Download photos
             if details.get("photo_urls"):
-                downloaded = self.download_full_hd_photos(item_id, details["photo_urls"])
+                downloaded = self.download_full_hd_photos(
+                    item_id_str,
+                    details["photo_urls"],
+                    photo_urls_hash=details.get("photo_urls_hash"),
+                )
                 details["downloaded_photos"] = downloaded
                 if downloaded:
                     details["status"] = "PHOTOS_READY"
 
             processed_listings.append(details)
             time.sleep(0.5)
+
+        if unchanged_seen_ids and repo is not None and hasattr(repo, "touch_listings_last_seen"):
+            repo.touch_listings_last_seen(unchanged_seen_ids)
 
         return processed_listings

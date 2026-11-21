@@ -1,6 +1,10 @@
 """
-Notion CRM Dispatcher module for Baku Estate AI.
-Coordinates deal synchronization with Notion 'Baku Estate Deals' CRM database & Kanban boards.
+[DEPRECATED] Notion CRM Dispatcher module for Baku Estate AI.
+Active bidirectional Notion sync has been deprecated in favor of Supabase Postgres
+as the single source of truth + the 24/7 Next.js Web CRM.
+
+Disabled by default unless `NOTION_LEGACY_SYNC=true` is explicitly set in the environment
+(or `enabled=True` is explicitly passed to NotionCRMDispatcher).
 """
 
 import sys
@@ -72,22 +76,35 @@ def normalize_location_for_notion(raw_loc: str) -> str:
     return "Digər"
 
 
+def is_notion_legacy_sync_enabled() -> bool:
+    """Returns True only when legacy Notion sync is explicitly opted in via NOTION_LEGACY_SYNC=true."""
+    return os.getenv("NOTION_LEGACY_SYNC", "false").strip().lower() in ("1", "true", "yes")
+
+
 class NotionCRMDispatcher:
     """
-    Manages lead and deal synchronization to the Notion CRM database.
+    [DEPRECATED] Manages legacy lead and deal synchronization to the Notion CRM database.
+    Disabled by default to prevent split-brain with Supabase Postgres + Web CRM.
+    Set NOTION_LEGACY_SYNC=true to re-enable legacy Notion sync.
     """
+
+    DEPRECATED = True
 
     def __init__(
         self,
         database_id: str = NOTION_DATABASE_ID,
         data_source_id: str = NOTION_DATA_SOURCE_ID,
         api_key: str = NOTION_API_KEY,
-        enabled: bool = NOTION_ENABLED
+        enabled: Optional[bool] = None
     ):
         self.database_id = database_id
         self.data_source_id = data_source_id
         self.api_key = api_key
-        self.enabled = enabled
+        self.enabled = is_notion_legacy_sync_enabled() if enabled is None else bool(enabled)
+        if self.enabled:
+            logger.warning(
+                "NotionCRMDispatcher is DEPRECATED; Supabase Postgres + Web CRM is now the single source of truth."
+            )
 
     def build_deal_page_payload(
         self,
@@ -154,9 +171,14 @@ class NotionCRMDispatcher:
         status: str = "Video Ready"
     ) -> Dict[str, Any]:
         """
-        Syncs deal to Notion. If NOTION_API_KEY is present, sends via Notion REST API.
+        [DEPRECATED] Syncs deal to Notion only when explicitly enabled.
+        If NOTION_API_KEY is present, sends via Notion REST API.
         Otherwise logs structured payload for MCP pipeline sync.
         """
+        if not self.enabled:
+            logger.info("Notion CRM sync is deprecated and disabled (set NOTION_LEGACY_SYNC=true to opt in).")
+            return {"success": False, "reason": "disabled_deprecated"}
+
         payload = self.build_deal_page_payload(
             listing=listing,
             video_cdn_url=video_cdn_url,

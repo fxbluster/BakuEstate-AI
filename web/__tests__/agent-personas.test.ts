@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   type AgentPersonaId,
+  type LegacyPersonaId,
   AGENT_PERSONAS,
   getAgentPersona,
   isValidAgentPersonaId,
+  resolvePersonaId,
+  PERSONA_ALIASES,
+  OBJECTION_DOMAINS,
+  OBJECTION_DOMAIN_LABELS,
+  BAKU_REAL_ESTATE_LEXICON,
   CORE_AGENCY_INVARIANTS,
   FORBIDDEN_PHRASES,
   ANTI_ROBOTIC_FORBIDDEN_PHRASES,
@@ -12,11 +18,12 @@ import {
   buildAgentSystemInstruction,
 } from "../lib/agent-personas";
 
-describe("Agent Personas & Core Invariants (Executive Council)", () => {
-  const expectedPersonaIds: AgentPersonaId[] = ["mudir", "farabi", "usta", "teymur"];
+describe("Agent Personas & Core Invariants (Tri-Persona Council)", () => {
+  const triPersonaIds: AgentPersonaId[] = ["mudir", "analitika", "musteri_psixologiyasi"];
+  const legacyAliases: LegacyPersonaId[] = ["farabi", "teymur", "usta"];
 
-  it("asserts all 4 personas exist and have non-empty system prompts", () => {
-    for (const personaId of expectedPersonaIds) {
+  it("asserts all 3 Tri-Persona council members exist and have non-empty system prompts", () => {
+    for (const personaId of triPersonaIds) {
       const persona = AGENT_PERSONAS[personaId];
       expect(persona, `Persona ${personaId} must be defined`).toBeDefined();
       expect(persona.id).toBe(personaId);
@@ -29,11 +36,47 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
       expect(persona.quickPills.length).toBeGreaterThan(0);
       expect(persona.memoryDomains).toBeInstanceOf(Array);
       expect(persona.memoryDomains.length).toBeGreaterThan(0);
+      expect(persona.supportedActions).toBeInstanceOf(Array);
+      expect(persona.supportedActions).toContain("OPEN_STAGE_CARD");
     }
+  });
+
+  it("verifies backward-compatibility aliases correctly map to modern tri-personas", () => {
+    expect(PERSONA_ALIASES.farabi).toBe("musteri_psixologiyasi");
+    expect(PERSONA_ALIASES.teymur).toBe("analitika");
+    expect(PERSONA_ALIASES.usta).toBe("mudir");
+
+    expect(resolvePersonaId("farabi")).toBe("musteri_psixologiyasi");
+    expect(resolvePersonaId("teymur")).toBe("analitika");
+    expect(resolvePersonaId("usta")).toBe("mudir");
+
+    expect(getAgentPersona("farabi").id).toBe("musteri_psixologiyasi");
+    expect(getAgentPersona("teymur").id).toBe("analitika");
+    expect(getAgentPersona("usta").id).toBe("mudir");
+  });
+
+  it("verifies all 5 standardized objection domains are configured", () => {
+    expect(OBJECTION_DOMAINS.PRICE_PER_M2).toBe("OBJECTION_PRICE_PER_M2");
+    expect(OBJECTION_DOMAINS.KUPCA_TRUST).toBe("OBJECTION_KUPCA_TRUST");
+    expect(OBJECTION_DOMAINS.LOCATION).toBe("OBJECTION_LOCATION");
+    expect(OBJECTION_DOMAINS.COMMISSION).toBe("OBJECTION_COMMISSION");
+    expect(OBJECTION_DOMAINS.TIMING_GHOST).toBe("OBJECTION_TIMING_GHOST");
+
+    expect(Object.keys(OBJECTION_DOMAINS)).toHaveLength(5);
+    expect(Object.keys(OBJECTION_DOMAIN_LABELS)).toHaveLength(5);
+  });
+
+  it("verifies Baku Real Estate Lexicon constants", () => {
+    expect(BAKU_REAL_ESTATE_LEXICON.KUPCA_CONFIRMATION).toContain("Kupçası əldədir");
+    expect(BAKU_REAL_ESTATE_LEXICON.MORTGAGE_ELIGIBLE).toContain("İpotekaya");
+    expect(BAKU_REAL_ESTATE_LEXICON.STARTING_PRICE).toContain("Start qiymətdir");
+    expect(BAKU_REAL_ESTATE_LEXICON.NOTARY_DEPOSIT_CHECK).toContain("Beh verməzdən əvvəl");
   });
 
   it("asserts forbidden phrases list contains critical anti-robotic phrases", () => {
     expect(FORBIDDEN_PHRASES).toContain("Hörmətli istifadəçi");
+    expect(FORBIDDEN_PHRASES).toContain("Hörmətli müştəri");
+    expect(FORBIDDEN_PHRASES).toContain("Sizə necə kömək edə bilərəm");
     expect(FORBIDDEN_PHRASES).toContain("Bağışlayın");
     expect(FORBIDDEN_PHRASES).toContain("I apologize");
     expect(ANTI_ROBOTIC_FORBIDDEN_PHRASES).toEqual(FORBIDDEN_PHRASES);
@@ -59,18 +102,15 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
     expect(AGENT_PERSONAS.mudir.defaultModel).toBe("gemini-3.8-flash");
     expect(AGENT_PERSONAS.mudir.thinkingLevel).toBe("low");
 
-    expect(AGENT_PERSONAS.farabi.defaultModel).toBe("gemini-3.8-flash");
-    expect(AGENT_PERSONAS.farabi.thinkingLevel).toBe("low");
+    expect(AGENT_PERSONAS.analitika.defaultModel).toBe("gemini-3.8-flash");
+    expect(AGENT_PERSONAS.analitika.thinkingLevel).toBe("low");
 
-    expect(AGENT_PERSONAS.usta.defaultModel).toBe("gemini-3.8-flash");
-    expect(AGENT_PERSONAS.usta.thinkingLevel).toBe("low");
-
-    expect(AGENT_PERSONAS.teymur.defaultModel).toBe("gemini-3.1-flash-lite");
-    expect(AGENT_PERSONAS.teymur.thinkingLevel).toBeUndefined();
+    expect(AGENT_PERSONAS.musteri_psixologiyasi.defaultModel).toBe("gemini-3.8-flash");
+    expect(AGENT_PERSONAS.musteri_psixologiyasi.thinkingLevel).toBe("low");
   });
 
   it("guarantees no persona systemPrompt contains any forbidden robotic phrase", () => {
-    for (const personaId of expectedPersonaIds) {
+    for (const personaId of triPersonaIds) {
       const persona = AGENT_PERSONAS[personaId];
       const violations = checkForbiddenPhrases(persona.systemPrompt);
       expect(
@@ -82,6 +122,9 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
 
   it("tests helper functions getAgentPersona and isValidAgentPersonaId", () => {
     expect(isValidAgentPersonaId("mudir")).toBe(true);
+    expect(isValidAgentPersonaId("analitika")).toBe(true);
+    expect(isValidAgentPersonaId("musteri_psixologiyasi")).toBe(true);
+    // Legacy IDs still pass validation
     expect(isValidAgentPersonaId("farabi")).toBe(true);
     expect(isValidAgentPersonaId("usta")).toBe(true);
     expect(isValidAgentPersonaId("teymur")).toBe(true);
@@ -92,13 +135,14 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
     expect(mudir.id).toBe("mudir");
 
     // Fallback to mudir if unknown persona requested
-    // @ts-expect-error Testing invalid fallback
     const fallback = getAgentPersona("nonexistent");
     expect(fallback.id).toBe("mudir");
   });
 
   it("tests checkForbiddenPhrases and hasForbiddenPhrase detection", () => {
     expect(hasForbiddenPhrase("Hörmətli istifadəçi, necə kömək edim?")).toBe(true);
+    expect(hasForbiddenPhrase("Hörmətli müştəri, sizin üçün təklif.")).toBe(true);
+    expect(hasForbiddenPhrase("Sizə necə kömək edə bilərəm")).toBe(true);
     expect(hasForbiddenPhrase("Bağışlayın, mən başa düşmədim.")).toBe(true);
     expect(hasForbiddenPhrase("I apologize for the confusion.")).toBe(true);
     expect(hasForbiddenPhrase("Mənzilin Kupçası var, çıxarış tam qaydasındadır.")).toBe(false);
@@ -109,7 +153,7 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
   });
 
   it("builds assembled agent system prompt with invariants and episodic insights", () => {
-    const fullPrompt = buildAgentSystemInstruction("farabi", {
+    const fullPrompt = buildAgentSystemInstruction("musteri_psixologiyasi", {
       learnedInsights: [
         "Xətai rayonunda alıcılar 2000 AZN-dən artıq beh verməyə tərəddüd edirlər.",
         "Kupçasız evlərdə Beh müqaviləsi notarial qaydada deyil, daxili şərtlə bağlanır.",
@@ -117,7 +161,7 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
       operatorContext: "Lead ID: lead-442 | Listing: 5616503",
     });
 
-    expect(fullPrompt).toContain("Sən Farabi");
+    expect(fullPrompt).toContain("Sən BakuEstate-AI agentliyinin Bakı Realizmi üzrə CRM");
     expect(fullPrompt).toContain("DƏYİŞMƏZ AGENTLİK QANUNLARI (CORE INVARIANTS)");
     expect(fullPrompt).toContain(CORE_AGENCY_INVARIANTS.KUPCA_MANDATE);
     expect(fullPrompt).toContain(CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE);
@@ -126,5 +170,6 @@ describe("Agent Personas & Core Invariants (Executive Council)", () => {
     expect(fullPrompt).toContain("Xətai rayonunda alıcılar 2000 AZN-dən artıq beh verməyə tərəddüd edirlər");
     expect(fullPrompt).toContain("CARİ ƏMƏLİYYAT KONTEKSTİ");
     expect(fullPrompt).toContain("Lead ID: lead-442");
+    expect(fullPrompt).toContain("stage:VIDEO_INSPECTION");
   });
 });

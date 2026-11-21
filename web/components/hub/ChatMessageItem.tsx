@@ -1,11 +1,12 @@
 "use client";
 
 import React from "react";
-import { User, ArrowRight, CornerDownRight } from "lucide-react";
+import { User, ArrowRight, CornerDownRight, Sparkles, ExternalLink } from "lucide-react";
 import type { AgentChatMessage } from "@/lib/ai-client";
-import type { AgentPersonaId } from "@/lib/agent-personas";
+import type { AgentPersonaId, SupportedPersonaId } from "@/lib/agent-personas";
 import { AGENT_PERSONAS } from "@/lib/agent-personas";
 import { ActionCardView } from "./ActionCardView";
+import { useCopilot, type StageCardType } from "@/lib/copilot-context";
 
 interface ChatMessageItemProps {
   message: AgentChatMessage;
@@ -14,7 +15,7 @@ interface ChatMessageItemProps {
 }
 
 const AGENT_THEMES: Record<
-  AgentPersonaId,
+  SupportedPersonaId,
   {
     border: string;
     bg: string;
@@ -33,6 +34,24 @@ const AGENT_THEMES: Record<
     badgeBg: "bg-gold-500/15",
     badgeBorder: "border-gold-500/30",
     icon: "👔",
+  },
+  analitika: {
+    border: "border-purple-500/30",
+    bg: "bg-obsidian-950/90",
+    avatarBg: "bg-gradient-to-br from-purple-400 to-indigo-600 text-obsidian-950",
+    badgeText: "text-purple-300",
+    badgeBg: "bg-purple-500/15",
+    badgeBorder: "border-purple-500/30",
+    icon: "📊",
+  },
+  musteri_psixologiyasi: {
+    border: "border-emerald-500/30",
+    bg: "bg-obsidian-950/90",
+    avatarBg: "bg-gradient-to-br from-emerald-400 to-teal-600 text-obsidian-950",
+    badgeText: "text-emerald-300",
+    badgeBg: "bg-emerald-500/15",
+    badgeBorder: "border-emerald-500/30",
+    icon: "🛡️",
   },
   farabi: {
     border: "border-emerald-500/30",
@@ -64,9 +83,105 @@ const AGENT_THEMES: Record<
 };
 
 /**
- * Basic markdown renderer supporting paragraphs, bolding, bullet points and numbered lists.
+ * Formats an inline text segment, parsing [label](url) links (including stage: protocol)
+ * and **bold** formatting.
  */
-function MarkdownContent({ content }: { content: string }) {
+function formatInlineWithLinks(
+  text: string,
+  onOpenStage?: (cardType: string, targetId: string, label: string) => void
+): React.ReactNode {
+  // Regex splitting by markdown link: [text](url)
+  const linkRegex = /(\[[^\]]+\]\([^)]+\))/g;
+  const parts = text.split(linkRegex);
+
+  return parts.map((part, index) => {
+    // Check if this part matches [text](url)
+    const match = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (match) {
+      const [, label, url] = match;
+
+      // Check for stage: protocol
+      if (url.startsWith("stage:")) {
+        const rawPayload = url.replace(/^stage:/, "");
+        const colonIdx = rawPayload.indexOf(":");
+        let cardType = rawPayload;
+        let targetId = "";
+        if (colonIdx !== -1) {
+          cardType = rawPayload.slice(0, colonIdx);
+          targetId = rawPayload.slice(colonIdx + 1);
+        }
+
+        const isVideo = cardType.toUpperCase().includes("VIDEO");
+        const isAnalytics = cardType.toUpperCase().includes("ANALYTICS");
+
+        return (
+          <button
+            key={`stage-${index}`}
+            type="button"
+            onClick={() => onOpenStage?.(cardType, targetId, label)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-xs font-semibold shadow-sm transition my-0.5 cursor-pointer hover:scale-[1.02] active:scale-[0.98] ${
+              isVideo
+                ? "border-gold-500/40 bg-gold-500/15 text-gold-300 hover:bg-gold-500/25 hover:border-gold-400"
+                : isAnalytics
+                  ? "border-purple-500/40 bg-purple-500/15 text-purple-300 hover:bg-purple-500/25 hover:border-purple-400"
+                  : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 hover:border-emerald-400"
+            }`}
+            title={`Səhnədə aç (${cardType}): ${targetId}`}
+          >
+            <Sparkles className="h-3 w-3 shrink-0 opacity-80" />
+            <span>{label}</span>
+          </button>
+        );
+      }
+
+      // Normal external web link
+      return (
+        <a
+          key={`link-${index}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-gold-400 hover:underline inline-flex items-center gap-0.5"
+        >
+          <span>{label}</span>
+          <ExternalLink className="h-3 w-3 inline opacity-70" />
+        </a>
+      );
+    }
+
+    // Otherwise format bold segments
+    return <span key={`text-${index}`}>{formatBold(part)}</span>;
+  });
+}
+
+/**
+ * Handles bolding **text** within text segments.
+ */
+function formatBold(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={i} className="font-bold text-slate-100">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return part;
+  });
+}
+
+/**
+ * Markdown renderer supporting paragraphs, bolding, bullet points, numbered lists,
+ * and stage: protocol action pills.
+ */
+function MarkdownContent({
+  content,
+  onOpenStage,
+}: {
+  content: string;
+  onOpenStage?: (cardType: string, targetId: string, label: string) => void;
+}) {
   if (!content) return null;
 
   const lines = content.split("\n");
@@ -87,7 +202,7 @@ function MarkdownContent({ content }: { content: string }) {
       elements.push(
         <div key={`bullet-${lineIdx}`} className="flex items-start gap-2 my-0.5 pl-1">
           <span className="text-gold-400 font-bold select-none">•</span>
-          <span className="flex-1">{formatInline(rawText)}</span>
+          <span className="flex-1">{formatInlineWithLinks(rawText, onOpenStage)}</span>
         </div>
       );
       return;
@@ -101,7 +216,7 @@ function MarkdownContent({ content }: { content: string }) {
           <span className="font-mono text-gold-400 font-semibold select-none">
             {numMatch[1]}.
           </span>
-          <span className="flex-1">{formatInline(numMatch[2])}</span>
+          <span className="flex-1">{formatInlineWithLinks(numMatch[2], onOpenStage)}</span>
         </div>
       );
       return;
@@ -114,7 +229,7 @@ function MarkdownContent({ content }: { content: string }) {
           key={`quote-${lineIdx}`}
           className="my-1.5 border-l-2 border-gold-400/60 bg-gold-500/5 px-2.5 py-1 text-xs italic text-slate-300 rounded-r"
         >
-          {formatInline(trimmed.replace(/^>\s*/, ""))}
+          {formatInlineWithLinks(trimmed.replace(/^>\s*/, ""), onOpenStage)}
         </blockquote>
       );
       return;
@@ -123,7 +238,7 @@ function MarkdownContent({ content }: { content: string }) {
     // Normal paragraph
     elements.push(
       <p key={`p-${lineIdx}`} className="my-0.5 leading-relaxed">
-        {formatInline(trimmed)}
+        {formatInlineWithLinks(trimmed, onOpenStage)}
       </p>
     );
   });
@@ -131,28 +246,32 @@ function MarkdownContent({ content }: { content: string }) {
   return <div className="space-y-0.5 text-xs text-slate-200">{elements}</div>;
 }
 
-/**
- * Handles bolding **text** within text lines.
- */
-function formatInline(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*.*?\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return (
-        <strong key={i} className="font-bold text-slate-100">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    return part;
-  });
-}
-
 export function ChatMessageItem({
   message,
   onActionComplete,
   onSelectAgent,
 }: ChatMessageItemProps) {
+  const { openStageCard } = useCopilot();
+
+  const handleOpenStage = (rawType: string, targetId: string, _label?: string) => {
+    void _label;
+    const cardTypeUpper = rawType.toUpperCase();
+    const cardType: StageCardType = cardTypeUpper.includes("ANALYTICS")
+      ? "ANALYTICS_TELEMETRY"
+      : cardTypeUpper.includes("CRM") || cardTypeUpper.includes("NEGOTIATION")
+        ? "CRM_NEGOTIATION"
+        : "VIDEO_INSPECTION";
+
+    openStageCard({
+      cardType,
+      targetEntityId: targetId,
+      listingId: cardType === "VIDEO_INSPECTION" ? targetId : undefined,
+      binaId: cardType === "VIDEO_INSPECTION" ? targetId : undefined,
+      publicationId: cardType === "ANALYTICS_TELEMETRY" ? targetId : undefined,
+      leadId: cardType === "CRM_NEGOTIATION" ? targetId : undefined,
+    });
+  };
+
   // Normalize user vs assistant
   const isUser =
     message.sender_type === "USER" ||
@@ -186,18 +305,22 @@ export function ChatMessageItem({
 
   // Determine Agent Identity
   const rawMsg = message as { agent_id?: AgentPersonaId };
+  const senderLower = message.sender_name?.toLowerCase() || "";
   const agentId: AgentPersonaId =
     rawMsg.agent_id ||
-    (message.sender_name?.toLowerCase().includes("farabi")
-      ? "farabi"
-      : message.sender_name?.toLowerCase().includes("usta")
-        ? "usta"
-        : message.sender_name?.toLowerCase().includes("teymur")
-          ? "teymur"
-          : "mudir");
+    (senderLower.includes("analitika") || senderLower.includes("teymur")
+      ? ("analitika" as AgentPersonaId)
+      : senderLower.includes("musteri") || senderLower.includes("psixolog") || senderLower.includes("farabi")
+        ? ("musteri_psixologiyasi" as AgentPersonaId)
+        : senderLower.includes("usta")
+          ? ("mudir" as AgentPersonaId)
+          : ("mudir" as AgentPersonaId));
 
   const theme = AGENT_THEMES[agentId] || AGENT_THEMES.mudir;
-  const personaConfig = AGENT_PERSONAS[agentId];
+  const personaConfig = (AGENT_PERSONAS as Record<string, unknown>)[agentId] as
+    | (typeof AGENT_PERSONAS)[keyof typeof AGENT_PERSONAS]
+    | undefined;
+
   const agentTitle = personaConfig?.title || message.sender_name || "Müdir";
   const roleSubtitle = personaConfig?.roleSubtitle || "";
 
@@ -255,14 +378,44 @@ export function ChatMessageItem({
         )}
 
         {/* Message Body */}
-        <MarkdownContent content={message.content} />
+        <MarkdownContent content={message.content} onOpenStage={handleOpenStage} />
 
-        {/* Executable Action Card */}
+        {/* Executable Action Card or OPEN_STAGE_CARD Pill */}
         {message.action_payload && (
-          <ActionCardView
-            card={message.action_payload}
-            onActionComplete={onActionComplete}
-          />
+          (message.action_payload as { type?: string }).type === "OPEN_STAGE_CARD" ? (
+            <div className="mt-3 pt-2.5 border-t border-slate-800/80">
+              {(() => {
+                const payload = message.action_payload as Record<string, unknown>;
+                const rawType = String(payload.card_type || payload.cardType || "VIDEO_INSPECTION");
+                const targetId = String(
+                  payload.target_entity_id ||
+                  payload.targetEntityId ||
+                  payload.listing_id ||
+                  payload.listingId ||
+                  payload.lead_id ||
+                  payload.leadId ||
+                  ""
+                );
+                const title = String(payload.title || payload.label || "🎬 Səhnədə Aç");
+                return (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenStage(rawType, targetId, title)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gold-500/40 bg-gradient-to-r from-gold-500/20 via-gold-600/10 to-obsidian-900 px-3.5 py-2 text-xs font-bold text-gold-300 shadow-md hover:border-gold-400 hover:bg-gold-500/30 transition cursor-pointer active:scale-95"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-gold-400" />
+                    <span>{title}</span>
+                    <ArrowRight className="h-3.5 w-3.5 opacity-70" />
+                  </button>
+                );
+              })()}
+            </div>
+          ) : (
+            <ActionCardView
+              card={message.action_payload}
+              onActionComplete={onActionComplete}
+            />
+          )
         )}
       </div>
     </div>

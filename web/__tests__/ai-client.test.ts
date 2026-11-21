@@ -200,4 +200,56 @@ describe("AI Client & Wire Contracts", () => {
     const success = await resetAgentConversation("mudir");
     expect(success).toBe(true);
   });
+
+  it("validates OPEN_STAGE_CARD in ActionCardPayload discriminated union", () => {
+    const actionCard = {
+      type: "OPEN_STAGE_CARD" as const,
+      cardType: "VIDEO_INSPECTION" as const,
+      targetEntityId: "5616503",
+      payload: { binaId: "5616503" },
+    };
+    expect(actionCard.type).toBe("OPEN_STAGE_CARD");
+    expect(actionCard.cardType).toBe("VIDEO_INSPECTION");
+    expect(actionCard.targetEntityId).toBe("5616503");
+  });
+
+  it("calls dispatchTelegramVideo and returns TelegramDispatchResponse", async () => {
+    const mockRes = {
+      success: true,
+      dispatch_mode: "DIRECT_URL" as const,
+      telegram_message_id: 8492,
+      target_chat_id: "6238843776",
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockRes,
+    });
+
+    const { dispatchTelegramVideo } = await import("../lib/ai-client");
+    const res = await dispatchTelegramVideo("listing-uuid-1", "rv-uuid-1", "Özəl təklif");
+    expect(res.success).toBe(true);
+    expect(res.dispatch_mode).toBe("DIRECT_URL");
+    expect(res.telegram_message_id).toBe(8492);
+    expect(res.target_chat_id).toBe("6238843776");
+  });
+
+  it("calls queueRenderInitial and returns QueueRenderResponse", async () => {
+    const mockRes = {
+      success: true,
+      job_id: "job-render-123",
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockRes,
+    });
+
+    const { queueRenderInitial } = await import("../lib/ai-client");
+    const res = await queueRenderInitial("listing-uuid-2", "5616503", "@bakuestate.premium", "Arif");
+    expect(res.success).toBe(true);
+    expect(res.job_id).toBe("job-render-123");
+  });
 });

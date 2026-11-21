@@ -5,9 +5,9 @@ Generates modern 2-3 word rhythmic subtitle bursts with:
 - Dual-tone luxury color palette: Chalk White base + Champagne Gold & Mint pops
 - Architectural DIN / Bahnschrift font with soft Gaussian drop shadow
 - Zero cartoon black strokes (Outline=1.8, Shadow=2.2 with alpha transparency)
-- Mobile safe-zone positioning (MarginV=580)
-- CTA Phase Safe-Shift: automatically shifts subtitles upward to MarginV=700 (y=1220)
-  when the CTA card appears in the final seconds, preventing visual overlap.
+- Mobile safe-zone positioning (MarginV=580, baseline y=1340)
+- CTA Phase Safe-Shift: automatically shifts subtitles upward to MarginV=660 (y=1260)
+  when the CTA card appears in the final seconds, staying within safe-zone baseline y in [1250, 1420] px.
 """
 
 import os
@@ -19,21 +19,26 @@ from typing import List, Dict, Any, Optional, Tuple
 logger = logging.getLogger("kinetic_subtitles")
 
 # Keywords for selective color highlighting (in ASS BGR format &HAABBGGRR)
-# Champagne Gold: #E6C080 -> &H0080C0E6&
-# Mint Emerald:   #34D399 -> &H0099D334&
-# Pure Pearl:     #FFFFFF -> &H00FFFFFF&
+# Vibrant Punchy Gold-Yellow: #FFD43B -> &H003BD4FF&
+# Bright Mint Emerald:        #34D399 -> &H0099D334&
+# Pure Crisp White:           #FFFFFF -> &H00FFFFFF&
 
 COLOR_BASE = "&H00FFFFFF&"
-COLOR_GOLD = "&H0080C0E6&"
+COLOR_GOLD = "&H003BD4FF&"
 COLOR_MINT = "&H0099D334&"
 
 GOLD_STEMS = (
     "nərimanov", "nerimanov", "yasamal", "xətai", "xetai", "səbail", "sebail",
     "gənclik", "genclik", "sahil", "ağ şəhər", "ag seher", "elmlər", "elmler",
     "28 may", "nizami", "badamdar", "mərdəkan", "merdekan", "bilgəh", "bilgeh",
-    "qiymət", "qiymet", "manat", "azn", "endirim", "təklif", "teklif", "münasib", "munasib",
-    "möhtəşəm", "mohtesem", "lüks", "luks", "premium", "dizayn", "panoramik",
-    "dəniz", "deniz", "mənzərə", "menzere", "super", "təmirli", "temirli"
+    "xalqlar", "dostlu", "neftçilər", "neftciler", "qara", "qarayev", "həzi",
+    "əhmədli", "ehmedli", "inşaatçı", "insaatci", "memar", "əcəmi", "ecemi",
+    "metro", "qiymət", "qiymet", "manat", "azn", "endirim", "təklif", "teklif",
+    "münasib", "munasib", "fürsət", "furset", "möhtəşəm", "mohtesem", "lüks",
+    "luks", "premium", "dizayn", "panoramik", "dəniz", "deniz", "mənzərə",
+    "menzere", "super", "təmir", "temir", "əşyalı", "esyali", "otaq", "daş",
+    "das", "eksperimental", "rahat", "geniş", "genis", "villa", "hovuz",
+    "obyekt", "gəlir", "gelir", "whatsapp", "əlaqə", "elaqe"
 )
 
 MINT_STEMS = (
@@ -166,17 +171,18 @@ def convert_srt_to_kinetic_ass(
     srt_path: Path,
     ass_path: Path,
     margin_v: int = 580,
-    margin_v_cta: int = 700,
+    margin_v_cta: int = 660,
     cta_start_time: Optional[float] = None,
-    font_size: int = 50
+    font_size: int = 64
 ) -> Path:
     """
     Converts an SRT file into modern kinetic ASS subtitles with:
     - 2 to 3-word rhythmic chunks
     - Micro-bounce spring pop animation: {\\t(0,90,\\fscx108\\fscy108)\\t(90,180,\\fscx100\\fscy100)}
-    - Champagne gold & mint emerald keyword highlights
-    - Clean safe-zone placement (MarginV=580 default)
-    - If cta_start_time is given, subtitles during CTA shift upward to margin_v_cta (700)
+    - Punchy vibrant gold-yellow & mint emerald keyword highlights
+    - High-visibility 64pt typography with clean outline & drop shadow
+    - Clean safe-zone placement (MarginV=580 default, baseline y=1340 in [1250, 1420] px)
+    - If cta_start_time is given, subtitles during CTA shift upward to margin_v_cta (660, baseline y=1260 in [1250, 1420] px)
     """
     font_name = get_font_name()
 
@@ -189,8 +195,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v},1
-Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v_cta},1
+Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1.2,0,1,2.8,3.4,2,60,60,{margin_v},1
+Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1.2,0,1,2.8,3.4,2,60,60,{margin_v_cta},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -239,9 +245,9 @@ def build_kinetic_ass_from_words(
     words_with_timestamps: List[Dict[str, Any]],
     ass_path: Path,
     margin_v: int = 580,
-    margin_v_cta: int = 700,
+    margin_v_cta: int = 660,
     cta_start_time: Optional[float] = None,
-    font_size: int = 50
+    font_size: int = 64
 ) -> Path:
     """
     Directly builds 2-3 word kinetic bursts from millisecond-accurate word timestamps
@@ -258,8 +264,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v},1
-Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H60000000,-1,0,0,0,100,100,1.2,0,1,1.8,2.4,2,80,80,{margin_v_cta},1
+Style: KineticSub,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1.2,0,1,2.8,3.4,2,60,60,{margin_v},1
+Style: KineticSubCTA,{font_name},{font_size},{COLOR_BASE},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1.2,0,1,2.8,3.4,2,60,60,{margin_v_cta},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

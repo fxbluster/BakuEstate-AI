@@ -8,6 +8,7 @@ import {
   type CopilotActionPayload,
   type CopilotApiResponse,
 } from "../lib/ai-client";
+import type { SupportedPersonaId } from "../lib/agent-personas";
 import { buildWhatsAppUrl } from "../lib/format";
 
 describe("Agent Hub Routing & Context Management", () => {
@@ -183,10 +184,10 @@ describe("Agent Hub Routing & Context Management", () => {
 
     it("verifies model downgrade to fast tier when monthly spend reaches 80% ($8.00)", () => {
       function resolveTargetModel(
-        agentId: AgentPersonaId,
+        agentId: SupportedPersonaId,
         monthlySpend: number
       ): "gemini-3.8-flash" | "gemini-3.1-flash-lite" {
-        if (agentId === "teymur" || monthlySpend >= 8.0) {
+        if (agentId === "teymur" || agentId === "analitika" || monthlySpend >= 8.0) {
           return "gemini-3.1-flash-lite";
         }
         return "gemini-3.8-flash";
@@ -240,7 +241,7 @@ describe("Agent Hub Routing & Context Management", () => {
         phone_number: phone,
         draft_text: draft,
         listing_code: "kod:5616503",
-        wa_link: waLink,
+        wa_link: waLink || "",
       };
 
       const serialized = JSON.stringify(card);
@@ -276,7 +277,7 @@ describe("Agent Hub Routing & Context Management", () => {
       }
     });
 
-    it("dispatches discriminated union safely across all 3 action types in exhaustive switch", () => {
+    it("dispatches discriminated union safely across all action types in exhaustive switch", () => {
       const cards: ActionCardPayload[] = [
         {
           type: "UPDATE_LEAD_STAGE",
@@ -298,6 +299,11 @@ describe("Agent Hub Routing & Context Management", () => {
           insight_text: "İlk 3 saniyədə qiymət verildikdə baxış retention 40% artır.",
           confidence_score: 0.88,
         },
+        {
+          type: "OPEN_STAGE_CARD",
+          cardType: "VIDEO_INSPECTION",
+          targetEntityId: "5616503",
+        },
       ];
 
       const handledTypes: string[] = [];
@@ -316,6 +322,10 @@ describe("Agent Hub Routing & Context Management", () => {
             handledTypes.push(card.type);
             expect(card.agent_id).toBe("teymur");
             break;
+          case "OPEN_STAGE_CARD":
+            handledTypes.push(card.type);
+            expect(card.targetEntityId).toBe("5616503");
+            break;
           default: {
             const exhaustiveCheck: never = card;
             throw new Error(`Unhandled action card variant: ${exhaustiveCheck}`);
@@ -327,6 +337,7 @@ describe("Agent Hub Routing & Context Management", () => {
         "UPDATE_LEAD_STAGE",
         "DISPATCH_WHATSAPP",
         "SAVE_INSIGHT",
+        "OPEN_STAGE_CARD",
       ]);
     });
   });

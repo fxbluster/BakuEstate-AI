@@ -489,7 +489,7 @@ export function CockpitCardHUD() {
                         <button
                           type="button"
                           onClick={() => {
-                            const persona = card.listing_id && !card.lead_id ? "usta" : "farabi";
+                            const persona = card.listing_id && !card.lead_id ? "mudir" : "musteri_psixologiyasi";
                             openAgentHub(persona, {
                               leadId: card.lead_id || undefined,
                               listingId: card.listing_id || undefined,

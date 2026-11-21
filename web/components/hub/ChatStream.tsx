@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from "react";
 import type { AgentChatMessage } from "@/lib/ai-client";
-import type { AgentPersonaId } from "@/lib/agent-personas";
+import type { AgentPersonaId, SupportedPersonaId } from "@/lib/agent-personas";
 import { AGENT_PERSONAS } from "@/lib/agent-personas";
 import { ChatMessageItem } from "./ChatMessageItem";
 import { Sparkles } from "lucide-react";
@@ -15,8 +15,10 @@ interface ChatStreamProps {
   onSelectAgent?: (agentId: AgentPersonaId) => void;
 }
 
-const TYPING_LABELS: Record<AgentPersonaId, string> = {
+const TYPING_LABELS: Record<SupportedPersonaId, string> = {
   mudir: "Müdir orkestrasiyanı icra edir və təhlil aparır...",
+  analitika: "Analitika bazar tendensiyalarını və sosial metrikanı araşdırır...",
+  musteri_psixologiyasi: "Müştəri Psixologiyası danışıq və etiraz strategiyasını qurur...",
   farabi: "Farabi komissiya və danışıq strategiyasını qurur...",
   usta: "Usta m² bazar qiymətini və arbitrajı hesablayır...",
   teymur: "Teymur sosial kanal metrikanı və hook-u araşdırır...",
@@ -58,11 +60,13 @@ export function ChatStream({
           <p className="mt-2 max-w-sm text-xs text-slate-400 leading-relaxed">
             {currentAgentId === "mudir"
               ? "Bütün agentliyin əməliyyatlarını, prioritetlərini və sahə ekspertlərini vahid komanda mərkəzindən koordinasiya edin."
-              : currentAgentId === "farabi"
-                ? "50–100 ₼ komissiya müdafiəsi, Kupça hüquqi zəmanəti, Beh müqavilələri və müştəri etirazları üzrə küçə strategiyası."
-                : currentAgentId === "usta"
-                  ? "Bakı rayonları üzrə real m² qiymətləndirməsi, bina layihələri, təmir maya dəyəri və bina.az arbitraj təhlili."
-                  : "Instagram kanalları üzrə Reels baxış retention-u, 3 saniyəlik qarmaq (hook) və şərh-to-lid konversiyası."}
+              : currentAgentId === "analitika" || (currentAgentId as string) === "teymur"
+                ? "Bazar qiymət dinamikası, m² analitikası və sosial media / Reels baxış telemetriyası."
+                : currentAgentId === "musteri_psixologiyasi" || (currentAgentId as string) === "farabi"
+                  ? "50–100 ₼ komissiya müdafiəsi, Kupça hüquqi zəmanəti, Beh müqavilələri və müştəri etirazları üzrə küçə strategiyası."
+                  : (currentAgentId as string) === "usta"
+                    ? "Bakı rayonları üzrə real m² qiymətləndirməsi, bina layihələri, təmir maya dəyəri və bina.az arbitraj təhlili."
+                    : "Sualınızı yazın və ya yuxarıdakı hazır şablonlardan istifadə edin."}
           </p>
 
           <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-slate-800 bg-obsidian-900/90 px-3 py-1 text-[11px] text-slate-400">

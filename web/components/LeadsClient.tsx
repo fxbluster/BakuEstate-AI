@@ -698,13 +698,13 @@ export function LeadsClient({
                           lead.lead_listings?.[0]?.listings?.bina_id ||
                           lead.lead_listings?.[0]?.listing_id ||
                           undefined;
-                        openAgentHub("farabi", {
+                        openAgentHub("musteri_psixologiyasi", {
                           leadId: lead.id,
                           listingId: linkedListingId,
                         });
                       }}
                       className="inline-flex items-center gap-1.5 rounded-xl border border-gold-500/40 bg-gold-500/15 hover:bg-gold-500/25 px-3 py-1.5 text-xs font-semibold text-gold-200 transition"
-                      title="Farabi ilə Danışıq və Komissiya Qalxanını Aç"
+                      title="Müştəri Psixologiyası ilə Danışıq və Komissiya Qalxanını Aç"
                     >
                       <Bot className="h-3.5 w-3.5 text-gold-400" />
                       <span>🤖 Copilot</span>

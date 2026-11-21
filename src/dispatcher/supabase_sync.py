@@ -1,8 +1,8 @@
 """
 Supabase Cloud Database & Storage Synchronization Service for Baku Estate AI.
-Handles:
-1. Video upload to public Supabase Storage bucket ('baku-estate-media') for high-speed CDN delivery.
-2. Cloud Postgres database sync into 'baku_estate_deals' with upsert on bina_id.
+Preserves legacy `SupabaseSync` interface (`upload_video`, `sync_deal`) for backward
+compatibility while delegating canonical 8-table CRUD & versioned uploads to
+`src.cloud.supabase_repo.SupabaseRepo`.
 """
 
 import sys
@@ -30,6 +30,7 @@ from config.settings import (
     SUPABASE_ENABLED,
     safe_parse_numeric
 )
+from src.cloud.supabase_repo import SupabaseRepo
 from src.scraper.bina_scraper import clean_phone_number
 
 logger = logging.getLogger("supabase_sync")
@@ -52,10 +53,37 @@ class SupabaseSync:
         self.supabase_key = supabase_key or ""
         self.bucket_name = bucket_name or "baku-estate-media"
         self.enabled = enabled and bool(self.supabase_url) and bool(self.supabase_key)
+        self.repo = SupabaseRepo(
+            supabase_url=self.supabase_url,
+            supabase_key=self.supabase_key,
+            bucket_name=self.bucket_name,
+            enabled=self.enabled,
+        )
 
     def is_configured(self) -> bool:
         """Returns True if Supabase credentials are valid and enabled."""
         return self.enabled
+
+    def upload_versioned_video(
+        self,
+        video_path: str,
+        bina_id: str,
+        version_num: int = 1,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Delegates versioned video upload (`videos/{bina_id}/v{n}.mp4`) to SupabaseRepo."""
+        if not self.enabled:
+            return None, None
+        return self.repo.upload_versioned_video(video_path, bina_id, version_num)
+
+    def upsert_canonical_listing(
+        self,
+        listing: Dict[str, Any],
+        existing: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Delegates canonical `public.listings` phone-preserving upsert to SupabaseRepo."""
+        if not self.enabled:
+            return None
+        return self.repo.upsert_listing(listing, existing=existing)
 
     def _headers(self, content_type: str = "application/json") -> Dict[str, str]:
         return {

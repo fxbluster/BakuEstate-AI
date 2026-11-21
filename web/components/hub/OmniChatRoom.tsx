@@ -26,25 +26,18 @@ const SPECIALIST_PREVIEWS: {
   badgeColor: string;
 }[] = [
   {
-    id: "farabi",
-    name: "Farabi",
-    role: "Komissiya & Danışıq",
+    id: "analitika" as AgentPersonaId,
+    name: "Analitika",
+    role: "Bazar & Sosial Telemetriya",
+    icon: "📊",
+    badgeColor: "border-purple-500/30 text-purple-300 bg-purple-500/10",
+  },
+  {
+    id: "musteri_psixologiyasi" as AgentPersonaId,
+    name: "Müştəri Psixologiyası",
+    role: "Danışıq & Etiraz Qalxanı",
     icon: "🛡️",
     badgeColor: "border-emerald-500/30 text-emerald-300 bg-emerald-500/10",
-  },
-  {
-    id: "usta",
-    name: "Usta",
-    role: "Qiymət & Arbitraj",
-    icon: "📐",
-    badgeColor: "border-cyan-500/30 text-cyan-300 bg-cyan-500/10",
-  },
-  {
-    id: "teymur",
-    name: "Teymur",
-    role: "Sosial Media & Reels",
-    icon: "📱",
-    badgeColor: "border-purple-500/30 text-purple-300 bg-purple-500/10",
   },
 ];
 
@@ -217,8 +210,8 @@ export function OmniChatRoom({ onSwitchPersona }: OmniChatRoomProps) {
           </span>
         </div>
 
-        {/* 3 Specialist Standby Pills */}
-        <div className="grid grid-cols-3 gap-2">
+        {/* 2 Specialist Standby Pills */}
+        <div className="grid grid-cols-2 gap-2">
           {SPECIALIST_PREVIEWS.map((spec) => (
             <button
               key={spec.id}

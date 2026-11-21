@@ -16,6 +16,7 @@ import os
 import asyncio
 import logging
 import re
+import threading
 from pathlib import Path
 from datetime import timedelta
 from typing import Dict, Any, Tuple, Optional, List
@@ -26,6 +27,8 @@ from config.settings import EDGE_TTS_VOICE, EDGE_TTS_RATE, OUTPUT_DIR
 logger = logging.getLogger("tts_service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+ELEVENLABS_CONCURRENCY_SEMAPHORE = threading.BoundedSemaphore(2)
+
 
 def format_srt_time(td: timedelta) -> str:
     """Formats a timedelta into standard SRT timestamp format: HH:MM:SS,mmm"""
@@ -35,6 +38,80 @@ def format_srt_time(td: timedelta) -> str:
     seconds = total_seconds % 60
     milliseconds = int(td.microseconds / 1000)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+
+AZ_CARDINAL_UNITS: Dict[int, str] = {
+    1: "bir", 2: "iki", 3: "üç", 4: "dörd", 5: "beş",
+    6: "altı", 7: "yeddi", 8: "səkkiz", 9: "doqquz"
+}
+AZ_CARDINAL_TENS: Dict[int, str] = {
+    10: "on", 20: "iyirmi", 30: "otuz", 40: "qırx", 50: "əlli",
+    60: "altmış", 70: "yetmiş", 80: "səksən", 90: "doxsan", 100: "yüz"
+}
+AZ_ORDINAL_MAP: Dict[int, str] = {
+    1: "birinci", 2: "ikinci", 3: "üçüncü", 4: "dördüncü", 5: "beşinci",
+    6: "altıncı", 7: "yeddinci", 8: "səkkizinci", 9: "doqquzuncu",
+    10: "onuncu", 20: "iyirminci", 30: "otuzuncu", 40: "qırxıncı", 50: "əllinci",
+    60: "altmışıncı", 70: "yetmişinci", 80: "səksəninci", 90: "doxsanıncı", 100: "yüzüncü"
+}
+
+
+def number_to_az_cardinal(n: int) -> str:
+    """Converts a positive integer into natural spoken Azerbaijani cardinal words."""
+    try:
+        val = int(n)
+    except (ValueError, TypeError):
+        return str(n)
+    if val <= 0:
+        return str(val)
+    if val in AZ_CARDINAL_UNITS:
+        return AZ_CARDINAL_UNITS[val]
+    if val in AZ_CARDINAL_TENS:
+        return AZ_CARDINAL_TENS[val]
+
+    parts = []
+    if val >= 100:
+        h = val // 100
+        val %= 100
+        parts.append("yüz" if h == 1 else f"{AZ_CARDINAL_UNITS.get(h, str(h))} yüz")
+    if val >= 10:
+        t = (val // 10) * 10
+        val %= 10
+        parts.append(AZ_CARDINAL_TENS.get(t, str(t)))
+    if val > 0:
+        parts.append(AZ_CARDINAL_UNITS.get(val, str(val)))
+    return " ".join(parts)
+
+
+def number_to_az_ordinal(n: int) -> str:
+    """Converts a positive integer into natural spoken Azerbaijani ordinal words."""
+    try:
+        val = int(n)
+    except (ValueError, TypeError):
+        return str(n)
+    if val <= 0:
+        return str(val)
+    if val in AZ_ORDINAL_MAP:
+        return AZ_ORDINAL_MAP[val]
+
+    parts = []
+    if val >= 100:
+        h = val // 100
+        val %= 100
+        if val == 0:
+            return "yüzüncü" if h == 1 else f"{AZ_CARDINAL_UNITS.get(h, str(h))} yüzüncü"
+        parts.append("yüz" if h == 1 else f"{AZ_CARDINAL_UNITS.get(h, str(h))} yüz")
+    if val >= 10:
+        t = (val // 10) * 10
+        rem = val % 10
+        if rem == 0:
+            parts.append(AZ_ORDINAL_MAP.get(t, str(t)))
+            return " ".join(parts)
+        parts.append(AZ_CARDINAL_TENS.get(t, str(t)))
+        val = rem
+    if val > 0:
+        parts.append(AZ_ORDINAL_MAP.get(val, str(val)))
+    return " ".join(parts)
 
 
 def azerbaijani_ordinal_suffix(n: int) -> str:
@@ -112,9 +189,29 @@ def format_location_intro(clean_loc: str) -> str:
 
 
 def normalize_azerbaijani_phonetics(text: str) -> str:
-    """Normalizes abbreviations, numbers, and units for natural speech synthesis."""
+    """
+    Normalizes abbreviations, numbers, and units for natural speech synthesis.
+    Verbalizes floor fractions into full Azerbaijani words:
+    e.g. '4/9' -> 'doqquz mərtəbəli binanın dördüncü mərtəbəsində'.
+    """
     if not text:
         return ""
+
+    def _verbalize_fraction(match: re.Match) -> str:
+        f_num = int(match.group(1))
+        f_den = int(match.group(2))
+        total_word = number_to_az_cardinal(f_den)
+        floor_word = number_to_az_ordinal(f_num)
+        return f"{total_word} mərtəbəli binanın {floor_word} mərtəbəsində"
+
+    # Replace floor fractions into full Azerbaijani phrasing
+    text = re.sub(
+        r'\b(\d+)\s*/\s*(\d+)(?:\s*(?:-\s*(?:ci|cü|cı|cu))?\s*mərtəbə(?:si|sində)?)?\b',
+        _verbalize_fraction,
+        text,
+        flags=re.IGNORECASE
+    )
+
     replacements = [
         (r'\b(\d+)\s*000\s*AZN\b', r'\1 min manat'),
         (r'\b(\d+)\s*AZN\b', r'\1 manat'),
@@ -129,7 +226,6 @@ def normalize_azerbaijani_phonetics(text: str) -> str:
         (r'\bpr\.(?=\s|$|[,\.!])', 'prospektində'),
         (r'metrosu yaxınlığında ərazisində', 'metrosu yaxınlığında'),
         (r'qəsəbəsində ərazisində', 'qəsəbəsində'),
-        (r'\b(\d+)/(\d+)\b', r'\2 mərtəbəli binanın \1-ci mərtəbəsində'),
     ]
     for pattern, repl in replacements:
         text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
@@ -138,13 +234,19 @@ def normalize_azerbaijani_phonetics(text: str) -> str:
 
 def detect_listing_archetype(listing: Dict[str, Any]) -> str:
     """Detects real estate archetype: budget, luxury, villa, or commercial."""
-    title_desc = (str(listing.get("title", "")) + " " + str(listing.get("description", ""))).lower()
+    override = str(listing.get("archetype_override", "")).lower().strip()
+    if override in ("budget", "luxury", "villa", "commercial"):
+        return override
+    title = str(listing.get("title", "")).lower()
+    desc = str(listing.get("description", "")).lower()
+    title_desc = f"{title} {desc}"
     loc = (str(listing.get("location", "")) + " " + str(listing.get("address", ""))).lower()
     l_type = str(listing.get("type", "")).lower()
+    is_apartment_title = "mənzil" in title or "menzil" in title
 
-    if l_type in ("villa", "bag") or any(w in title_desc for w in ["villa", "bağ evi", "həyət evi", "sot", "hovuzlu"]):
+    if l_type in ("villa", "bag") or any(w in title for w in ["villa", "bağ evi", "həyət evi", "sot"]) or (not is_apartment_title and any(w in title_desc for w in ["villa", "bağ evi", "həyət evi", "sot", "hovuzlu"])):
         return "villa"
-    if l_type in ("obyekt", "ofis", "torpaq", "kommersiya") or any(w in title_desc for w in ["obyekt", "ofis", "icarə gəliri", "qeyri-yaşayış"]):
+    if l_type in ("obyekt", "ofis", "torpaq", "kommersiya") or any(w in title for w in ["obyekt", "ofis", "qeyri-yaşayış", "kommersiya"]) or (not is_apartment_title and any(w in title_desc for w in ["obyekt", "ofis", "icarə gəliri", "qeyri-yaşayış"])):
         return "commercial"
     
     price = 0.0
@@ -159,14 +261,66 @@ def detect_listing_archetype(listing: Dict[str, Any]) -> str:
     return "budget"
 
 
-def generate_azerbaijani_script(listing: Dict[str, Any], archetype: Optional[str] = None) -> str:
+SCRIPT_ANGLE_ARCHETYPE_MAP = {
+    "family": "budget",
+    "budget": "budget",
+    "investor": "commercial",
+    "commercial": "commercial",
+    "luxury": "luxury",
+    "villa": "villa",
+}
+
+
+def build_price_drop_opening(price_drop_info: Optional[Dict[str, Any]]) -> str:
+    """Formats a crisp Azerbaijani 'Qiymət Endi!' opening hook for Rejim 3 price-drop renders."""
+    if not price_drop_info:
+        return ""
+    if isinstance(price_drop_info, str):
+        return price_drop_info.strip()
+
+    old_p = price_drop_info.get("old_price_azn") or price_drop_info.get("old_price")
+    new_p = price_drop_info.get("new_price_azn") or price_drop_info.get("new_price")
+    drop_pct = price_drop_info.get("drop_pct") or price_drop_info.get("price_drop_pct")
+
+    if old_p and new_p:
+        old_spoken = verbalize_baku_price(old_p)
+        new_spoken = verbalize_baku_price(new_p)
+        if drop_pct:
+            try:
+                pct_val = abs(float(drop_pct))
+                return (
+                    f"Diqqət, qiymət endi! Qiymət {pct_val:.0f} faiz düşərək "
+                    f"{old_spoken} əvəzinə indi {new_spoken} oldu!"
+                )
+            except Exception:
+                pass
+        return f"Diqqət, qiymət endi! {old_spoken} əvəzinə indi {new_spoken}!"
+
+    return "Diqqət, qiymət endi! İndi çox daha sərfəli fürsətlə təqdim olunur!"
+
+
+def generate_azerbaijani_script(
+    listing: Dict[str, Any],
+    archetype: Optional[str] = None,
+    script_angle: Optional[str] = None,
+    price_drop_info: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Generates an energetic, high-converting Azerbaijani narration script for a real estate listing.
-    Features archetype-specific storytelling, honest objection handling (roof, stone building),
+    Features archetype-specific storytelling, explicit script_angle overrides, optional
+    Rejim 3 'Qiymət Endi!' opening hook, honest objection handling (roof, stone building),
     price clarity, and clear call-to-action without cheap spammy clickbait.
     """
-    arch = archetype or detect_listing_archetype(listing)
+    normalized_angle = str(script_angle or "").strip().lower()
+    angle_arch = SCRIPT_ANGLE_ARCHETYPE_MAP.get(normalized_angle)
+    arch = archetype or angle_arch or detect_listing_archetype(listing)
     parts = []
+
+    price_drop_hook = build_price_drop_opening(price_drop_info)
+    if price_drop_hook:
+        parts.append(price_drop_hook)
+    elif normalized_angle == "urgent" or listing.get("is_urgent"):
+        parts.append("Təcili satış fürsəti! Bazar dəyərindən aşağı qiymətlə əla təklif!")
 
     raw_loc = listing.get("location") or listing.get("address") or "Bakı"
     loc_clean = canonicalize_location_phrase(raw_loc)
@@ -363,49 +517,152 @@ async def synthesize_speech_async(
     return duration
 
 
+def _resolve_tts_routing(
+    tts_engine: Optional[str],
+    voice_id: Optional[str],
+    default_edge_voice: str,
+) -> Tuple[str, Optional[str], Optional[str], str]:
+    """
+    Resolves (engine, eleven_voice_id, openai_voice, edge_voice) cleanly without
+    mutating global os.environ. Supports friendly aliases like 'eleven_male', 'eleven_female', 'nova'.
+    """
+    eleven_key = os.getenv("ELEVENLABS_API_KEY", "")
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+
+    raw_engine = (tts_engine or "").strip().lower()
+    eleven_voice_id: Optional[str] = None
+    openai_voice: Optional[str] = None
+    edge_voice: str = default_edge_voice
+
+    if raw_engine in ("eleven_male", "arif"):
+        engine = "elevenlabs"
+        eleven_voice_id = voice_id or "ZQJv3hwvRAIC7fvWZ1Qr"
+    elif raw_engine in ("eleven_female",):
+        engine = "elevenlabs"
+        eleven_voice_id = voice_id or "EXAVITQu4vr4xnSDxMaL"
+    elif raw_engine == "nova":
+        engine = "openai"
+        openai_voice = voice_id or "nova"
+    elif raw_engine in ("elevenlabs", "openai", "edge"):
+        engine = raw_engine
+        if engine == "elevenlabs":
+            eleven_voice_id = voice_id
+        elif engine == "openai":
+            openai_voice = voice_id
+        elif engine == "edge" and voice_id:
+            edge_voice = voice_id
+    else:
+        engine = os.getenv(
+            "TTS_ENGINE",
+            "elevenlabs" if eleven_key else ("openai" if openai_key else "edge"),
+        ).strip().lower()
+        if engine == "elevenlabs":
+            eleven_voice_id = voice_id
+        elif engine == "openai":
+            openai_voice = voice_id
+        elif engine == "edge" and voice_id:
+            edge_voice = voice_id
+
+    return engine, eleven_voice_id, openai_voice, edge_voice
+
+
 def generate_tts_for_listing(
     listing: Dict[str, Any],
     output_dir: Optional[Path] = None,
     voice: str = EDGE_TTS_VOICE,
     rate: str = EDGE_TTS_RATE,
-    custom_script: Optional[str] = None
-) -> Tuple[str, str, str, float]:
+    custom_script: Optional[str] = None,
+    tts_engine: Optional[str] = None,
+    voice_id: Optional[str] = None,
+    script_angle: Optional[str] = None,
+    version_num: Optional[int] = None,
+    price_drop_info: Optional[Dict[str, Any]] = None,
+    model_id: Optional[str] = None,
+    voice_speed: Optional[float] = None,
+) -> Tuple[str, str, str, float, str, bool]:
     """
     Synchronous wrapper to generate full Azerbaijani narration script,
-    Edge-TTS voiceover, and SRT subtitles for a listing.
-    Allows passing a custom AI script (e.g. from Google Gemini Pro).
-    Returns: (script_text, audio_path, srt_path, duration_seconds)
+    voiceover (ElevenLabs / OpenAI / Edge-TTS), and synchronized SRT subtitles.
+
+    - Accepts explicit tts_engine, voice_id, script_angle, version_num, price_drop_info, voice_speed
+      without ever mutating global os.environ.
+    - Writes versioned files (`voice_{bina_id}_v{n}.mp3`, `subs_{bina_id}_v{n}.srt`) when
+      `version_num` is provided, and preserves legacy filenames (`voice_{bina_id}.mp3`,
+      `subs_{bina_id}.srt`) when `version_num` is None.
+
+    Returns 6-tuple: (script_text, audio_path, srt_path, duration, engine_used, fallback_triggered)
     """
-    target_dir = output_dir or OUTPUT_DIR
+    target_dir = Path(output_dir) if output_dir else OUTPUT_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
     bina_id = listing.get("bina_id", "sample")
-    audio_path = target_dir / f"voice_{bina_id}.mp3"
-    srt_path = target_dir / f"subs_{bina_id}.srt"
+    if version_num is not None:
+        ver = max(1, int(version_num))
+        audio_path = target_dir / f"voice_{bina_id}_v{ver}.mp3"
+        srt_path = target_dir / f"subs_{bina_id}_v{ver}.srt"
+    else:
+        audio_path = target_dir / f"voice_{bina_id}.mp3"
+        srt_path = target_dir / f"subs_{bina_id}.srt"
 
-    raw_script = custom_script or generate_azerbaijani_script(listing)
+    if custom_script:
+        raw_script = custom_script
+        if price_drop_info and "qiymət endi" not in raw_script.lower():
+            hook = build_price_drop_opening(price_drop_info)
+            if hook:
+                raw_script = f"{hook} {raw_script}"
+    else:
+        raw_script = generate_azerbaijani_script(
+            listing,
+            script_angle=script_angle,
+            price_drop_info=price_drop_info,
+        )
     script_text = normalize_azerbaijani_phonetics(raw_script)
 
-    # Check for ElevenLabs or OpenAI Studio Voiceover
     eleven_key = os.getenv("ELEVENLABS_API_KEY", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
-    tts_engine = os.getenv("TTS_ENGINE", "elevenlabs" if eleven_key else ("openai" if openai_key else "edge")).lower()
+    selected_engine, eleven_voice_id, openai_voice, edge_voice = _resolve_tts_routing(
+        tts_engine=tts_engine,
+        voice_id=voice_id,
+        default_edge_voice=voice,
+    )
 
-    if tts_engine == "elevenlabs" and eleven_key:
-        try:
-            from src.media.elevenlabs_tts import synthesize_elevenlabs_speech
-            logger.info("Using ElevenLabs Studio TTS for ultra-realistic human voiceover...")
-            duration = synthesize_elevenlabs_speech(
-                text=script_text,
-                output_audio_path=audio_path,
-                output_srt_path=srt_path,
-                api_key=eleven_key
+    fallback_triggered = False
+
+    if selected_engine == "elevenlabs":
+        if eleven_key:
+            try:
+                from src.media.elevenlabs_tts import synthesize_elevenlabs_speech, ElevenLabsSynthesisError
+                logger.info("Using ElevenLabs Studio TTS for ultra-realistic human voiceover...")
+                with ELEVENLABS_CONCURRENCY_SEMAPHORE:
+                    duration = synthesize_elevenlabs_speech(
+                        text=script_text,
+                        output_audio_path=audio_path,
+                        output_srt_path=srt_path,
+                        api_key=eleven_key,
+                        voice_id=eleven_voice_id,
+                        model_id=model_id,
+                        speed=voice_speed,
+                    )
+                return (
+                    script_text,
+                    str(audio_path.resolve()),
+                    str(srt_path.resolve()),
+                    duration,
+                    "elevenlabs",
+                    False,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"ElevenLabs TTS failed ({type(e).__name__}: {e}). Falling back to secondary engine..."
+                )
+                fallback_triggered = True
+        else:
+            logger.warning(
+                "ElevenLabs requested but ELEVENLABS_API_KEY is unset. Falling back to secondary engine..."
             )
-            return script_text, str(audio_path.resolve()), str(srt_path.resolve()), duration
-        except Exception as e:
-            logger.warning(f"ElevenLabs TTS failed: {e}. Falling back to secondary engine...")
+            fallback_triggered = True
 
-    if tts_engine in ("elevenlabs", "openai") and openai_key:
+    if (selected_engine == "openai" or (fallback_triggered and selected_engine == "elevenlabs")) and openai_key:
         try:
             from src.media.openai_tts import synthesize_openai_speech
             logger.info("Using OpenAI Studio TTS for natural professional voiceover...")
@@ -413,18 +670,57 @@ def generate_tts_for_listing(
                 text=script_text,
                 output_audio_path=audio_path,
                 output_srt_path=srt_path,
-                api_key=openai_key
+                api_key=openai_key,
+                voice=openai_voice,
+                model=model_id if selected_engine == "openai" else None,
             )
-            return script_text, str(audio_path.resolve()), str(srt_path.resolve()), duration
+            is_fallback = fallback_triggered
+            return (
+                script_text,
+                str(audio_path.resolve()),
+                str(srt_path.resolve()),
+                duration,
+                "openai" if not is_fallback else "edge_fallback",
+                is_fallback,
+            )
         except Exception as e:
-            logger.warning(f"OpenAI TTS failed: {e}. Falling back to Edge-TTS Babek.")
+            logger.warning(f"OpenAI TTS failed: {e}. Falling back to Edge-TTS.")
+            fallback_triggered = True
+
+    # Edge-TTS synthesis (primary or fallback)
+    if fallback_triggered:
+        if voice_speed is not None and abs(voice_speed - 1.0) > 1e-4:
+            pct = int(round((voice_speed - 1.0) * 100))
+            effective_rate = f"+{pct}%" if pct >= 0 else f"{pct}%"
+        else:
+            effective_rate = EDGE_TTS_RATE or "+10%"
+
+        target_voice_str = str(eleven_voice_id or voice_id or "").strip().lower()
+        if target_voice_str in ("exavitqu4vr4xnsdxmal", "banu", "female", "eleven_female"):
+            effective_voice = "az-AZ-BanuNeural"
+        else:
+            effective_voice = edge_voice or EDGE_TTS_VOICE or "az-AZ-BabekNeural"
+    else:
+        if voice_speed is not None and abs(voice_speed - 1.0) > 1e-4:
+            pct = int(round((voice_speed - 1.0) * 100))
+            effective_rate = f"+{pct}%" if pct >= 0 else f"{pct}%"
+        else:
+            effective_rate = rate or EDGE_TTS_RATE or "+10%"
+        effective_voice = edge_voice or EDGE_TTS_VOICE or "az-AZ-BabekNeural"
 
     duration = asyncio.run(synthesize_speech_async(
         text=script_text,
         output_audio_path=audio_path,
         output_srt_path=srt_path,
-        voice=voice,
-        rate=rate
+        voice=effective_voice,
+        rate=effective_rate,
     ))
 
-    return script_text, str(audio_path.resolve()), str(srt_path.resolve()), duration
+    return (
+        script_text,
+        str(audio_path.resolve()),
+        str(srt_path.resolve()),
+        duration,
+        "edge_fallback" if fallback_triggered else "edge",
+        fallback_triggered,
+    )

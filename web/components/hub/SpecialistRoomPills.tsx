@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { AgentPersonaId } from "@/lib/agent-personas";
+import type { AgentPersonaId, SupportedPersonaId } from "@/lib/agent-personas";
 import { AGENT_PERSONAS } from "@/lib/agent-personas";
 import { Sparkles } from "lucide-react";
 
@@ -12,7 +12,7 @@ interface SpecialistRoomPillsProps {
 }
 
 const PERSONA_PILL_STYLES: Record<
-  AgentPersonaId,
+  SupportedPersonaId,
   {
     border: string;
     bg: string;
@@ -27,6 +27,20 @@ const PERSONA_PILL_STYLES: Record<
     text: "text-gold-300",
     hover: "hover:bg-gold-500/20 hover:border-gold-400/50",
     iconColor: "text-gold-400",
+  },
+  analitika: {
+    border: "border-purple-500/30",
+    bg: "bg-purple-500/10",
+    text: "text-purple-300",
+    hover: "hover:bg-purple-500/20 hover:border-purple-400/50",
+    iconColor: "text-purple-400",
+  },
+  musteri_psixologiyasi: {
+    border: "border-emerald-500/30",
+    bg: "bg-emerald-500/10",
+    text: "text-emerald-300",
+    hover: "hover:bg-emerald-500/20 hover:border-emerald-400/50",
+    iconColor: "text-emerald-400",
   },
   farabi: {
     border: "border-emerald-500/30",

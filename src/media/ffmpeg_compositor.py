@@ -82,8 +82,8 @@ def get_windows_font_path(bold: bool = True) -> str:
 def convert_srt_to_ass(srt_path: Path, ass_path: Path) -> Path:
     """
     Converts an SRT subtitle file to a 1080x1920 ASS subtitle file.
-    Places subtitles in the safe zone (MarginV=420) with high-contrast
-    TikTok viral yellow font, black outline, and NO opaque black boxes.
+    Places subtitles in the safe zone (MarginV=580, baseline y=1340 in [1250, 1420] px)
+    with high-contrast TikTok viral yellow font, black outline, and NO opaque black boxes.
     """
     ass_header = """[Script Info]
 Title: Baku Estate AI Subtitles
@@ -94,7 +94,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: ModernSub,Segoe UI,54,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.8,1.8,2,60,60,420,1
+Style: ModernSub,Segoe UI,54,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.8,1.8,2,60,60,580,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -291,20 +291,18 @@ class VideoCompositor:
                     specs_parts.append(f"{area} m²")
             specs_display = sanitize_text("  •  ".join(specs_parts))
 
-            # Phone / CTA line
-            owner_phone = listing.get("owner_phone") or listing.get("phone") or ""
-            if owner_phone:
-                cta_line2 = sanitize_text(f"ƏLAQƏ / WHATSAPP: {owner_phone}")
-            else:
-                cta_line2 = sanitize_text("ƏLAQƏ / WHATSAPP ÜÇÜN DM YAZIN")
-            cta_line1 = sanitize_text("BİRBAŞA SAHİBİNDƏN  •  KOMİSSİYASIZ")
-
             # Convert SRT to modern ASS for safe-zone burned subtitles
             ass_path = temp_dir / "subtitles_styled.ass"
             convert_srt_to_ass(Path(srt_path), ass_path)
             escaped_ass = escape_ffmpeg_path(ass_path)
 
-            # Build final filtergraph with Unified Luxury Card & Bottom Contact Card
+            # Generate anti-theft brand logo watermark (330x74) for content portability & brand protection
+            from src.media.glass_badge import create_logo_watermark
+            logo_watermark_path = temp_dir / "logo_watermark.png"
+            create_logo_watermark(logo_watermark_path)
+            escaped_watermark = escape_ffmpeg_path(logo_watermark_path)
+
+            # Build final filtergraph with Unified Luxury Card (no phone leakage, safe bottom)
             filter_chains = []
 
             # 1. Unified Luxury Header Card (x=50, y=70, w=980, h=250)
@@ -338,27 +336,33 @@ class VideoCompositor:
                 f"drawtext=fontfile='{font_reg}':text='{specs_display}':fontcolor=0xE2E8F0:fontsize=32:x=(w-text_w)/2:y=230"
             )
 
-            # 5. Bottom Contact / CTA Card (x=80, y=1680, w=920, h=130)
-            filter_chains.append(
-                f"drawbox=x=80:y=1680:width=920:height=130:color=0x0F172A@0.92:t=fill,"
-                f"drawbox=x=80:y=1680:width=920:height=130:color=0x10B981@0.50:t=2,"
-                f"drawtext=fontfile='{font_bold}':text='{cta_line1}':fontcolor=0xF59E0B:fontsize=26:x=(w-text_w)/2:y=1700,"
-                f"drawtext=fontfile='{font_bold}':text='{cta_line2}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=1740"
-            )
-
-            # 6. Burned Subtitles via ASS filter (safe-zone MarginV=420, TikTok yellow, no black boxes)
+            # 5. Burned Subtitles via ASS filter (safe-zone baseline y in [1250, 1420] px, TikTok yellow, no black boxes)
             filter_chains.append(
                 f"subtitles='{escaped_ass}'"
             )
 
             final_vf = ",".join(filter_chains)
+            video_filter = f"[0:v]{final_vf}[v_base];movie='{escaped_watermark}'[wm];[v_base][wm]overlay=x=714:y=86[vout]"
 
-            # Resolve background music and sound effects
-            resolved_bg_music = bg_music_path
-            if not resolved_bg_music or not Path(resolved_bg_music).exists():
-                fallback_music = Path(__file__).resolve().parent.parent.parent / "assets" / "music" / "luxury_beat.mp3"
-                if fallback_music.exists():
-                    resolved_bg_music = str(fallback_music)
+            # Resolve background music with fallback to assets/music/luxury_beat.mp3
+            resolved_bg_music = None
+            if bg_music_path:
+                p = Path(bg_music_path)
+                if p.is_file():
+                    resolved_bg_music = str(p.resolve())
+                else:
+                    cand = Path(__file__).resolve().parent.parent.parent / "assets" / "music" / p.name
+                    if cand.is_file():
+                        resolved_bg_music = str(cand)
+
+            if not resolved_bg_music or not Path(resolved_bg_music).is_file():
+                for cand in [
+                    Path(__file__).resolve().parent.parent.parent / "assets" / "music" / "luxury_beat.mp3",
+                    Path("assets/music/luxury_beat.mp3").resolve(),
+                ]:
+                    if cand.is_file():
+                        resolved_bg_music = str(cand)
+                        break
 
             chime_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "chime.mp3"
             whoosh_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "whoosh.mp3"
@@ -419,14 +423,14 @@ class VideoCompositor:
                 audio_filter = "".join(audio_inputs) + mix_chain + fade_chain
 
                 cmd.extend([
-                    "-filter_complex", f"[0:v]{final_vf}[vout];{audio_filter}",
+                    "-filter_complex", f"{video_filter};{audio_filter}",
                     "-map", "[vout]",
                     "-map", "[aout]"
                 ])
             else:
                 cmd.extend([
-                    "-vf", final_vf,
-                    "-map", "0:v",
+                    "-filter_complex", video_filter,
+                    "-map", "[vout]",
                     "-map", "1:a"
                 ])
 
@@ -467,17 +471,29 @@ class VideoCompositor:
         output_video_path: Path,
         bg_music_path: Optional[str] = None,
         duration: Optional[float] = None,
-        framing_mode: str = "smart_matte"
+        framing_mode: str = "cinematic_fill"
     ) -> Path:
         """
         Next-generation cinematic video compositor:
-        1. Uses room-adaptive camera motion (pan/tilt/zoom) + FFmpeg xfade walkthrough transitions.
-        2. Renders floating glassmorphic hero badge (dissolves after 3.5s) and safe-zone CTA card.
-        3. Burns 2-3 word kinetic ASS subtitles with champagne gold & mint keyword highlights.
-        4. Mixes 4-tier audio: voiceover + sidechain ducked music + transition whooshes + chime.
+        1. Uses room-adaptive camera motion (pan/tilt/zoom) + FFmpeg xfade walkthrough transitions
+           in 100% full-screen cinematic_fill mode with archetype-specific pacing.
+        2. Overlays a subtle bottom gradient scrim for high subtitle contrast over bright interiors.
+        3. Renders archetype-styled floating glassmorphic hero badge (dissolves at 2.5s) and CTA card.
+        4. Burns 2-3 word kinetic ASS subtitles with champagne gold & mint keyword highlights
+           and automatic CTA safe-shift to prevent subtitle overlap.
+        5. Mixes 4-tier audio: voiceover + sidechain ducked music + transition whooshes + chime.
         """
-        from src.media.motion_engine import MotionEngine, render_cinematic_walkthrough
-        from src.media.glass_badge import create_hero_badge, create_cta_badge, get_hero_overlay_filter
+        from src.media.motion_engine import (
+            MotionEngine,
+            render_cinematic_walkthrough,
+            detect_property_archetype,
+        )
+        from src.media.glass_badge import (
+            create_hero_badge,
+            create_cta_badge,
+            create_bottom_scrim_png,
+            create_logo_watermark,
+        )
         from src.media.kinetic_subtitles import convert_srt_to_kinetic_ass
 
         if not image_paths:
@@ -493,7 +509,11 @@ class VideoCompositor:
             if total_duration <= 0:
                 total_duration = len(image_paths) * SLIDE_DURATION
 
-            logger.info(f"Rendering cinematic walkthrough for listing {listing.get('bina_id', 'unknown')} (Duration: {total_duration:.2f}s, {len(image_paths)} slides)...")
+            archetype = detect_property_archetype(listing)
+            logger.info(
+                f"Rendering cinematic walkthrough for listing {listing.get('bina_id', 'unknown')} "
+                f"(Archetype: {archetype}, Mode: {framing_mode}, Duration: {total_duration:.2f}s, {len(image_paths)} slides)..."
+            )
 
             # 1. Render motion walkthrough via render_cinematic_walkthrough
             walkthrough_output = temp_dir / "walkthrough_raw.mp4"
@@ -502,41 +522,73 @@ class VideoCompositor:
                 output_path=walkthrough_output,
                 total_duration=total_duration,
                 framing_mode=framing_mode,
+                archetype=archetype,
                 ffmpeg_exe=self.ffmpeg_exe
             )
             walkthrough_raw = walkthrough_res["video_path"]
             transitions = walkthrough_res.get("transitions", [])
 
-            # 2. Generate floating glassmorphic hero badge (t=0.2s to t=3.6s)
-            hero_badge_path = temp_dir / "hero_badge.png"
-            create_hero_badge(listing, hero_badge_path)
+            # 2. Generate bottom gradient scrim for crisp subtitle readability over bright rooms
+            bottom_scrim_path = temp_dir / "bottom_scrim.png"
+            create_bottom_scrim_png(bottom_scrim_path)
 
-            # 3. Generate safe-zone CTA badge
+            # 3. Generate minimal editorial hero strip (t=0.2s to t=2.5s)
+            hero_badge_path = temp_dir / "hero_badge.png"
+            create_hero_badge(listing, hero_badge_path, width=920, height=176, archetype=archetype)
+
+            # 4. Generate safe-zone CTA badge
             cta_badge_path = temp_dir / "cta_badge.png"
             create_cta_badge(listing, cta_badge_path)
 
-            # 4. Convert subtitles to kinetic ASS
-            ass_path = temp_dir / "subtitles_kinetic.ass"
-            convert_srt_to_kinetic_ass(Path(srt_path), ass_path, margin_v=560)
-            escaped_ass = escape_ffmpeg_path(ass_path)
+            # 5. Generate anti-theft brand logo watermark (persistent across entire video)
+            logo_watermark_path = temp_dir / "logo_watermark.png"
+            create_logo_watermark(logo_watermark_path)
 
-            # Build video filtergraph
-            hero_end_time = min(3.6, total_duration - 1.5)
+            # Build video filtergraph timings
+            hero_end_time = min(2.5, max(0.8, total_duration - 1.5))
             cta_start_time = max(0.5, total_duration - 6.5)
 
+            # 6. Convert subtitles to kinetic ASS with automatic CTA safe-shift (safe-zone baseline y in [1250, 1420] px)
+            ass_path = temp_dir / "subtitles_kinetic.ass"
+            convert_srt_to_kinetic_ass(
+                Path(srt_path),
+                ass_path,
+                margin_v=580,
+                margin_v_cta=660,
+                cta_start_time=cta_start_time,
+                font_size=64,
+            )
+            escaped_ass = escape_ffmpeg_path(ass_path)
+
             v_filters = [
-                f"[0:v][1:v]overlay=x=(W-w)/2:y='if(lt(t,0.55), 160-(0.55-t)*70, 160)':enable='between(t,0.2,{hero_end_time:.2f})':format=auto[v_hero]",
-                f"[v_hero][2:v]overlay=x=(W-w)/2:y=1380:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
+                f"[0:v][1:v]overlay=0:0:format=auto[v_scrim]",
+                f"[v_scrim][4:v]overlay=x=714:y=86:format=auto[v_brand]",
+                f"[2:v]fade=in:st=0:d=0.4:alpha=1[v_hero_faded]",
+                f"[v_brand][v_hero_faded]overlay=x=(W-w)/2:y=186:enable='between(t,0,{hero_end_time:.2f})':format=auto[v_hero]",
+                f"[v_hero][3:v]overlay=x=(W-w)/2:y=1380:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
                 f"[v_cta]subtitles='{escaped_ass}'[v_out]"
             ]
             filter_complex_v = ";".join(v_filters)
 
-            # 5. Background music and SFX configuration
-            resolved_bg_music = bg_music_path
-            if not resolved_bg_music or not Path(resolved_bg_music).exists():
-                fallback_music = Path(__file__).resolve().parent.parent.parent / "assets" / "music" / "luxury_beat.mp3"
-                if fallback_music.exists():
-                    resolved_bg_music = str(fallback_music)
+            # 7. Background music and SFX configuration with fallback to luxury_beat.mp3
+            resolved_bg_music = None
+            if bg_music_path:
+                p = Path(bg_music_path)
+                if p.is_file():
+                    resolved_bg_music = str(p.resolve())
+                else:
+                    cand = Path(__file__).resolve().parent.parent.parent / "assets" / "music" / p.name
+                    if cand.is_file():
+                        resolved_bg_music = str(cand)
+
+            if not resolved_bg_music or not Path(resolved_bg_music).is_file():
+                for cand in [
+                    Path(__file__).resolve().parent.parent.parent / "assets" / "music" / "luxury_beat.mp3",
+                    Path("assets/music/luxury_beat.mp3").resolve(),
+                ]:
+                    if cand.is_file():
+                        resolved_bg_music = str(cand)
+                        break
 
             chime_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "chime.mp3"
             whoosh_sfx = Path(__file__).resolve().parent.parent.parent / "assets" / "sfx" / "whoosh.mp3"
@@ -544,22 +596,24 @@ class VideoCompositor:
             cmd = [
                 self.ffmpeg_exe, "-y",
                 "-i", str(walkthrough_raw),
+                "-i", str(bottom_scrim_path),
                 "-i", str(hero_badge_path),
                 "-i", str(cta_badge_path),
+                "-i", str(logo_watermark_path),
                 "-i", str(audio_path)
             ]
 
             if resolved_bg_music and Path(resolved_bg_music).exists():
                 cmd.extend(["-stream_loop", "-1", "-i", str(resolved_bg_music)])
-                next_in = 5
+                next_in = 7
                 has_chime = chime_sfx.exists()
                 has_whoosh = whoosh_sfx.exists() and len(transitions) > 0
 
                 a_chains = [
-                    f"[4:a]volume=0.20,lowpass=f=3800[bg_pre]",
-                    f"[bg_pre][3:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg]"
+                    f"[6:a]volume=0.20,lowpass=f=3800[bg_pre]",
+                    f"[bg_pre][5:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg]"
                 ]
-                mix_sources = ["[ducked_bg]", "[3:a]"]
+                mix_sources = ["[ducked_bg]", "[5:a]"]
 
                 if has_chime:
                     cmd.extend(["-i", str(chime_sfx)])
@@ -596,7 +650,7 @@ class VideoCompositor:
                 cmd.extend([
                     "-filter_complex", filter_complex_v,
                     "-map", "[v_out]",
-                    "-map", "3:a"
+                    "-map", "5:a"
                 ])
 
             cmd.extend([

@@ -15,10 +15,78 @@ from datetime import timedelta
 from typing import Tuple, Optional, List, Dict, Any
 import requests
 
-from config.settings import OUTPUT_DIR
+from config.settings import (
+    OUTPUT_DIR,
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_VOICE_ID,
+    ELEVENLABS_VOICE_ARIF,
+    ELEVENLABS_VOICE_BANU,
+    ELEVENLABS_MODEL_ID,
+)
 
 logger = logging.getLogger("elevenlabs_tts")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+class ElevenLabsSynthesisError(Exception):
+    """Raised when ElevenLabs speech synthesis fails due to quota, auth, timeout, or server error."""
+    pass
+
+
+ELEVENLABS_VOICE_ALIASES: Dict[str, str] = {
+    "eleven_male": ELEVENLABS_VOICE_ARIF,
+    "arif": ELEVENLABS_VOICE_ARIF,
+    "male": ELEVENLABS_VOICE_ARIF,
+    "eleven_female": ELEVENLABS_VOICE_BANU,
+    "female": ELEVENLABS_VOICE_BANU,
+    "banu": ELEVENLABS_VOICE_BANU,
+}
+
+
+def _synthesize_edge_fallback(
+    text: str,
+    output_audio_path: Path,
+    output_srt_path: Path,
+    voice: str,
+) -> float:
+    """Helper to synthesize audio and SRT using Edge-TTS during fallback."""
+    import asyncio
+    from src.media.tts_service import synthesize_speech_async
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(
+                asyncio.run,
+                synthesize_speech_async(
+                    text=text,
+                    output_audio_path=output_audio_path,
+                    output_srt_path=output_srt_path,
+                    voice=voice,
+                )
+            ).result()
+    else:
+        return asyncio.run(
+            synthesize_speech_async(
+                text=text,
+                output_audio_path=output_audio_path,
+                output_srt_path=output_srt_path,
+                voice=voice,
+            )
+        )
+
+
+def resolve_elevenlabs_voice_id(voice_id: Optional[str] = None) -> str:
+    """Resolves explicit voice ID or friendly alias without mutating os.environ."""
+    if voice_id and str(voice_id).strip():
+        raw = str(voice_id).strip()
+        return ELEVENLABS_VOICE_ALIASES.get(raw.lower(), raw)
+    return os.getenv("ELEVENLABS_VOICE_ID") or ELEVENLABS_VOICE_ID or "ZQJv3hwvRAIC7fvWZ1Qr"
 
 
 def seconds_to_srt_time(seconds: float) -> str:
@@ -136,49 +204,86 @@ def synthesize_elevenlabs_speech(
     api_key: Optional[str] = None,
     voice_id: Optional[str] = None,
     model_id: Optional[str] = None,
-    stability: float = 0.45,
-    similarity_boost: float = 0.80,
-    style: float = 0.25,
-    use_speaker_boost: bool = True
+    stability: float = 0.50,
+    similarity_boost: float = 0.75,
+    style: float = 0.0,
+    use_speaker_boost: bool = True,
+    version_num: Optional[int] = None,
+    speed: Optional[float] = None,
 ) -> float:
     """
     Synthesizes speech using ElevenLabs with-timestamps REST API endpoint.
-    Produces high-fidelity studio MP3 and exact word-level synchronized SRT subtitles.
+    Produces high-fidelity studio MP3 (44.1kHz 128kbps) and exact word-level synchronized SRT subtitles.
+    Accepts explicit voice_id/model_id/version_num/speed without mutating global os.environ.
+    Raises ElevenLabsSynthesisError on 401, 402, 429, 5xx, or timeout.
     Returns: duration in seconds.
     """
-    key = api_key or os.getenv("ELEVENLABS_API_KEY", "")
+    key = api_key or os.getenv("ELEVENLABS_API_KEY", "") or ELEVENLABS_API_KEY
     if not key:
         raise ValueError("ELEVENLABS_API_KEY is required for ElevenLabs TTS synthesis.")
 
-    target_voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")  # Default Adam / Custom
-    target_model = model_id or os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+    target_voice_id = resolve_elevenlabs_voice_id(voice_id)
+    target_model = (
+        (model_id.strip() if isinstance(model_id, str) and model_id.strip() else None)
+        or os.getenv("ELEVENLABS_MODEL_ID")
+        or ELEVENLABS_MODEL_ID
+        or "eleven_multilingual_v2"
+    )
 
-    output_audio_path.parent.mkdir(parents=True, exist_ok=True)
-    output_srt_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_out = Path(output_audio_path)
+    srt_out = Path(output_srt_path)
+    if version_num is not None:
+        ver = max(1, int(version_num))
+        if not re.search(rf"_v{ver}$", audio_out.stem):
+            audio_out = audio_out.with_name(f"{audio_out.stem}_v{ver}{audio_out.suffix}")
+        if not re.search(rf"_v{ver}$", srt_out.stem):
+            srt_out = srt_out.with_name(f"{srt_out.stem}_v{ver}{srt_out.suffix}")
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{target_voice_id}/with-timestamps"
+    audio_out.parent.mkdir(parents=True, exist_ok=True)
+    srt_out.parent.mkdir(parents=True, exist_ok=True)
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{target_voice_id}/with-timestamps?output_format=mp3_44100_128"
     headers = {
         "xi-api-key": key,
         "Content-Type": "application/json"
     }
 
+    voice_settings: Dict[str, Any] = {
+        "stability": stability,
+        "similarity_boost": similarity_boost,
+        "use_speaker_boost": use_speaker_boost
+    }
+    if style and style > 0:
+        voice_settings["style"] = style
+    if speed is not None:
+        voice_settings["speed"] = float(speed)
+
     payload = {
         "text": text,
         "model_id": target_model,
-        "voice_settings": {
-            "stability": stability,
-            "similarity_boost": similarity_boost,
-            "style": style,
-            "use_speaker_boost": use_speaker_boost
-        }
+        "voice_settings": voice_settings
     }
 
-    logger.info(f"Synthesizing speech via ElevenLabs (Voice: {target_voice_id}, Model: {target_model})...")
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    logger.info(f"Synthesizing speech via ElevenLabs (Voice: {target_voice_id}, Model: {target_model}, Speed: {speed})...")
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=5.0)
+    except requests.exceptions.Timeout as e:
+        logger.error(f"ElevenLabs API request timed out after 5.0s: {e}")
+        raise ElevenLabsSynthesisError(f"ElevenLabs request timed out after 5.0s: {e}") from e
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ElevenLabs API network error: {e}")
+        raise ElevenLabsSynthesisError(f"ElevenLabs network error: {e}") from e
+
+    if resp.status_code in (401, 402, 429) or (500 <= resp.status_code < 600) or (resp.status_code == 400 and "quota" in resp.text.lower()):
+        err_msg = (
+            f"ElevenLabs API error {resp.status_code}: {resp.text[:180] if resp.text else ''}"
+        )
+        logger.warning(f"{err_msg} - raising ElevenLabsSynthesisError...")
+        raise ElevenLabsSynthesisError(err_msg)
 
     if resp.status_code != 200:
         logger.error(f"ElevenLabs API Error ({resp.status_code}): {resp.text}")
-        raise RuntimeError(f"ElevenLabs TTS failed: {resp.text}")
+        raise ElevenLabsSynthesisError(f"ElevenLabs TTS failed ({resp.status_code}): {resp.text}")
 
     data = resp.json()
     audio_base64 = data.get("audio_base64", "")
@@ -189,7 +294,7 @@ def synthesize_elevenlabs_speech(
 
     # Decode and write MP3
     audio_bytes = base64.b64decode(audio_base64)
-    with open(output_audio_path, "wb") as f:
+    with open(audio_out, "wb") as f:
         f.write(audio_bytes)
 
     # Process timestamps & SRT
@@ -202,10 +307,10 @@ def synthesize_elevenlabs_speech(
         duration = max(3.0, len(audio_bytes) / 16000.0)
 
     srt_content = build_word_level_srt(words, words_per_chunk=3)
-    with open(output_srt_path, "w", encoding="utf-8") as f:
+    with open(srt_out, "w", encoding="utf-8") as f:
         f.write(srt_content)
 
-    logger.info(f"ElevenLabs synthesized {len(audio_bytes)} bytes ({duration:.2f}s, {len(words)} words) -> {output_audio_path}")
-    logger.info(f"Generated frame-accurate SRT -> {output_srt_path}")
+    logger.info(f"ElevenLabs synthesized {len(audio_bytes)} bytes ({duration:.2f}s, {len(words)} words) -> {audio_out}")
+    logger.info(f"Generated frame-accurate SRT -> {srt_out}")
 
     return duration

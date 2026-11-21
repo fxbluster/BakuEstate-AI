@@ -17,8 +17,10 @@ import type {
 } from "@/lib/ai-client";
 import {
   CORE_AGENCY_INVARIANTS,
+  OBJECTION_DOMAINS,
   buildAgentSystemInstruction,
   getAgentPersona,
+  resolvePersonaId,
 } from "@/lib/agent-personas";
 
 // Model Routing Constants
@@ -356,11 +358,12 @@ export async function POST(request: Request) {
   // 4b. Fast-path data actions (no LLM tokens needed)
   if (payload.action === "get_conversation") {
     try {
+      const canonicalAgent = resolvePersonaId(payload.agent_id);
       const { data: conv } = await supabaseAdmin
         .from("agent_conversations")
         .select("id, messages, room_type, title, updated_at")
         .eq("operator_id", operator.operatorId)
-        .eq("agent_id", payload.agent_id)
+        .or(`agent_id.eq.${payload.agent_id},agent_id.eq.${canonicalAgent}`)
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -398,11 +401,12 @@ export async function POST(request: Request) {
 
   if (payload.action === "reset_conversation") {
     try {
+      const canonicalAgent = resolvePersonaId(payload.agent_id);
       await supabaseAdmin
         .from("agent_conversations")
         .delete()
         .eq("operator_id", operator.operatorId)
-        .eq("agent_id", payload.agent_id);
+        .or(`agent_id.eq.${payload.agent_id},agent_id.eq.${canonicalAgent}`);
 
       return NextResponse.json(
         {
@@ -435,13 +439,69 @@ export async function POST(request: Request) {
     }
   }
 
+  // Fast-path action: save_insight (executes with createAdminClient to bypass client RLS)
+  if (payload.action === "save_insight") {
+    try {
+      const canonicalAgent = resolvePersonaId(payload.agent_id || "musteri_psixologiyasi");
+      let scope = payload.persona_scope;
+      if (!scope) {
+        if (canonicalAgent === "musteri_psixologiyasi") scope = "crm";
+        else if (canonicalAgent === "analitika") scope = "analytics";
+        else scope = "general";
+      }
+
+      const { data: newInsight, error: insertErr } = await supabaseAdmin
+        .from("agent_learned_insights")
+        .insert({
+          operator_id: operator.operatorId,
+          agent_id: canonicalAgent,
+          persona_scope: scope,
+          domain: payload.domain || "OBJECTION_PRICE_PER_M2",
+          insight_text: payload.insight_text,
+          confidence_score: payload.confidence_score ?? 0.85,
+          metadata: payload.metadata || {},
+        })
+        .select("id, agent_id, domain, insight_text, persona_scope, created_at")
+        .single();
+
+      if (insertErr) {
+        throw insertErr;
+      }
+
+      return NextResponse.json(
+        {
+          ok: true,
+          action: "save_insight",
+          model_served: "supabase-admin",
+          run_id: runId,
+          data: newInsight,
+        },
+        {
+          headers: {
+            "X-BakuEstate-Model-Served": "supabase-admin",
+            "X-BakuEstate-Run-Id": runId,
+          },
+        }
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: msg || "Dərslik qeydi saxlanıla bilmədi.",
+          code: "UPSTREAM_ERROR",
+          fallback_available: true,
+        },
+        { status: 500 }
+      );
+    }
+  }
+
   // 5. Dynamic Model Routing
   // - Fast Tier: scribe_response -> gemini-3.1-flash-lite
   // - Strong Tier: sentinel_audit, voice_debrief, strategist_cockpit -> gemini-3.8-flash with thinkingLevel: 'low'
-  // - Agent Hub:
-  //   * agent_id === 'teymur' -> gemini-3.1-flash-lite
-  //   * other agents -> gemini-3.8-flash with thinkingLevel: 'low'
-  //   * If monthly spend reaches 80% ($8.00), downgrade default model to gemini-3.1-flash-lite
+  // - Tri-Persona Council (mudir, analitika, musteri_psixologiyasi): gemini-3.8-flash with thinkingLevel: 'low'
+  // - If monthly spend reaches 80% ($8.00), downgrade default model to gemini-3.1-flash-lite
   const monthlySpend = await getMonthlySpend(supabaseAdmin, operator.operatorId);
   const isBudgetDowngrade = monthlySpend >= 8.0;
 
@@ -679,7 +739,8 @@ Hər kart üçün:
       } else if (payload.action === "agent_chat") {
         let conversationId = payload.conversation_id;
         let existingMessages: AgentChatMessage[] = [];
-        const roomType = payload.agent_id === "mudir" ? "OMNI" : "SPECIALIST";
+        const canonicalAgent = resolvePersonaId(payload.agent_id);
+        const roomType = canonicalAgent === "mudir" ? "OMNI" : "SPECIALIST";
 
         if (conversationId) {
           try {
@@ -701,7 +762,7 @@ Hər kart üçün:
                 .insert({
                   id: conversationId,
                   operator_id: operator.operatorId,
-                  agent_id: payload.agent_id,
+                  agent_id: canonicalAgent,
                   room_type: roomType,
                   title,
                   messages: [],
@@ -725,7 +786,7 @@ Hər kart üçün:
               .from("agent_conversations")
               .insert({
                 operator_id: operator.operatorId,
-                agent_id: payload.agent_id,
+                agent_id: canonicalAgent,
                 room_type: roomType,
                 title,
                 messages: [],
@@ -749,13 +810,22 @@ Hər kart üçün:
         // Slice sliding window: last 8 messages (max 2000 tokens)
         const historyWindow = existingMessages.slice(-8);
 
-        // Pull matching domain insights (limit 3)
+        // Pull matching domain insights using persona_scope
         let domainInsights: string[] = [];
         try {
+          let scope = "general";
+          if (canonicalAgent === "musteri_psixologiyasi") {
+            scope = "crm";
+          } else if (canonicalAgent === "analitika") {
+            scope = "analytics";
+          } else {
+            scope = "general";
+          }
+
           const { data: insights } = await supabaseAdmin
             .from("agent_learned_insights")
             .select("domain, insight_text")
-            .eq("agent_id", payload.agent_id)
+            .or(`persona_scope.eq.${scope},agent_id.eq.${payload.agent_id},agent_id.eq.${canonicalAgent}`)
             .order("created_at", { ascending: false })
             .limit(3);
 
@@ -768,12 +838,13 @@ Hər kart üçün:
           console.warn("[COPILOT AGENT CHAT] Error loading domain insights:", e);
         }
 
-        // Pull top active portfolio listings so council personas have real inventory awareness
+        // Pull top active portfolio listings so council personas have real inventory awareness.
+        // When agent_id === 'mudir' and no specific listing/lead is selected, preserve compact 8-listing active portfolio summary for morning triage CUJ 1.
         let activePortfolioSummary = "";
         try {
           const { data: activeListings } = await supabaseAdmin
             .from("listings")
-            .select("bina_id, title, price_azn_normalized, district_normalized, location, area, rooms, has_bill_of_sale, editorial_status, pipeline_status")
+            .select("id, bina_id, title, price_azn_normalized, district_normalized, location, area, rooms, has_bill_of_sale, editorial_status, pipeline_status")
             .eq("source_availability", "ACTIVE")
             .order("first_seen_at", { ascending: false })
             .limit(8);
@@ -782,7 +853,7 @@ Hər kart üçün:
             activePortfolioSummary = activeListings
               .map(
                 (l) =>
-                  `- #${l.bina_id}: ${l.title || "Mənzil"}, ${Number(l.price_azn_normalized || 0).toLocaleString("az-AZ")} AZN (${l.district_normalized || l.location || "Bakı"}), Sahə: ${l.area || "-"} m², Otaq: ${l.rooms || "-"}, Kupça: ${l.has_bill_of_sale ? "Var" : "Yoxdur"}, Status: ${l.editorial_status || l.pipeline_status}`
+                  `- #${l.bina_id} (id:${l.id}): ${l.title || "Mənzil"}, ${Number(l.price_azn_normalized || 0).toLocaleString("az-AZ")} AZN (${l.district_normalized || l.location || "Bakı"}), Sahə: ${l.area || "-"} m², Otaq: ${l.rooms || "-"}, Kupça: ${l.has_bill_of_sale ? "Var" : "Yoxdur"}, Status: ${l.editorial_status || l.pipeline_status}`
               )
               .join("\n");
           }
@@ -791,7 +862,7 @@ Hər kart üçün:
         }
 
         // Build system prompt injecting CORE_AGENCY_INVARIANTS & live inventory
-        const systemInstruction = buildAgentSystemInstruction(payload.agent_id, {
+        const systemInstruction = buildAgentSystemInstruction(canonicalAgent, {
           learnedInsights: domainInsights,
           operatorContext: payload.context
             ? `lead_id: ${payload.context.lead_id || "yoxdur"}, listing_id: ${payload.context.listing_id || "yoxdur"}, initial_text: ${payload.context.initial_text || "yoxdur"}`
@@ -815,11 +886,22 @@ ${historyWindow
 İstifadəçinin yeni müraciəti:
 "${payload.message}"
 
+QAYDALAR:
+1. Cavabın içərisində əgər elan, video və ya danışıq təqdim edirsənsə, mütləq Sol Kətan interaktiv fəaliyyət düymələrini formatla:
+   - Video və ya elan yoxlanışı: [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>)
+   - Telemetriya analitikası: [📊 Analitikaya Bax](stage:ANALYTICS_TELEMETRY:<publication_id_or_listing_id>)
+   - WhatsApp müştəri danışığı və etirazı: [💬 Danışığa Bax](stage:CRM_NEGOTIATION:<lead_id>)
+2. Səhər brifinqi və ya ümumi sorğularda ("Bugün hansı videonu paylaşaq?") portfeldən 1 və ya 2 konkret elan seç, səbəbini izah et və [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>) düyməsi ver.
+
 Tələb olunan çıxış JSON formatı:
 {
-  "content": "Agentin Bakı ləhcəsində canlı, peşəkar və konkret cavabı",
+  "content": "Agentin Bakı ləhcəsində canlı, peşəkar və konkret cavabı (lazım gəldikdə inline [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>) düyməsi ilə)",
   "suggested_followups": ["Tövsiyə olunan 1-ci sual/fəaliyyət", "Tövsiyə olunan 2-ci sual/fəaliyyət"],
   "action_payload": null VƏ YA {
+    "type": "OPEN_STAGE_CARD",
+    "cardType": "VIDEO_INSPECTION",
+    "targetEntityId": "<bina_id>"
+  } VƏ YA {
     "type": "UPDATE_LEAD_STAGE",
     "lead_id": "uuid və ya string",
     "current_stage": "cari mərhələ",
@@ -832,8 +914,8 @@ Tələb olunan çıxış JSON formatı:
     "listing_code": "kod:123456"
   } VƏ YA {
     "type": "SAVE_INSIGHT",
-    "agent_id": "${payload.agent_id}",
-    "domain": "sahə (məs: NEGOTIATION_TACTICS, DISTRICT_VALUATION, VIDEO_HOOKS, MACRO_OPS)",
+    "agent_id": "${canonicalAgent}",
+    "domain": "sahə (məs: OBJECTION_PRICE_PER_M2, OBJECTION_KUPCA_TRUST, VIDEO_HOOKS, MACRO_OPS)",
     "insight_text": "əldə edilən dərslik nəticə",
     "confidence_score": 0.85
   }
@@ -844,7 +926,10 @@ Tələb olunan çıxış JSON formatı:
           content: string;
           suggested_followups?: string[];
           action_payload?: {
-            type: "UPDATE_LEAD_STAGE" | "DISPATCH_WHATSAPP" | "SAVE_INSIGHT";
+            type: "OPEN_STAGE_CARD" | "UPDATE_LEAD_STAGE" | "DISPATCH_WHATSAPP" | "SAVE_INSIGHT";
+            cardType?: "VIDEO_INSPECTION" | "ANALYTICS_TELEMETRY" | "CRM_NEGOTIATION";
+            targetEntityId?: string;
+            payload?: Record<string, unknown>;
             lead_id?: string;
             current_stage?: string;
             recommended_stage?: string;
@@ -885,7 +970,14 @@ Tələb olunan çıxış JSON formatı:
         if (parsed?.content) {
           let resolvedActionPayload: ActionCardPayload | null = null;
           if (parsed.action_payload && parsed.action_payload.type) {
-            if (parsed.action_payload.type === "UPDATE_LEAD_STAGE") {
+            if (parsed.action_payload.type === "OPEN_STAGE_CARD") {
+              resolvedActionPayload = {
+                type: "OPEN_STAGE_CARD",
+                cardType: parsed.action_payload.cardType || "VIDEO_INSPECTION",
+                targetEntityId: parsed.action_payload.targetEntityId || "5616503",
+                payload: parsed.action_payload.payload,
+              };
+            } else if (parsed.action_payload.type === "UPDATE_LEAD_STAGE") {
               resolvedActionPayload = {
                 type: "UPDATE_LEAD_STAGE",
                 lead_id: parsed.action_payload.lead_id || payload.context?.lead_id || "lead-default",
@@ -908,7 +1000,7 @@ Tələb olunan çıxış JSON formatı:
             } else if (parsed.action_payload.type === "SAVE_INSIGHT") {
               resolvedActionPayload = {
                 type: "SAVE_INSIGHT",
-                agent_id: payload.agent_id,
+                agent_id: canonicalAgent,
                 domain: parsed.action_payload.domain || "GENERAL_OPS",
                 insight_text: parsed.action_payload.insight_text || parsed.content,
                 confidence_score: typeof parsed.action_payload.confidence_score === "number" ? parsed.action_payload.confidence_score : 0.85,
@@ -916,7 +1008,7 @@ Tələb olunan çıxış JSON formatı:
             }
           }
 
-          const personaDef = getAgentPersona(payload.agent_id);
+          const personaDef = getAgentPersona(canonicalAgent);
           const userMsg: AgentChatMessage = {
             id: crypto.randomUUID(),
             sender_type: "USER",
@@ -1074,7 +1166,8 @@ Tələb olunan çıxış JSON formatı:
     } else if (payload.action === "agent_chat") {
       let conversationId = payload.conversation_id;
       let existingMessages: AgentChatMessage[] = [];
-      const roomType = payload.agent_id === "mudir" ? "OMNI" : "SPECIALIST";
+      const canonicalAgent = resolvePersonaId(payload.agent_id);
+      const roomType = canonicalAgent === "mudir" ? "OMNI" : "SPECIALIST";
 
       if (conversationId) {
         try {
@@ -1096,7 +1189,7 @@ Tələb olunan çıxış JSON formatı:
               .insert({
                 id: conversationId,
                 operator_id: operator.operatorId,
-                agent_id: payload.agent_id,
+                agent_id: canonicalAgent,
                 room_type: roomType,
                 title,
                 messages: [],
@@ -1120,13 +1213,13 @@ Tələb olunan çıxış JSON formatı:
             .from("agent_conversations")
             .insert({
               operator_id: operator.operatorId,
-              agent_id: payload.agent_id,
+              agent_id: canonicalAgent,
               room_type: roomType,
               title,
               messages: [],
             })
-            .select("id, messages")
-            .maybeSingle();
+              .select("id, messages")
+              .maybeSingle();
 
           if (newConv) {
             conversationId = newConv.id;
@@ -1141,16 +1234,28 @@ Tələb olunan çıxış JSON formatı:
         conversationId = crypto.randomUUID();
       }
 
-      const personaDef = getAgentPersona(payload.agent_id);
+      const personaDef = getAgentPersona(canonicalAgent);
       const msgLower = (payload.message || "").toLowerCase();
       let content = "";
       let actionPayload: ActionCardPayload | null = null;
       const followups = personaDef.quickPills.slice(0, 3);
 
-      if (payload.agent_id === "mudir") {
-        content =
-          "Müraciət qəbul edildi. Bütün əməliyyat xətləri və agentlər aktiv rejimdədir. Zəruri tapşırıqlar müvafiq sahə üzrə paylanıldı.";
+      if (canonicalAgent === "mudir") {
         if (
+          msgLower.includes("video") ||
+          msgLower.includes("paylaş") ||
+          msgLower.includes("elan") ||
+          msgLower.includes("hansı") ||
+          msgLower.includes("brifinq")
+        ) {
+          content =
+            "Bugün üçün prioritet elanımız Nəsimi rayonundakı #5616503 nömrəli mənzildir. Kupçası əldədir, video montajı tamamlanıb və sosial kanallarda yüksək konversiya vəd edir.\n\n[🎬 Videoya Bax](stage:VIDEO_INSPECTION:5616503)";
+          actionPayload = {
+            type: "OPEN_STAGE_CARD",
+            cardType: "VIDEO_INSPECTION",
+            targetEntityId: "5616503",
+          };
+        } else if (
           payload.context?.lead_id ||
           msgLower.includes("mərhələ") ||
           msgLower.includes("lead")
@@ -1164,6 +1269,8 @@ Tələb olunan çıxış JSON formatı:
             rationale:
               "Müdir: Müştərinin tələbləri təhlil edildi, növbəti mərhələyə keçirilməsi tövsiyə olunur.",
           };
+          content =
+            "Müraciət qəbul edildi. Müştərinin tələbləri analiz edildi və mərhələ yeniləndi.";
         } else if (msgLower.includes("whatsapp") || msgLower.includes("mesaj")) {
           const phone = "994501234567";
           const draft =
@@ -1177,7 +1284,10 @@ Tələb olunan çıxış JSON formatı:
               : undefined,
             wa_link: buildWhatsAppUrl(phone, draft) || `https://wa.me/${phone}`,
           };
+          content = "WhatsApp ismarış qaralaması hazırlandı.";
         } else {
+          content =
+            "Müraciət qəbul edildi. Bütün əməliyyat xətləri və agentlər aktiv rejimdədir. Zəruri tapşırıqlar müvafiq sahə üzrə paylanıldı.";
           actionPayload = {
             type: "SAVE_INSIGHT",
             agent_id: "mudir",
@@ -1187,19 +1297,90 @@ Tələb olunan çıxış JSON formatı:
             confidence_score: 0.9,
           };
         }
-      } else if (payload.agent_id === "farabi") {
+      } else if (canonicalAgent === "analitika") {
+        if (
+          msgLower.includes("qrafik") ||
+          msgLower.includes("baxış") ||
+          msgLower.includes("er") ||
+          msgLower.includes("metrika") ||
+          msgLower.includes("analitik")
+        ) {
+          content =
+            "Instagram kanallarımız üzrə son 14 günlük baxış trayektoriyası və ER% median göstəricisi sabit yüksəliş nümayiş etdirir. @bakuestate.premium kanalında lüks seqment baxışları 28% artıb.\n\n[📊 Analitikaya Bax](stage:ANALYTICS_TELEMETRY:pub-default)";
+          actionPayload = {
+            type: "OPEN_STAGE_CARD",
+            cardType: "ANALYTICS_TELEMETRY",
+            targetEntityId: "pub-default",
+          };
+        } else if (
+          msgLower.includes("qiymət") ||
+          msgLower.includes("m²") ||
+          msgLower.includes("kvadrat") ||
+          msgLower.includes("arbitraj")
+        ) {
+          content = `${CORE_AGENCY_INVARIANTS.BAKU_MEDIAN_VALUATION} Təmir maya dəyəri isə ortalama 350-500 AZN/m² təşkil edir.`;
+          actionPayload = {
+            type: "SAVE_INSIGHT",
+            agent_id: "analitika",
+            domain: "DISTRICT_VALUATION",
+            insight_text: CORE_AGENCY_INVARIANTS.BAKU_MEDIAN_VALUATION,
+            confidence_score: 0.92,
+          };
+        } else {
+          content =
+            "Instagram kanallarımızda (@bakuestate.official, @baku.serfeli.evler) video çarxların ilk 3 saniyəlik qarmağı (hook) və baxış retention-u yüksəkdir. Şərhlərdən gələn isti müraciətləri dərhal WhatsApp-a yönləndirmək lazımdır.";
+          actionPayload = {
+            type: "SAVE_INSIGHT",
+            agent_id: "analitika",
+            domain: "VIDEO_HOOKS",
+            insight_text:
+              "Reels ilk 3 saniyəlik dinamik təqdimat izləyici retention-unu 40% artırır.",
+            confidence_score: 0.88,
+          };
+        }
+      } else if (canonicalAgent === "musteri_psixologiyasi") {
         if (
           msgLower.includes("komissiya") ||
           msgLower.includes("endirim") ||
           msgLower.includes("50") ||
           msgLower.includes("100")
         ) {
-          content = `Komissiya məsələsində mövqeyimiz qətidir: ${CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE}`;
-        } else {
-          content = `Sövdələşmə şərtləri və beh razılaşması hüquqi qaydada yoxlanılmalıdır. ${CORE_AGENCY_INVARIANTS.KUPCA_MANDATE}`;
-        }
-
-        if (
+          content = `Salam, komissiya məsələsində mövqeyimiz qətidir: ${CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE}`;
+          actionPayload = {
+            type: "SAVE_INSIGHT",
+            agent_id: "musteri_psixologiyasi",
+            domain: OBJECTION_DOMAINS.COMMISSION,
+            insight_text: CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE,
+            confidence_score: 0.95,
+          };
+        } else if (
+          msgLower.includes("kupça") ||
+          msgLower.includes("sənəd") ||
+          msgLower.includes("çıxarış")
+        ) {
+          content =
+            "Salam! Mənzilin Kupçası (Dövlət Reyestrindən Çıxarışı) əldədir, ipotekaya da tam yararlıdır. Notariatda bütün hüquqi yoxlanışlar təmin olunur.\n\n[💬 Danışığa Bax](stage:CRM_NEGOTIATION:lead-kupca)";
+          actionPayload = {
+            type: "SAVE_INSIGHT",
+            agent_id: "musteri_psixologiyasi",
+            domain: OBJECTION_DOMAINS.KUPCA_TRUST,
+            insight_text:
+              "Alıcıya mənzilin Kupçalı olduğu və notarial yoxlanış zəmanəti izah edildi.",
+            confidence_score: 0.9,
+          };
+        } else if (
+          msgLower.includes("baha") ||
+          msgLower.includes("qiymət") ||
+          msgLower.includes("şişirdilib")
+        ) {
+          content =
+            "Salam, xeyr, ev tam kupçalıdır, ipotekaya da yararlıdır. Qiymətdə də sahibi ilə yerində real endirim danışmaq olar. İstəyirsinizsə saat 5-də baxış təşkil edək?\n\n[💬 Danışığa Bax](stage:CRM_NEGOTIATION:lead-price)";
+          actionPayload = {
+            type: "OPEN_STAGE_CARD",
+            cardType: "CRM_NEGOTIATION",
+            targetEntityId: "lead-price",
+          };
+        } else if (
           msgLower.includes("whatsapp") ||
           msgLower.includes("mesaj") ||
           msgLower.includes("əlaqə")
@@ -1216,69 +1397,17 @@ Tələb olunan çıxış JSON formatı:
               : undefined,
             wa_link: buildWhatsAppUrl(phone, draft) || `https://wa.me/${phone}`,
           };
-        } else if (payload.context?.lead_id || msgLower.includes("mərhələ")) {
-          actionPayload = {
-            type: "UPDATE_LEAD_STAGE",
-            lead_id:
-              payload.context?.lead_id || "00000000-0000-0000-0000-000000000001",
-            current_stage: "QUALIFIED",
-            recommended_stage: "NEGOTIATING",
-            rationale:
-              "Farabi: Müştəri ilə komissiya və qiymət razılaşması aparılır.",
-          };
+          content = "Danışıq skripti hazırlandı və WhatsApp keçidi formalaşdırıldı.";
         } else {
+          content =
+            "Müştəri ilə danışıq strategiyası Bakı realizmi əsasında qurulur: " +
+            CORE_AGENCY_INVARIANTS.KUPCA_MANDATE;
           actionPayload = {
             type: "SAVE_INSIGHT",
-            agent_id: "farabi",
-            domain: "COMMISSION_DEFENSE",
-            insight_text: CORE_AGENCY_INVARIANTS.COMMISSION_FLOOR_DEFENSE,
-            confidence_score: 0.95,
-          };
-        }
-      } else if (payload.agent_id === "usta") {
-        content = `${CORE_AGENCY_INVARIANTS.BAKU_MEDIAN_VALUATION} Təmir maya dəyəri isə ortalama 350-500 AZN/m² təşkil edir.`;
-        if (payload.context?.lead_id || msgLower.includes("mərhələ")) {
-          actionPayload = {
-            type: "UPDATE_LEAD_STAGE",
-            lead_id:
-              payload.context?.lead_id || "00000000-0000-0000-0000-000000000001",
-            current_stage: "VIEWED",
-            recommended_stage: "OFFER",
-            rationale:
-              "Usta: M² qiymət arbitrajı təsdiqləndi, bazar qiymətindən 10% aşağı təklif verildi.",
-          };
-        } else {
-          actionPayload = {
-            type: "SAVE_INSIGHT",
-            agent_id: "usta",
-            domain: "DISTRICT_VALUATION",
-            insight_text: CORE_AGENCY_INVARIANTS.BAKU_MEDIAN_VALUATION,
-            confidence_score: 0.9,
-          };
-        }
-      } else if (payload.agent_id === "teymur") {
-        content =
-          "Instagram kanallarımızda (@bakuestate.official, @baku.serfeli.evler) video çarxların ilk 3 saniyəlik qarmağı (hook) və şərhlərdən gələn müraciətlərin dərhal WhatsApp-a yönləndirilməsi kritikdir.";
-        if (msgLower.includes("whatsapp") || msgLower.includes("mesaj")) {
-          const phone = "994501234567";
-          const draft =
-            "Salam! Instagram-da bəyəndiyiniz mənzillə bağlı ətraflı video və məlumat göndərirəm.";
-          actionPayload = {
-            type: "DISPATCH_WHATSAPP",
-            phone_number: phone,
-            draft_text: draft,
-            listing_code: payload.context?.listing_id
-              ? `kod:${payload.context.listing_id}`
-              : undefined,
-            wa_link: buildWhatsAppUrl(phone, draft) || `https://wa.me/${phone}`,
-          };
-        } else {
-          actionPayload = {
-            type: "SAVE_INSIGHT",
-            agent_id: "teymur",
-            domain: "VIDEO_HOOKS",
+            agent_id: "musteri_psixologiyasi",
+            domain: "OBJECTION_PRICE_PER_M2",
             insight_text:
-              "Reels ilk 3 saniyəlik dinamik təqdimat izləyici retention-unu 40% artırır.",
+              "Alıcı ilə dialoqda sakit və əsaslı Bakı ləhcəsindən istifadə olunmalıdır.",
             confidence_score: 0.88,
           };
         }
