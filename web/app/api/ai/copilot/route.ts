@@ -353,6 +353,88 @@ export async function POST(request: Request) {
     );
   }
 
+  // 4b. Fast-path data actions (no LLM tokens needed)
+  if (payload.action === "get_conversation") {
+    try {
+      const { data: conv } = await supabaseAdmin
+        .from("agent_conversations")
+        .select("id, messages, room_type, title, updated_at")
+        .eq("operator_id", operator.operatorId)
+        .eq("agent_id", payload.agent_id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      return NextResponse.json(
+        {
+          ok: true,
+          action: "get_conversation",
+          model_served: "supabase",
+          run_id: runId,
+          data: {
+            conversation_id: conv?.id || null,
+            messages: Array.isArray(conv?.messages) ? conv.messages : [],
+          },
+        },
+        {
+          headers: {
+            "X-BakuEstate-Model-Served": "supabase",
+            "X-BakuEstate-Run-Id": runId,
+          },
+        }
+      );
+    } catch {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Söhbət tarixçəsi oxuna bilmədi.",
+          code: "UPSTREAM_ERROR",
+          fallback_available: true,
+        },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (payload.action === "reset_conversation") {
+    try {
+      await supabaseAdmin
+        .from("agent_conversations")
+        .delete()
+        .eq("operator_id", operator.operatorId)
+        .eq("agent_id", payload.agent_id);
+
+      return NextResponse.json(
+        {
+          ok: true,
+          action: "reset_conversation",
+          model_served: "supabase",
+          run_id: runId,
+          data: {
+            reset: true,
+            agent_id: payload.agent_id,
+          },
+        },
+        {
+          headers: {
+            "X-BakuEstate-Model-Served": "supabase",
+            "X-BakuEstate-Run-Id": runId,
+          },
+        }
+      );
+    } catch {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Söhbət sıfırlana bilmədi.",
+          code: "UPSTREAM_ERROR",
+          fallback_available: true,
+        },
+        { status: 500 }
+      );
+    }
+  }
+
   // 5. Dynamic Model Routing
   // - Fast Tier: scribe_response -> gemini-3.1-flash-lite
   // - Strong Tier: sentinel_audit, voice_debrief, strategist_cockpit -> gemini-3.8-flash with thinkingLevel: 'low'

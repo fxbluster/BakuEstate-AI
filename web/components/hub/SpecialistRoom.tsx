@@ -11,11 +11,10 @@ import {
 import type { AgentPersonaId } from "@/lib/agent-personas";
 import { AGENT_PERSONAS } from "@/lib/agent-personas";
 import type { AgentChatMessage } from "@/lib/ai-client";
-import { invokeCopilot } from "@/lib/ai-client";
+import { invokeCopilot, getAgentConversation } from "@/lib/ai-client";
 import { useCopilot } from "@/lib/copilot-context";
 import { ChatStream } from "./ChatStream";
 import { SpecialistRoomPills } from "./SpecialistRoomPills";
-import { createClient } from "@/lib/supabase/client";
 
 interface SpecialistRoomProps {
   persona: AgentPersonaId;
@@ -24,40 +23,76 @@ interface SpecialistRoomProps {
 
 export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps) {
   const { selectedLeadId, selectedListingId, initialPrompt, setInitialPrompt } = useCopilot();
-  const [messages, setMessages] = useState<AgentChatMessage[]>([]);
+  
+  // Local storage keys
+  const storageMsgKey = `bakuestate_hub_${persona}_messages`;
+  const storageConvKey = `bakuestate_hub_${persona}_conv_id`;
+
+  // Initialize messages from localStorage for instant retention across toggles/reloads
+  const [messages, setMessages] = useState<AgentChatMessage[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(storageMsgKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return [];
+  });
+
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
+  const [conversationId, setConversationId] = useState<string | undefined>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(storageConvKey);
+        if (saved) return saved;
+      } catch {
+        // ignore
+      }
+    }
+    return undefined;
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const personaConfig = AGENT_PERSONAS[persona] || AGENT_PERSONAS.farabi;
   const initialPromptHandledRef = useRef(false);
 
-  // Load latest conversation thread from Supabase
+  // Synchronize messages to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined" && messages.length > 0) {
+      try {
+        localStorage.setItem(storageMsgKey, JSON.stringify(messages));
+      } catch {
+        // ignore
+      }
+    }
+  }, [messages, storageMsgKey]);
+
+  // Synchronize conversationId to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined" && conversationId) {
+      try {
+        localStorage.setItem(storageConvKey, conversationId);
+      } catch {
+        // ignore
+      }
+    }
+  }, [conversationId, storageConvKey]);
+
+  // Load latest conversation thread from server / Supabase via copilot API
   const loadConversation = useCallback(async () => {
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from("agent_conversations")
-        .select("id, messages")
-        .eq("operator_id", user.id)
-        .eq("agent_id", persona)
-        .eq("room_type", "SPECIALIST")
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!error && data) {
-        setConversationId(data.id);
-        if (Array.isArray(data.messages)) {
-          setMessages(data.messages as AgentChatMessage[]);
-        }
+      const res = await getAgentConversation(persona);
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id);
+      }
+      if (Array.isArray(res.messages) && res.messages.length > 0) {
+        setMessages(res.messages);
       }
     } catch (err) {
       console.debug("Notice loading conversation thread:", err);

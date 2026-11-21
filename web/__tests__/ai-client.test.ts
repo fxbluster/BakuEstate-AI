@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   invokeCopilot,
+  getAgentConversation,
+  resetAgentConversation,
   type CopilotActionPayload,
   type SentinelAuditResult,
   type ScribeTemplateResult,
@@ -136,5 +138,66 @@ describe("AI Client & Wire Contracts", () => {
     };
     expect(voice.extracted_offer_azn).toBe(175000);
     expect(voice.extracted_stage).toBe("OFFER");
+  });
+
+  it("fetches agent conversation thread via getAgentConversation", async () => {
+    const mockThread = {
+      ok: true,
+      action: "get_conversation",
+      model_served: "supabase",
+      run_id: "run-get-1",
+      data: {
+        conversation_id: "conv-farabi-123",
+        messages: [
+          {
+            id: "msg-1",
+            sender_type: "USER",
+            sender_name: "Operator",
+            content: "Salam Farabi",
+            created_at: "2026-11-21T10:00:00Z",
+          },
+          {
+            id: "msg-2",
+            sender_type: "AGENT",
+            sender_name: "Farabi",
+            content: "Aleykum salam. Eşidirəm sizi.",
+            created_at: "2026-11-21T10:00:02Z",
+          },
+        ],
+      },
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockThread,
+    });
+
+    const thread = await getAgentConversation("farabi");
+    expect(thread.conversation_id).toBe("conv-farabi-123");
+    expect(thread.messages).toHaveLength(2);
+    expect(thread.messages[0].content).toBe("Salam Farabi");
+  });
+
+  it("resets agent conversation thread via resetAgentConversation", async () => {
+    const mockReset = {
+      ok: true,
+      action: "reset_conversation",
+      model_served: "supabase",
+      run_id: "run-reset-1",
+      data: {
+        reset: true,
+        agent_id: "mudir",
+      },
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockReset,
+    });
+
+    const success = await resetAgentConversation("mudir");
+    expect(success).toBe(true);
   });
 });

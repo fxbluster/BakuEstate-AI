@@ -59,6 +59,14 @@ export type CopilotActionPayload =
       };
     }
   | {
+      action: "get_conversation";
+      agent_id: AgentPersonaId;
+    }
+  | {
+      action: "reset_conversation";
+      agent_id: AgentPersonaId;
+    }
+  | {
       action: "scribe_response";
       prompt: string;
       lead_id?: string;
@@ -214,5 +222,46 @@ export async function invokeCopilot<T = unknown>(
       code: "UPSTREAM_ERROR",
       fallback_available: true,
     };
+  }
+}
+
+/**
+ * Loads the latest active conversation thread for a given agent persona.
+ */
+export async function getAgentConversation(
+  agentId: AgentPersonaId
+): Promise<{ conversation_id: string | null; messages: AgentChatMessage[] }> {
+  try {
+    const res = await invokeCopilot<{
+      conversation_id: string | null;
+      messages: AgentChatMessage[];
+    }>({
+      action: "get_conversation",
+      agent_id: agentId,
+    });
+    if (res.ok && res.data) {
+      return res.data;
+    }
+  } catch (err) {
+    console.debug("Failed to get agent conversation:", err);
+  }
+  return { conversation_id: null, messages: [] };
+}
+
+/**
+ * Resets / clears the conversation history for a given agent persona.
+ */
+export async function resetAgentConversation(
+  agentId: AgentPersonaId
+): Promise<boolean> {
+  try {
+    const res = await invokeCopilot<{ reset: boolean }>({
+      action: "reset_conversation",
+      agent_id: agentId,
+    });
+    return res.ok;
+  } catch (err) {
+    console.debug("Failed to reset agent conversation:", err);
+    return false;
   }
 }

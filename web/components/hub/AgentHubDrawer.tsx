@@ -11,7 +11,7 @@ import { useCopilot } from "@/lib/copilot-context";
 import type { AgentPersonaId } from "@/lib/agent-personas";
 import { OmniChatRoom } from "./OmniChatRoom";
 import { SpecialistRoom } from "./SpecialistRoom";
-import { createClient } from "@/lib/supabase/client";
+import { resetAgentConversation } from "@/lib/ai-client";
 
 const PERSONA_TABS: {
   id: AgentPersonaId;
@@ -53,7 +53,12 @@ const PERSONA_TABS: {
 export function AgentHubDrawer() {
   const { isOpen, closeCopilot, activePersona, setActivePersona } = useCopilot();
   const [resetConfirm, setResetConfirm] = useState(false);
-  const [threadKey, setThreadKey] = useState(0);
+  const [threadKeys, setThreadKeys] = useState<Record<AgentPersonaId, number>>({
+    mudir: 0,
+    farabi: 0,
+    usta: 0,
+    teymur: 0,
+  });
 
   const currentTab = PERSONA_TABS.find((t) => t.id === activePersona) || PERSONA_TABS[0];
 
@@ -71,43 +76,56 @@ export function AgentHubDrawer() {
   // Reset thread handler
   const handleResetThread = async () => {
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        // Clear/archive thread for current persona
-        await supabase
-          .from("agent_conversations")
-          .delete()
-          .eq("operator_id", user.id)
-          .eq("agent_id", activePersona);
-      }
+      await resetAgentConversation(activePersona);
     } catch {
       // Ignore network errors on reset
     }
 
-    // Force re-render of room components with fresh state
-    setThreadKey((k) => k + 1);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(`bakuestate_hub_${activePersona}_messages`);
+        localStorage.removeItem(`bakuestate_hub_${activePersona}_conv_id`);
+      } catch {
+        // ignore
+      }
+    }
+
+    // Force re-render of current persona room with fresh state
+    setThreadKeys((prev) => ({
+      ...prev,
+      [activePersona]: (prev[activePersona] || 0) + 1,
+    }));
     setResetConfirm(true);
     setTimeout(() => setResetConfirm(false), 2000);
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true">
+    <div
+      className={`fixed inset-0 z-50 overflow-hidden transition-all duration-300 ${
+        isOpen
+          ? "pointer-events-auto visible opacity-100"
+          : "pointer-events-none invisible opacity-0"
+      }`}
+      role="dialog"
+      aria-modal="true"
+      aria-hidden={!isOpen}
+    >
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity animate-fadeIn"
+        className={`fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity duration-300 ${
+          isOpen ? "opacity-100" : "opacity-0"
+        }`}
         onClick={closeCopilot}
         aria-hidden="true"
       />
 
       {/* Slide-over Drawer Container */}
       <div className="fixed inset-y-0 right-0 flex max-w-full pl-0 md:pl-10">
-        <div className="w-screen max-w-2xl flex flex-col bg-obsidian-950 border-l border-slate-800/90 shadow-2xl animate-slideInRight">
+        <div
+          className={`w-screen max-w-2xl flex flex-col bg-obsidian-950 border-l border-slate-800/90 shadow-2xl transition-transform duration-300 ease-in-out ${
+            isOpen ? "translate-x-0" : "translate-x-full"
+          }`}
+        >
           {/* Top Bar: Title, Model Badge, Thread Reset, Close */}
           <div className="flex items-center justify-between border-b border-slate-800/90 px-4 py-3 bg-obsidian-900/95">
             <div className="flex items-center gap-3">
@@ -188,16 +206,35 @@ export function AgentHubDrawer() {
             })}
           </div>
 
-          {/* Room Content: Omni vs Specialist */}
-          <div className="flex-1 overflow-hidden" key={`${activePersona}-${threadKey}`}>
-            {activePersona === "mudir" ? (
-              <OmniChatRoom onSwitchPersona={(p) => setActivePersona(p)} />
-            ) : (
-              <SpecialistRoom
-                persona={activePersona}
+          {/* Room Content: Omni vs Specialist (All 4 rooms mounted and persistent) */}
+          <div className="flex-1 overflow-hidden relative">
+            <div className={`h-full flex flex-col ${activePersona === "mudir" ? "flex" : "hidden"}`}>
+              <OmniChatRoom
+                key={`mudir-${threadKeys.mudir}`}
                 onSwitchPersona={(p) => setActivePersona(p)}
               />
-            )}
+            </div>
+            <div className={`h-full flex flex-col ${activePersona === "farabi" ? "flex" : "hidden"}`}>
+              <SpecialistRoom
+                key={`farabi-${threadKeys.farabi}`}
+                persona="farabi"
+                onSwitchPersona={(p) => setActivePersona(p)}
+              />
+            </div>
+            <div className={`h-full flex flex-col ${activePersona === "usta" ? "flex" : "hidden"}`}>
+              <SpecialistRoom
+                key={`usta-${threadKeys.usta}`}
+                persona="usta"
+                onSwitchPersona={(p) => setActivePersona(p)}
+              />
+            </div>
+            <div className={`h-full flex flex-col ${activePersona === "teymur" ? "flex" : "hidden"}`}>
+              <SpecialistRoom
+                key={`teymur-${threadKeys.teymur}`}
+                persona="teymur"
+                onSwitchPersona={(p) => setActivePersona(p)}
+              />
+            </div>
           </div>
         </div>
       </div>
