@@ -1,135 +1,165 @@
-# Baku Estate AI — Autonomous Real Estate Social Media Video Pipeline
+# BakuEstate-AI — 24/7 Real Estate Video Engine, Follow-Up & Web CRM
 
-An end-to-end turn-key autonomous platform for Azerbaijani real estate social media video marketing.
-Crawls verified direct owner listings from `bina.az`, generates conversational Azerbaijani scripts, synthesizes natural neural speech with synchronized word-level karaoke subtitles using Microsoft Edge-TTS (`az-AZ-BabekNeural` @ +10%), renders 1080x1920 (9:16) vertical videos with FFmpeg (Ken Burns dynamic pan/zoom, blurred backgrounds, golden price banners, green Kupça badges), and dispatches ready-to-post leads with direct WhatsApp links to Telegram CRM.
-
-Includes a **1-click Interactive Terminal Menu (`menu.bat`)**, an **Autonomous Background Scheduler Daemon (`start_daemon.bat`)**, and a **Zero-Dependency `.env` Configuration System**.
+An autonomous Azerbaijani real estate media & CRM platform built on a **3-tier Cloud-First architecture**:
+1. **Supabase Cloud Core** — Single source of truth (8 Postgres tables with strict RLS, versioned MP4 Storage CDN, 24/7 Telegram Webhook Edge Function, and `pg_cron` follow-up & storage-pruning dispatchers).
+2. **24/7 Hosted Web CRM (`web/`)** — Mobile-responsive Next.js App Router + Supabase Auth panel accessible anytime, even when the Windows PC is powered off.
+3. **Windows Local Render & Scrape Worker (`src/worker/local_worker.py`)** — Unified daemon polling `pipeline_jobs` via `FOR UPDATE SKIP LOCKED`, running `bina.az` scraping/liveness checks, TTS narration, and FFmpeg 9:16 vertical video rendering.
 
 ---
 
-## Architecture & Project Structure
+## Architecture Overview
 
 ```
-baku-estate-ai/
-├── config/
-│   ├── __init__.py
-│   └── settings.py              # Zero-dependency .env loader, directory layouts, scraper & video configs
-├── data/
-│   ├── database.sqlite          # SQLite database (listings, google_accounts, generated_videos)
-│   ├── downloads/               # Downloaded Full HD images from bina.az CDN
-│   ├── profiles/                # Playwright persistent contexts (acc_1 .. acc_6)
-│   └── output/                  # Rendered MP4 videos, MP3 audio, SRT subs, and CRM lead JSONs
+Operator (Phone / Browser) ──► Next.js Web CRM (Anon Key + Supabase Auth + RLS) ──┐
+Operator (Telegram Mobile) ◄──► Supabase Edge Function: telegram-webhook ─────────┼──► Supabase Postgres (8 Tables)
+Supabase pg_cron (5m / daily) ─► followup-dispatcher & storage-pruner ────────────┤         ▲
+                                                                                  │         │ Poll (10s) + Heartbeat (60s)
+Windows PC (start_worker.bat) ─► src/worker/local_worker.py ──────────────────────┘         │
+                                  ├── bina.az Scraper (pre-scrape skip + liveness)          │
+                                  ├── ChangeDetector (AZN norm, repost score, Rejim 3)      │
+                                  ├── TTS (ElevenLabs / OpenAI / Edge, versioned audio)     │
+                                  ├── FFmpeg 1080x1920 Video (video_{bina_id}_v{n}.mp4)     │
+                                  └── Versioned Storage Upload + Idempotent Telegram Send ──┘
+```
+
+### Core Capabilities
+- **Zero-Duplicate Ingestion & Repost Scoring:** Pre-scrape `known_bina_ids` filtering prevents page-1 starvation. Reposts under a new `bina_id` are scored null-safely (`owner_phone_normalized` + `district` + `rooms` + `area ±3%` + `floor`; empty phone never auto-blocks; score `>= 0.85` flags `PENDING_REVIEW` in the Web CRM).
+- **Rejim 3 Price-Drop Auto-Rerender (`>= 5%` AZN):** Normalizes USD/EUR/AZN into `price_azn_normalized` to eliminate fake currency-switch drops. Auto-enqueues `RENDER_PRICE_DROP` only when all 4 guardrails pass: `editorial_status` active, `source_availability = 'ACTIVE'`, `owner_outreach_status` not `OWNER_SOLD`/`REFUSED_AGENT`, and within 24h cooldown + daily budget (`DAILY_AUTO_RENDER_LIMIT=5`).
+- **Versioned Videos & Idempotent Telegram Delivery:** Outputs `data/output/video_{bina_id}_v{n}.mp4` and uploads to `videos/{bina_id}/v{n}.mp4`. Prior `render_versions` are marked `SUPERSEDED` (never overwritten). `telegram_message_id` is persisted immediately after `sendVideo`; re-renders update the existing Telegram message in-place via `editMessageMedia`.
+- **24/7 Follow-Up & Mobile CRM:** `/lead` and `/today` commands + inline callbacks run 24/7 on Supabase Edge Functions. `followup-dispatcher` enforces Baku quiet hours (`21:30–09:00 UTC+4`), sends a `09:30` morning digest for normal tasks, and pings immediately for `HIGH` priority tasks.
+- **Security Hardening:** Zero hardcoded keys in source code, RLS enabled on all 8 Postgres tables, Telegram Webhook requires `X-Telegram-Bot-Api-Secret-Token` + `TELEGRAM_CHAT_ID`, and local `telegram_bot_service.py` enforces strict `chat_id` verification with zero `os.environ` mutation. Active Notion sync is deprecated and disabled by default (`NOTION_LEGACY_SYNC=true` to opt in).
+
+---
+
+## Project Structure
+
+```
+BakuEstate-AI/
+├── config/settings.py                # Env-only config, currency rates, Rejim 3 guardrails
+├── supabase/
+│   ├── migrations/
+│   │   ├── 202611180001_crm_core_schema.sql      # 8 tables, constraints, indexes, strict RLS
+│   │   └── 202611180002_worker_rpc_and_cron.sql  # claim/heartbeat/quota RPCs & pg_cron jobs
+│   └── functions/
+│       ├── telegram-webhook/index.ts             # 24/7 Bot API webhook (/lead, /today, callbacks)
+│       ├── followup-dispatcher/index.ts          # Baku UTC+4 reminder & morning digest dispatcher
+│       └── storage-pruner/index.ts               # 14-day SUPERSEDED/ARCHIVED MP4 pruner
+├── web/                              # 24/7 Next.js App Router Web CRM (Vercel-ready)
+│   ├── middleware.ts                 # Supabase Auth route guard
+│   └── app/                          # /login, /, /listings, /listings/[bina_id], /leads, /jobs
 ├── src/
-│   ├── __init__.py
-│   ├── database.py              # SQLite schema, transactional CRUD, and lead/video query helpers
-│   ├── scheduler.py             # Autonomous background daemon (fixed daily times or repeating intervals)
-│   ├── scraper/
-│   │   ├── __init__.py
-│   │   └── bina_scraper.py      # Next.js SSR scraper, __NEXT_DATA__ extractor, phone extractor
-│   ├── google_pool/
-│   │   ├── __init__.py
-│   │   ├── setup_accounts.py    # Persistent context directory generator & account seeder
-│   │   └── pool_manager.py      # Round-robin rotation, cooldown timers, daily quota management
-│   ├── media/
-│   │   ├── __init__.py
-│   │   ├── tts_service.py       # Azerbaijani script generation, Edge-TTS (BabekNeural), word SRT
-│   │   └── ffmpeg_compositor.py # 1080x1920 vertical compositor, Ken Burns, banners, subtitles
-│   └── dispatcher/
-│       ├── __init__.py
-│       └── telegram_crm.py      # Telegram Bot API, WhatsApp direct links, captions & hashtags
-├── tests/
-│   ├── test_db.py               # SQLite schema & state tests
-│   ├── test_scraper.py          # Next.js parser, phone normalizer & owner filter tests
-│   ├── test_google_pool.py      # Round-robin, cooldown, quota tests
-│   ├── test_tts.py              # Edge-TTS synthesis & word-level subtitle tests
-│   ├── test_compositor.py       # FFmpeg 9:16 rendering, blur, banners, and subtitle tests
-│   ├── test_dispatcher.py       # Social caption & Telegram CRM dispatcher tests
-│   ├── test_pipeline.py         # End-to-end pipeline integration tests
-│   ├── test_scheduler.py        # Autonomous scheduler calculation & daemon tests
-│   └── test_menu_and_env.py     # Interactive terminal menu, .env loader & query tests
-├── .env.example                 # Example configuration environment variables
-├── requirements.txt             # Python dependencies
-├── run_pipeline.py              # End-to-end pipeline CLI orchestrator
-├── interactive_menu.py          # Terminal interactive control center
-├── run.bat                      # 1-click batch script for running the pipeline CLI
-├── menu.bat                     # 1-click batch script for launching the Interactive Menu
-└── start_daemon.bat             # 1-click batch script for running the Background Scheduler
+│   ├── cloud/supabase_repo.py        # Supabase Postgres REST/RPC & versioned Storage repo
+│   ├── dedup/change_detector.py      # Currency norm, photo hash, repost scoring, Rejim 3 guardrails
+│   ├── scraper/bina_scraper.py       # Pre-scrape skip, photo hash refresh, 404/429 liveness check
+│   ├── media/                        # Versioned TTS (explicit engine/voice/angle) & FFmpeg compositor
+│   ├── worker/local_worker.py        # Unified Windows worker daemon (10s poll + 60s heartbeat)
+│   ├── dispatcher/
+│   │   ├── telegram_crm.py           # Telegram video dispatch & captions
+│   │   ├── telegram_bot_service.py   # Local dev/fallback bot (strict chat_id auth, thread-safe)
+│   │   ├── supabase_sync.py          # Legacy-compatible Supabase sync adapter
+│   │   └── notion_crm.py             # [DEPRECATED] Disabled unless NOTION_LEGACY_SYNC=true
+│   └── database.py                   # Local SQLite fallback (USE_CLOUD_BACKEND=false)
+├── scripts/
+│   └── migrate_sqlite_to_supabase.py # Idempotent one-time SQLite -> Postgres migration
+├── run_pipeline.py                   # End-to-end orchestrator (cloud + SQLite fallback)
+├── start_worker.bat                  # 1-click Windows Local Worker launcher
+└── tests/                            # Full unit & integration test suite
 ```
 
 ---
 
-## 1-Click Interactive Control Center (`menu.bat`)
+## Setup & Deployment Steps
 
-Launch the colorized terminal dashboard:
-```cmd
-menu.bat
-```
-*(or `python interactive_menu.py`)*
-
-### Menu Operations:
-- **[1] Yeni Mənzilləri Tap və Video Hazırla (Run Pipeline Now)**: Scrapes fresh direct owner listings and generates vertical videos immediately.
-- **[2] Xüsusi Elan ID ilə Video Hazırla (Process Specific Listing ID)**: Enter any `bina.az` ID to download its photos, build subtitles, render video, and dispatch lead.
-- **[3] 6 Google AI Hesabını Qeyd Et (Interactive Google Profile Setup 1..6)**: Inspect profiles, initialize disk directories, and open Playwright browser for manual login.
-- **[4] Telegram Bot və Çat Parametrlərini Daxil Et (.env Setup)**: Interactively view and update your Telegram Bot Token, Chat ID, Mock mode, and price filters.
-- **[5] Avtomatik Arxa Plan Cədvəlini Başlat (Start Background Daemon)**: Run the scheduler in current terminal or spawn in a detached background window.
-- **[6] Hazır Videoları və Elan Sahibləri Bazasını Göstər (View Leads & Videos)**: Table view of captured leads, phone numbers, and rendered videos with 1-click Explorer opening.
-- **[7] Bütün Testləri İcra Et (Run Full Test Suite)**: Executes all 51 automated tests directly from the menu.
-- **[0] Çıxış**: Clean exit.
-
----
-
-## Autonomous Background Daemon (`start_daemon.bat`)
-
-Run unattended on a schedule (e.g. daily at 12:30 and 19:30):
-```cmd
-start_daemon.bat
-```
-
-Command-line flags supported by `src/scheduler.py`:
-- `--times 12:30,19:30`: Set specific daily execution times (24-hour format).
-- `--interval 2.0`: Run continuously every N hours.
-- `--pages 1`: Number of search pages to scan per run.
-- `--limit 3`: Max listings to convert into videos per run.
-- `--once`: Execute a single run immediately and exit (ideal for cron or Windows Task Scheduler).
-- `--live-dispatch`: Send directly to real Telegram chat instead of mock mode.
-- `--no-startup-run`: Wait until the next scheduled time without running immediately on startup.
-
----
-
-## Configuration via `.env`
-
-Copy `.env.example` to `.env` or edit directly via Menu option `[4]`:
+### 1. Environment & Key Security
+Copy `.env.example` to `.env` and populate your credentials (rotate any previously exposed Supabase `service_role` key in the Supabase Dashboard first):
 ```env
-# Telegram CRM / Dispatcher
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ
-TELEGRAM_CHAT_ID=-1001234567890
-TELEGRAM_MOCK_DISPATCH=true
+USE_CLOUD_BACKEND=true
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<rotated-service-role-key>
+SUPABASE_ANON_KEY=<anon-key>
+SUPABASE_BUCKET=baku-estate-media
 
-# Bina.az Filtering
-CITY_ID=1
-MIN_PRICE=100000
-MAX_PRICE=350000
-BINA_OWNER_ONLY=true
+TELEGRAM_BOT_TOKEN=<bot-token>
+TELEGRAM_CHAT_ID=<operator-chat-id>
+TELEGRAM_WEBHOOK_SECRET=<random-secret-token>
+TELEGRAM_MOCK_DISPATCH=false
 
-# Daemon Scheduling
-SCHEDULE_TIMES=12:30,19:30
-SCHEDULE_INTERVAL_HOURS=0
-SCHEDULE_PAGES=1
-SCHEDULE_LIMIT=3
-SCHEDULE_RUN_ON_STARTUP=true
+# Rejim 3 Guardrails & Worker
+USD_TO_AZN_RATE=1.70
+EUR_TO_AZN_RATE=1.85
+PRICE_DROP_TRIGGER_PCT=5.0
+DAILY_AUTO_RENDER_LIMIT=5
+AUTO_RENDER_COOLDOWN_HOURS=24
+AUTO_JOB_TTL_HOURS=24
+STORAGE_PRUNE_DAYS=14
+WORKER_ID=windows-local-worker
+```
 
-# Google Pool & TTS
-GOOGLE_POOL_SIZE=6
-EDGE_TTS_VOICE=az-AZ-BabekNeural
-EDGE_TTS_RATE=+10%
+### 2. Supabase Schema, RLS & Edge Functions
+1. Apply `supabase/migrations/202611180001_crm_core_schema.sql` and `supabase/migrations/202611180002_worker_rpc_and_cron.sql` in Supabase (configure your operator Auth UUID for RLS policies).
+2. Deploy Edge Functions (`telegram-webhook`, `followup-dispatcher`, `storage-pruner`) and set Supabase Edge Function secrets (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`).
+3. Register the Telegram webhook with your secret token:
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+     -d "url=https://<project-ref>.supabase.co/functions/v1/telegram-webhook" \
+     -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+   ```
+
+### 3. One-Time SQLite Migration
+Preview first with `--dry-run`, then run live:
+```bash
+python scripts/migrate_sqlite_to_supabase.py --dry-run
+python scripts/migrate_sqlite_to_supabase.py
+```
+
+### 4. Deploy / Run the 24/7 Web CRM (`web/`)
+Configure `web/.env.local` (or Vercel Environment Variables) using **only** the public anon key (never `service_role`):
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+```
+Run locally or build for production:
+```bash
+cd web
+npm install
+npm run build
+npm run dev
+```
+
+### 5. Launch the Windows Local Worker
+Double-click `start_worker.bat` or run via CLI:
+```cmd
+start_worker.bat
+```
+Optional CLI flags for `src/worker/local_worker.py`:
+- `--poll-interval 10` — Seconds between `claim_next_pipeline_job()` polls (default `10`).
+- `--heartbeat-interval 60` — Lease heartbeat renewal interval in seconds (default `60`).
+- `--scrape-times 12:30,19:30` — Periodic Baku daily times to enqueue `SCRAPE_NEW` jobs.
+- `--liveness-interval-hours 12` — Hours between periodic `LIVENESS_CHECK` job enqueues.
+- `--once` — Claim and execute at most one job, then exit.
+
+### 6. Direct Pipeline CLI & Local SQLite Rollback
+To run a single pipeline pass directly:
+```bash
+python run_pipeline.py --pages 1 --limit 1 --live-dispatch
+```
+To temporarily roll back to local SQLite mode without Supabase Cloud:
+```bash
+set USE_CLOUD_BACKEND=false
+python run_pipeline.py --pages 1 --limit 1
 ```
 
 ---
 
-## Running the Automated Test Suite
+## Running Automated Tests
 
-Run all 51 unit and integration tests:
+Python test suite:
 ```bash
-python -m unittest discover tests
+python -m unittest discover -s tests
 ```
-All tests verify real live bina.az crawling, Microsoft Edge-TTS audio generation, word-level SRT sync, FFmpeg 1080x1920 video composition, database persistence, scheduler calculations, and interactive menu operations.
+Web CRM build & lint check:
+```bash
+cd web
+npm run lint
+npm run build
+```
