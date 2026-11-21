@@ -220,6 +220,7 @@ export function buildAgentSystemInstruction(
   options?: {
     learnedInsights?: string[];
     operatorContext?: string;
+    activePortfolioContext?: string;
   }
 ): string {
   const persona = getAgentPersona(agentId);
@@ -246,6 +247,14 @@ export function buildAgentSystemInstruction(
     sections.push(
       `\n--- CARİ ƏMƏLİYYAT KONTEKSTİ ---`,
       options.operatorContext
+    );
+  }
+
+  if (options?.activePortfolioContext) {
+    sections.push(
+      `\n--- CARİ BAZA VƏ REAL ELANLAR PORTFELİ ---`,
+      options.activePortfolioContext,
+      `QƏTİ QAYDA: İstifadəçi 'hansı videonu paylaşaq', 'hansı mənzili satırıq', 'nə təklif edək' dedikdə, ÜMUMİ VƏ NƏZƏRİYYƏ NAĞILI DANIŞMA! Birbaşa yuxarıdakı real elanlarımızdan (#kod, qiymət, ünvan, otaq, kupça) ən münasib olan 1 və ya 2 obyekti seç, adını və konkret əsasını göstərərək qərar ver!`
     );
   }
 

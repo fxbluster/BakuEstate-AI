@@ -768,12 +768,35 @@ Hər kart üçün:
           console.warn("[COPILOT AGENT CHAT] Error loading domain insights:", e);
         }
 
-        // Build system prompt injecting CORE_AGENCY_INVARIANTS
+        // Pull top active portfolio listings so council personas have real inventory awareness
+        let activePortfolioSummary = "";
+        try {
+          const { data: activeListings } = await supabaseAdmin
+            .from("listings")
+            .select("bina_id, title, price_azn_normalized, district_normalized, location, area, rooms, has_bill_of_sale, editorial_status, pipeline_status")
+            .eq("source_availability", "ACTIVE")
+            .order("first_seen_at", { ascending: false })
+            .limit(8);
+
+          if (activeListings && activeListings.length > 0) {
+            activePortfolioSummary = activeListings
+              .map(
+                (l) =>
+                  `- #${l.bina_id}: ${l.title || "Mənzil"}, ${Number(l.price_azn_normalized || 0).toLocaleString("az-AZ")} AZN (${l.district_normalized || l.location || "Bakı"}), Sahə: ${l.area || "-"} m², Otaq: ${l.rooms || "-"}, Kupça: ${l.has_bill_of_sale ? "Var" : "Yoxdur"}, Status: ${l.editorial_status || l.pipeline_status}`
+              )
+              .join("\n");
+          }
+        } catch (e) {
+          console.warn("[COPILOT AGENT CHAT] Error loading portfolio listings:", e);
+        }
+
+        // Build system prompt injecting CORE_AGENCY_INVARIANTS & live inventory
         const systemInstruction = buildAgentSystemInstruction(payload.agent_id, {
           learnedInsights: domainInsights,
           operatorContext: payload.context
             ? `lead_id: ${payload.context.lead_id || "yoxdur"}, listing_id: ${payload.context.listing_id || "yoxdur"}, initial_text: ${payload.context.initial_text || "yoxdur"}`
             : undefined,
+          activePortfolioContext: activePortfolioSummary || undefined,
         });
 
         const promptText = `
