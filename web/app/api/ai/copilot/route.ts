@@ -128,7 +128,13 @@ async function resolveOperator(
     };
   }
 
-  return null;
+  // Frictionless Single-Operator Mode (BakuEstate-AI):
+  // The Web CRM runs in frictionless mode with /login redirected to / (middleware.ts).
+  // When accessed from the browser UI without an auth session cookie, default to the canonical CRM operator.
+  return {
+    operatorId: "083d8ea3-4a73-4b85-8479-0c532ce939f0",
+    email: "operator@bakuestate.az",
+  };
 }
 
 // Budget check via public.check_copilot_budget() or ai_copilot_runs table
