@@ -730,6 +730,8 @@ class BakuLocalWorker:
             ab_metadata["routing_rule"] = route_info.get("routing_rule")
         if res.get("fallback_engine"):
             ab_metadata["fallback_engine"] = res.get("fallback_engine")
+        if res.get("visual_profile"):
+            ab_metadata["visual_profile"] = res.get("visual_profile")
 
         if render_version_id and self.repo.is_configured():
             try:

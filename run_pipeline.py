@@ -1011,6 +1011,7 @@ class BakuEstatePipeline:
                 "tts_fallback": fallback_triggered,
                 "target_account_handle": target_handle,
                 "channel_niche": channel_niche,
+                "visual_profile": visual_profile.to_dict() if visual_profile and hasattr(visual_profile, "to_dict") else None,
             }
         except Exception as e:
             logger.error(f"Error processing listing {bina_id}: {e}", exc_info=True)
