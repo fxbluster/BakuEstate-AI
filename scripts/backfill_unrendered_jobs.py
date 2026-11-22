@@ -13,9 +13,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 BASE_PROJECT_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_PROJECT_DIR) not in sys.path:
@@ -31,7 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger("backfill_unrendered")
 
 
-def get_unrendered_candidates(repo: SupabaseRepo, limit: int = 100) -> List[Dict[str, Any]]:
+def get_unrendered_candidates(repo: SupabaseRepo, limit: int = 100) -> list[dict[str, Any]]:
     """
     Finds listings in Supabase where pipeline_status IN ('NEW', 'QUEUED')
     and no completed video render exists.
@@ -53,10 +52,10 @@ def get_unrendered_candidates(repo: SupabaseRepo, limit: int = 100) -> List[Dict
             )
             if resp.status_code == 200:
                 candidates = resp.json() or []
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("Error querying listings table: %s", exc)
 
-    unrendered: List[Dict[str, Any]] = []
+    unrendered: list[dict[str, Any]] = []
     for item in candidates:
         listing_id = item.get("id")
         if not listing_id:
@@ -78,7 +77,7 @@ def get_unrendered_candidates(repo: SupabaseRepo, limit: int = 100) -> List[Dict
             )
             if rv_resp.status_code == 200 and rv_resp.json():
                 has_completed = True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Error checking render_versions for listing %s: %s", listing_id, exc)
 
         if not has_completed:
@@ -87,7 +86,7 @@ def get_unrendered_candidates(repo: SupabaseRepo, limit: int = 100) -> List[Dict
     return unrendered
 
 
-def check_active_job_for_listing(repo: SupabaseRepo, listing_id: str) -> Optional[Dict[str, Any]]:
+def check_active_job_for_listing(repo: SupabaseRepo, listing_id: str) -> dict[str, Any] | None:
     """
     Queries pipeline_jobs to see if a QUEUED or RUNNING job already exists for listing_id.
     """
@@ -107,7 +106,7 @@ def check_active_job_for_listing(repo: SupabaseRepo, listing_id: str) -> Optiona
         if resp.status_code == 200:
             rows = resp.json() or []
             return rows[0] if rows else None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("Error checking active pipeline jobs for listing %s: %s", listing_id, exc)
     return None
 
@@ -115,8 +114,8 @@ def check_active_job_for_listing(repo: SupabaseRepo, listing_id: str) -> Optiona
 def run_backfill(
     commit: bool = False,
     limit: int = 100,
-    repo: Optional[SupabaseRepo] = None,
-) -> Dict[str, Any]:
+    repo: SupabaseRepo | None = None,
+) -> dict[str, Any]:
     """
     Executes backfill reconciliation.
     If commit=False, performs dry-run only.

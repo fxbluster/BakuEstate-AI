@@ -10,14 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 BASE_PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_PROJECT_DIR) not in sys.path:
@@ -64,8 +63,8 @@ class WatchdogSupervisor:
 
     def __init__(
         self,
-        worker_cmd: Optional[List[str]] = None,
-        repo: Optional[SupabaseRepo] = None,
+        worker_cmd: list[str] | None = None,
+        repo: SupabaseRepo | None = None,
         *,
         worker_id: str = WORKER_ID,
         crash_state_path: Path = DEFAULT_CRASH_STATE_FILE,
@@ -90,7 +89,7 @@ class WatchdogSupervisor:
         self.consecutive_crash_limit = max(1, int(consecutive_crash_limit))
 
         self.current_backoff = self.initial_backoff
-        self.current_process: Optional[subprocess.Popen] = None
+        self.current_process: subprocess.Popen | None = None
         self._stop_requested = False
 
         setup_watchdog_logging(self.log_file_path)
@@ -99,7 +98,7 @@ class WatchdogSupervisor:
     # Crash State & Telemetry Helpers
     # ------------------------------------------------------------------
 
-    def load_crash_state(self) -> Dict[str, Any]:
+    def load_crash_state(self) -> dict[str, Any]:
         """Loads crash state from disk or initializes default state."""
         if self.crash_state_path.exists():
             try:
@@ -108,18 +107,18 @@ class WatchdogSupervisor:
                     return {
                         "last_job_id": data.get("last_job_id"),
                         "failure_count": int(data.get("failure_count", 0)),
-                        "timestamp": data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
                     }
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not read crash state file (%s): %s", self.crash_state_path, exc)
 
         return {
             "last_job_id": None,
             "failure_count": 0,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
-    def save_crash_state(self, state: Dict[str, Any]) -> None:
+    def save_crash_state(self, state: dict[str, Any]) -> None:
         """Persists crash state atomically to disk."""
         try:
             self.crash_state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,10 +126,10 @@ class WatchdogSupervisor:
                 json.dumps(state, indent=2),
                 encoding="utf-8",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("Failed to write crash state file (%s): %s", self.crash_state_path, exc)
 
-    def get_active_job_id(self) -> Optional[str]:
+    def get_active_job_id(self) -> str | None:
         """
         Resolves active job ID from local marker file or Supabase worker telemetry.
         """
@@ -140,7 +139,7 @@ class WatchdogSupervisor:
                 data = json.loads(self.active_job_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and data.get("job_id"):
                     return str(data["job_id"]).strip()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Error reading active job marker: %s", exc)
 
         # 2. Check running job locked by worker in Supabase pipeline_jobs
@@ -149,7 +148,7 @@ class WatchdogSupervisor:
                 running_job = self.repo.get_running_job_for_worker(self.worker_id)
                 if running_job and running_job.get("id"):
                     return str(running_job["id"]).strip()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Error querying running job for worker %s: %s", self.worker_id, exc)
 
             # 3. Check worker_heartbeats telemetry
@@ -157,7 +156,7 @@ class WatchdogSupervisor:
                 heartbeat = self.repo.get_worker_heartbeat(self.worker_id)
                 if heartbeat and heartbeat.get("current_job_id"):
                     return str(heartbeat["current_job_id"]).strip()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Error querying worker heartbeat for %s: %s", self.worker_id, exc)
 
         return None
@@ -193,14 +192,14 @@ class WatchdogSupervisor:
                         error_message="POISON_PILL_ABORT",
                     )
                     success = bool(res2)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to fence poison-pill job %s in Supabase: %s", job_id, exc)
 
         # Remove local active job file if it matches
         if self.active_job_path.exists():
             try:
                 self.active_job_path.unlink()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         return success
@@ -223,7 +222,7 @@ class WatchdogSupervisor:
             else:
                 state["last_job_id"] = active_job_id
                 state["failure_count"] = 1
-            state["timestamp"] = datetime.now(timezone.utc).isoformat()
+            state["timestamp"] = datetime.now(UTC).isoformat()
 
             if state["failure_count"] >= self.consecutive_crash_limit:
                 alert_msg = (
@@ -241,7 +240,7 @@ class WatchdogSupervisor:
                 # Reset crash state counter
                 state["last_job_id"] = None
                 state["failure_count"] = 0
-                state["timestamp"] = datetime.now(timezone.utc).isoformat()
+                state["timestamp"] = datetime.now(UTC).isoformat()
 
             self.save_crash_state(state)
         else:
@@ -257,9 +256,9 @@ class WatchdogSupervisor:
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.log_file_path, "a", encoding="utf-8") as f:
-                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"{now_str} [CRITICAL] [Watchdog] {message}\n")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("Failed to append emergency alert to log: %s", exc)
 
     # ------------------------------------------------------------------
@@ -295,9 +294,9 @@ class WatchdogSupervisor:
                     proc.kill()
                     proc.wait(timeout=2.0)
                     logger.info("Child process PID %s forcefully killed.", proc.pid)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     logger.error("Error while killing child process PID %s: %s", proc.pid, exc)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.error("Error while terminating child process PID %s: %s", proc.pid, exc)
 
     def stop(self) -> None:
@@ -306,7 +305,7 @@ class WatchdogSupervisor:
         self._stop_requested = True
         self.terminate_child()
 
-    def run(self, max_restarts: Optional[int] = None) -> None:
+    def run(self, max_restarts: int | None = None) -> None:
         """
         Continuous supervisor execution loop.
         Monitors child process, handles crashes with backoff, and shuts down cleanly.
