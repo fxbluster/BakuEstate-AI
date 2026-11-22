@@ -23,6 +23,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import {
   ARCHETYPE_LABELS,
+  type BadgeTone,
   buildWhatsAppUrl,
   DUPLICATE_RESOLUTION_META,
   EDITORIAL_STATUS_META,
@@ -460,11 +461,26 @@ export function ListingDetailClient({
     }
   }
 
-  const edMeta = EDITORIAL_STATUS_META[listing.editorial_status];
-  const avMeta = SOURCE_AVAILABILITY_META[listing.source_availability];
-  const pipeMeta = PIPELINE_STATUS_META[listing.pipeline_status];
-  const ownerMeta = OWNER_OUTREACH_META[listing.owner_outreach_status];
-  const dupMeta = DUPLICATE_RESOLUTION_META[listing.duplicate_resolution];
+  const edMeta = EDITORIAL_STATUS_META[listing.editorial_status] ?? {
+    label: listing.editorial_status || "Baxış gözləyir",
+    tone: "amber" as BadgeTone,
+  };
+  const avMeta = SOURCE_AVAILABILITY_META[listing.source_availability] ?? {
+    label: listing.source_availability || "Aktiv",
+    tone: "emerald" as BadgeTone,
+  };
+  const pipeMeta = PIPELINE_STATUS_META[listing.pipeline_status] ?? {
+    label: listing.pipeline_status || "Yeni",
+    tone: "sky" as BadgeTone,
+  };
+  const ownerMeta = OWNER_OUTREACH_META[listing.owner_outreach_status] ?? {
+    label: listing.owner_outreach_status || "Əlaqə yoxdur",
+    tone: "neutral" as BadgeTone,
+  };
+  const dupMeta = DUPLICATE_RESOLUTION_META[listing.duplicate_resolution] ?? {
+    label: listing.duplicate_resolution || "Təkrarsız",
+    tone: "neutral" as BadgeTone,
+  };
 
   const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
 
@@ -621,8 +637,8 @@ export function ListingDetailClient({
               </h2>
               {selectedRender && (
                 <StatusBadge
-                  label={`v${selectedRender.version_num} • ${RENDER_STATUS_META[selectedRender.status].label}`}
-                  tone={RENDER_STATUS_META[selectedRender.status].tone}
+                  label={`v${selectedRender.version_num} • ${(RENDER_STATUS_META[selectedRender.status] ?? { label: selectedRender.status }).label}`}
+                  tone={(RENDER_STATUS_META[selectedRender.status] ?? { tone: "neutral" as BadgeTone }).tone}
                 />
               )}
             </div>
@@ -665,7 +681,10 @@ export function ListingDetailClient({
                   <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
                     {renders.map((ver) => {
                       const active = ver.id === selectedRender.id;
-                      const stMeta = RENDER_STATUS_META[ver.status];
+                      const stMeta = RENDER_STATUS_META[ver.status] ?? {
+                        label: ver.status,
+                        tone: "neutral" as BadgeTone,
+                      };
                       return (
                         <button
                           key={ver.id}
@@ -687,7 +706,7 @@ export function ListingDetailClient({
                             />
                           </div>
                           <p className="mt-1 text-[11px] text-slate-400">
-                            {RENDER_TRIGGER_LABELS[ver.trigger_reason]}
+                            {RENDER_TRIGGER_LABELS[ver.trigger_reason] ?? ver.trigger_reason}
                             {ver.voice_id ? ` • ${ver.voice_id}` : ""}
                             {ver.duration_seconds
                               ? ` • ${Math.round(ver.duration_seconds)}s`
@@ -1031,7 +1050,10 @@ export function ListingDetailClient({
             ) : (
               <ol className="relative space-y-4 border-l border-slate-800 pl-4">
                 {events.map((ev) => {
-                  const meta = EVENT_TYPE_META[ev.event_type];
+                  const meta = EVENT_TYPE_META[ev.event_type] ?? {
+                    label: ev.event_type,
+                    tone: "neutral" as BadgeTone,
+                  };
                   return (
                     <li key={ev.id} className="relative space-y-1">
                       <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-obsidian-900 bg-gold-400" />

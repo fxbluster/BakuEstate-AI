@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/client";
 import { PreflightModal } from "./PreflightModal";
 import {
   ARCHETYPE_LABELS,
+  type BadgeTone,
   DUPLICATE_RESOLUTION_META,
   EDITORIAL_STATUS_META,
   formatAzn,
@@ -764,11 +765,23 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
             const thumb = Array.isArray(item.photo_urls)
               ? item.photo_urls[0]
               : undefined;
-            const edMeta = EDITORIAL_STATUS_META[item.editorial_status];
-            const avMeta = SOURCE_AVAILABILITY_META[item.source_availability];
-            const ownerMeta = OWNER_OUTREACH_META[item.owner_outreach_status];
+            const edMeta = EDITORIAL_STATUS_META[item.editorial_status] ?? {
+              label: item.editorial_status || "Baxış gözləyir",
+              tone: "amber" as BadgeTone,
+            };
+            const avMeta = SOURCE_AVAILABILITY_META[item.source_availability] ?? {
+              label: item.source_availability || "Aktiv",
+              tone: "emerald" as BadgeTone,
+            };
+            const ownerMeta = OWNER_OUTREACH_META[item.owner_outreach_status] ?? {
+              label: item.owner_outreach_status || "Əlaqə yoxdur",
+              tone: "neutral" as BadgeTone,
+            };
             const dupMeta =
-              DUPLICATE_RESOLUTION_META[item.duplicate_resolution];
+              DUPLICATE_RESOLUTION_META[item.duplicate_resolution] ?? {
+                label: item.duplicate_resolution || "Təkrarsız",
+                tone: "neutral" as BadgeTone,
+              };
             const render = item.latestRender;
             const pub = item.publication;
             const isDraftReady =
@@ -856,7 +869,7 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
                       >
                         <Film className="h-3 w-3" />
                         v{render.version_num} •{" "}
-                        {RENDER_STATUS_META[render.status].label}
+                        {(RENDER_STATUS_META[render.status] ?? { label: render.status }).label}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-obsidian-950/80 px-2.5 py-0.5 text-[11px] text-slate-400">

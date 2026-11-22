@@ -13,6 +13,7 @@ export type PipelineStatus =
   | "NEW"
   | "QUEUED"
   | "RENDERING"
+  | "DRAFT_READY"
   | "DISPATCHED"
   | "FAILED"
   | "SKIPPED_DUPLICATE";

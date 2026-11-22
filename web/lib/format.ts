@@ -193,6 +193,7 @@ export const PIPELINE_STATUS_META: Record<
   NEW: { label: "Yeni", tone: "sky" },
   QUEUED: { label: "Növbədə", tone: "amber" },
   RENDERING: { label: "Render gedir", tone: "violet" },
+  DRAFT_READY: { label: "Qaralama Hazır", tone: "amber" },
   DISPATCHED: { label: "Göndərilib", tone: "emerald" },
   FAILED: { label: "Xəta", tone: "rose" },
   SKIPPED_DUPLICATE: { label: "Şübhəli Təkrar", tone: "amber" },
