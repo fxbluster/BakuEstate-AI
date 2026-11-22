@@ -23,7 +23,7 @@ export default async function ListingsPage() {
       .limit(200),
     supabase
       .from("render_versions")
-      .select("id, listing_id, version_num, status, video_cdn_url, hook_type, duration_bucket")
+      .select("id, listing_id, version_num, status, video_cdn_url, hook_type, duration_bucket, created_at, completed_at")
       .order("version_num", { ascending: false })
       .limit(500),
     supabase
@@ -42,6 +42,8 @@ export default async function ListingsPage() {
       video_cdn_url: string | null;
       hook_type?: string | null;
       duration_bucket?: string | null;
+      created_at?: string | null;
+      completed_at?: string | null;
     }
   >();
 
@@ -55,6 +57,8 @@ export default async function ListingsPage() {
         video_cdn_url: (r.video_cdn_url as string | null) ?? null,
         hook_type: (r.hook_type as string | null) ?? null,
         duration_bucket: (r.duration_bucket as string | null) ?? null,
+        created_at: (r.created_at as string | null) ?? null,
+        completed_at: (r.completed_at as string | null) ?? null,
       });
     }
   }

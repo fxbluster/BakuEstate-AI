@@ -11,6 +11,7 @@ import {
   Send,
   SlidersHorizontal,
   ArrowUpRight,
+  ArrowUpDown,
   X,
   MessageCircle,
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PreflightModal } from "./PreflightModal";
+import { sortListings, SORT_OPTIONS, type SortMode } from "@/lib/listing-sorter";
 import {
   ARCHETYPE_LABELS,
   type BadgeTone,
@@ -53,6 +55,8 @@ export interface ListingWithLatestRender extends Listing {
     duration_bucket?: string | null;
     rendered_price?: number | null;
     rendered_currency?: string | null;
+    created_at?: string | null;
+    completed_at?: string | null;
   } | null;
   publication?: Publication | null;
 }
@@ -147,6 +151,7 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
     "ALL" | "PENDING_REVIEW" | "CONFIRMED_DUPLICATE" | "CLEAN"
   >("ALL");
   const [nicheFilter, setNicheFilter] = useState<ChannelNiche | "ALL">("ALL");
+  const [sortMode, setSortMode] = useState<SortMode>("DEFAULT");
 
   // Modal state for publishing
   const [selectedListingForPublish, setSelectedListingForPublish] =
@@ -230,7 +235,7 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return listings.filter((item) => {
+    const matched = listings.filter((item) => {
       // Top Segmented Tab filtering
       if (activeTab === "DRAFTS") {
         const isDraft =
@@ -299,6 +304,8 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
       }
       return true;
     });
+
+    return sortListings(matched, sortMode);
   }, [
     listings,
     activeTab,
@@ -309,10 +316,12 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
     archetypeFilter,
     kupcaFilter,
     duplicateFilter,
+    sortMode,
   ]);
 
   function resetFilters() {
     setQuery("");
+    setSortMode("DEFAULT");
     setNicheFilter("ALL");
     setEditorialFilter("ALL");
     setAvailabilityFilter("ALL");
@@ -642,15 +651,33 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
 
       {/* Search & Filter Panel */}
       <div className="exec-card p-4 space-y-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Axtar: bina_id, ünvan, rayon, başlıq və ya mülkiyyətçi telefonu..."
-            className="exec-input pl-10"
-          />
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Axtar: bina_id, ünvan, rayon, başlıq və ya mülkiyyətçi telefonu..."
+              className="exec-input pl-10"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <ArrowUpDown className="h-4 w-4 text-gold-400 shrink-0" />
+            <select
+              aria-label="Sıralama rejimi"
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as SortMode)}
+              className="exec-select text-xs min-w-[210px]"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
