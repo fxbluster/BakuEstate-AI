@@ -44,6 +44,8 @@ if (-not $LogFile) {
 }
 
 $WatchdogScript = Join-Path $WorkingDir "src\worker\watchdog.py"
+$StartupFolder = [Environment]::GetFolderPath('Startup')
+$StartupBat = Join-Path $StartupFolder "$TaskName.bat"
 
 # Ensure data\logs directory exists
 $LogDir = Split-Path -Parent $LogFile
@@ -79,7 +81,7 @@ if ($Status) {
     if ($existing) {
         $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
         Write-Host "==========================================================" -ForegroundColor Cyan
-        Write-Host " BakuEstate Worker Service Status" -ForegroundColor Cyan
+        Write-Host " BakuEstate Worker Service Status (Task Scheduler)" -ForegroundColor Cyan
         Write-Host "==========================================================" -ForegroundColor Cyan
         Write-Host "Task Name:        $($existing.TaskName)"
         Write-Host "State:            $($existing.State)"
@@ -88,25 +90,58 @@ if ($Status) {
         Write-Host "Last Task Result: $($taskInfo.LastTaskResult)"
         Write-Host "Log Output File:  $LogFile"
         Write-Host "==========================================================" -ForegroundColor Cyan
+    } elseif (Test-Path $StartupBat) {
+        Write-Host "==========================================================" -ForegroundColor Cyan
+        Write-Host " BakuEstate Worker Service Status (User Startup)" -ForegroundColor Cyan
+        Write-Host "==========================================================" -ForegroundColor Cyan
+        Write-Host "Launcher File:    $StartupBat"
+        Write-Host "Log Output File:  $LogFile"
+        $running = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*watchdog.py*" }
+        if ($running) {
+            Write-Host "Process State:    RUNNING (PID: $($running.ProcessId))" -ForegroundColor Green
+        } else {
+            Write-Host "Process State:    STOPPED" -ForegroundColor Yellow
+        }
+        Write-Host "==========================================================" -ForegroundColor Cyan
     } else {
-        Write-Host "Scheduled task '$TaskName' is NOT registered." -ForegroundColor Yellow
+        Write-Host "Service '$TaskName' is NOT registered (neither in Task Scheduler nor Startup folder)." -ForegroundColor Yellow
     }
     exit 0
 }
 
 # Handler: Start
 if ($Start) {
-    Write-Host "Starting Scheduled Task '$TaskName'..." -ForegroundColor Green
-    Start-ScheduledTask -TaskName $TaskName
-    Write-Host "Task '$TaskName' started successfully." -ForegroundColor Green
+    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Host "Starting Scheduled Task '$TaskName'..." -ForegroundColor Green
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Host "Task '$TaskName' started successfully." -ForegroundColor Green
+    } elseif (Test-Path $StartupBat) {
+        Write-Host "Starting Worker via Startup script: $StartupBat..." -ForegroundColor Green
+        Start-Process "cmd.exe" -ArgumentList "/c `"$StartupBat`"" -WindowStyle Hidden
+        Write-Host "Worker daemon started." -ForegroundColor Green
+    } else {
+        Write-Host "Cannot start: Task '$TaskName' is not registered. Run with -Register first." -ForegroundColor Yellow
+    }
     exit 0
 }
 
 # Handler: Stop
 if ($Stop) {
-    Write-Host "Stopping Scheduled Task '$TaskName'..." -ForegroundColor Yellow
-    Stop-ScheduledTask -TaskName $TaskName
-    Write-Host "Task '$TaskName' stopped." -ForegroundColor Yellow
+    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Host "Stopping Scheduled Task '$TaskName'..." -ForegroundColor Yellow
+        Stop-ScheduledTask -TaskName $TaskName
+        Write-Host "Task '$TaskName' stopped." -ForegroundColor Yellow
+    }
+    $running = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*watchdog.py*" -or $_.CommandLine -like "*local_worker.py*" }
+    if ($running) {
+        foreach ($proc in $running) {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Host "Killed process PID $($proc.ProcessId)" -ForegroundColor Yellow
+        }
+    }
+    Write-Host "Worker daemon stopped." -ForegroundColor Yellow
     exit 0
 }
 
@@ -117,8 +152,10 @@ if ($Unregister) {
         Write-Host "Unregistering Scheduled Task '$TaskName'..." -ForegroundColor Yellow
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Host "Task '$TaskName' removed successfully." -ForegroundColor Green
-    } else {
-        Write-Host "Task '$TaskName' is not currently registered." -ForegroundColor Yellow
+    }
+    if (Test-Path $StartupBat) {
+        Remove-Item -Path $StartupBat -Force
+        Write-Host "Removed Startup launcher '$StartupBat'." -ForegroundColor Green
     }
     exit 0
 }
@@ -176,6 +213,15 @@ try {
     Write-Host "To inspect logs, run:" -ForegroundColor White
     Write-Host "  Get-Content data\logs\worker_service.log -Tail 50 -Wait" -ForegroundColor Cyan
 } catch {
-    Write-Error "Failed to register Scheduled Task '$TaskName': $_"
-    exit 1
+    Write-Host "[INFO] Task Scheduler registration requires elevated admin rights ($_)." -ForegroundColor Yellow
+    Write-Host "[INFO] Falling back to Windows User Startup folder registration..." -ForegroundColor Cyan
+
+    $BatContent = "@echo off`r`ncd /d `"$WorkingDir`"`r`n`"$PythonExe`" `"$WatchdogScript`" >> `"$LogFile`" 2>&1`r`n"
+    Set-Content -Path $StartupBat -Value $BatContent -Encoding ASCII
+    Write-Host "[SUCCESS] Registered BakuEstate Worker Service in User Startup folder!" -ForegroundColor Green
+    Write-Host "Launcher Script:  $StartupBat"
+    Write-Host "Log Output File:  $LogFile"
+    Write-Host "The worker will automatically run on every Windows user login." -ForegroundColor Green
+    Write-Host "To start it immediately without waiting for next login, run:" -ForegroundColor White
+    Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\setup_worker_service.ps1 -Start" -ForegroundColor Cyan
 }
