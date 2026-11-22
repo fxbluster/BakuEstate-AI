@@ -279,7 +279,11 @@ class TestTTSService(unittest.TestCase):
             call_kwargs = mock_post.call_args[1]
             payload = call_kwargs["json"]
             self.assertEqual(payload["voice_settings"]["speed"], 1.15)
-            self.assertEqual(call_kwargs["timeout"], 5.0)
+            self.assertEqual(payload["voice_settings"]["stability"], 0.52)
+            self.assertEqual(payload["voice_settings"]["similarity_boost"], 0.82)
+            self.assertEqual(payload["voice_settings"]["style"], 0.28)
+            self.assertTrue(payload["voice_settings"]["use_speaker_boost"])
+            self.assertEqual(call_kwargs["timeout"], 15.0)
 
         temp_dir.cleanup()
 

@@ -1711,6 +1711,7 @@ class BakuLocalWorker:
             return {"job_id": job_id, "job_type": job_type, "status": "EXPIRED"}
 
         logger.info("Executing job %s (%s) on worker '%s'...", job_id, job_type, self.worker_id)
+        self._write_active_job_marker(job_id, job_type)
         self.repo.record_worker_heartbeat(
             worker_id=self.worker_id,
             current_job_id=job_id,
@@ -1855,6 +1856,7 @@ class BakuLocalWorker:
                 "heartbeats_sent": hb_thread.heartbeat_count,
             }
         finally:
+            self._clear_active_job_marker()
             hb_thread.stop()
             hb_thread.join(timeout=2.0)
             try:
@@ -1865,6 +1867,32 @@ class BakuLocalWorker:
                 )
             except Exception:
                 pass
+
+    def _write_active_job_marker(self, job_id: str, job_type: str) -> None:
+        """Writes active job metadata to local JSON marker for watchdog crash inspection."""
+        try:
+            marker_path = BASE_PROJECT_DIR / "data" / "worker_active_job.json"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(
+                json.dumps({
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "worker_id": self.worker_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write active job marker: %s", exc)
+
+    def _clear_active_job_marker(self) -> None:
+        """Removes active job marker once execution completes cleanly or handles exception."""
+        try:
+            marker_path = BASE_PROJECT_DIR / "data" / "worker_active_job.json"
+            if marker_path.exists():
+                marker_path.unlink()
+        except Exception as exc:
+            logger.warning("Failed to clear active job marker: %s", exc)
 
     # ------------------------------------------------------------------
     # Polling Loop

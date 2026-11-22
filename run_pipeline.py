@@ -666,6 +666,29 @@ class BakuEstatePipeline:
                 if not self.use_cloud_backend:
                     update_listing_status(bina_id, "PHOTOS_READY", downloaded_photos, self.db_path)
 
+            # 1b. GPT-4o Vision analysis on locally downloaded photos
+            visual_profile = None
+            if downloaded_photos:
+                try:
+                    from src.ai.vision_analyzer import analyze_listing_photos
+                    logger.info(
+                        "--- [Phase 1b/5: VISION ANALYSIS] Analyzing %d photos with GPT-4o Vision for %s ---",
+                        len(downloaded_photos),
+                        bina_id,
+                    )
+                    _photo_paths = [Path(p) if isinstance(p, str) else p for p in downloaded_photos]
+                    visual_profile = analyze_listing_photos(_photo_paths)
+                    if visual_profile and not visual_profile.is_fallback:
+                        logger.info(
+                            "GPT-4o Vision: renovation=%s, hook=%s",
+                            visual_profile.renovation_quality,
+                            visual_profile.hook_sentence_az[:60] if visual_profile.hook_sentence_az else "—",
+                        )
+                    else:
+                        logger.info("GPT-4o Vision returned fallback profile; proceeding with heuristic script.")
+                except Exception as _ve:
+                    logger.warning("Vision analysis skipped due to error: %s", _ve)
+
             if not downloaded_photos:
                 logger.warning(f"No photos available for listing {bina_id}. Cannot compose video.")
                 if self.use_cloud_backend:
@@ -714,6 +737,7 @@ class BakuEstatePipeline:
                 price_drop_info=price_drop_info,
                 model_id=model_id,
                 voice_speed=route_info.get("voice_speed"),
+                visual_profile=visual_profile,
             )
             if len(tts_res) == 6:
                 script_text, audio_path, srt_path, duration, engine_used, fallback_triggered = tts_res
@@ -780,6 +804,12 @@ class BakuEstatePipeline:
                     target_account_handle=target_handle,
                 )
                 if render_version_id:
+                    _vp_meta: dict = {}
+                    if visual_profile is not None and not getattr(visual_profile, "is_fallback", True):
+                        try:
+                            _vp_meta = visual_profile.to_dict()
+                        except Exception:
+                            pass
                     self.supabase_repo.update_render_version(
                         render_version_id,
                         {
@@ -788,6 +818,7 @@ class BakuEstatePipeline:
                             "storage_object_path": storage_object_path,
                             "video_cdn_url": video_cdn_url,
                             "duration_seconds": duration,
+                            **({"ab_metadata": {"visual_profile": _vp_meta}} if _vp_meta else {}),
                         },
                     )
             elif self.supabase_sync and self.supabase_sync.is_configured():

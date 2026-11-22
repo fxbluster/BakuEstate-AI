@@ -204,9 +204,9 @@ def synthesize_elevenlabs_speech(
     api_key: Optional[str] = None,
     voice_id: Optional[str] = None,
     model_id: Optional[str] = None,
-    stability: float = 0.50,
-    similarity_boost: float = 0.75,
-    style: float = 0.0,
+    stability: float = 0.52,
+    similarity_boost: float = 0.82,
+    style: float = 0.28,
     use_speaker_boost: bool = True,
     version_num: Optional[int] = None,
     speed: Optional[float] = None,
@@ -223,12 +223,16 @@ def synthesize_elevenlabs_speech(
         raise ValueError("ELEVENLABS_API_KEY is required for ElevenLabs TTS synthesis.")
 
     target_voice_id = resolve_elevenlabs_voice_id(voice_id)
-    target_model = (
+    raw_model = (
         (model_id.strip() if isinstance(model_id, str) and model_id.strip() else None)
         or os.getenv("ELEVENLABS_MODEL_ID")
         or ELEVENLABS_MODEL_ID
         or "eleven_multilingual_v2"
     )
+    if not raw_model or raw_model.strip().lower() in ("eleven_v4", "v4", "eleven_turbo_v4", "none"):
+        target_model = "eleven_multilingual_v2"
+    else:
+        target_model = raw_model.strip()
 
     audio_out = Path(output_audio_path)
     srt_out = Path(output_srt_path)
@@ -266,10 +270,10 @@ def synthesize_elevenlabs_speech(
 
     logger.info(f"Synthesizing speech via ElevenLabs (Voice: {target_voice_id}, Model: {target_model}, Speed: {speed})...")
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=5.0)
+        resp = requests.post(url, headers=headers, json=payload, timeout=15.0)
     except requests.exceptions.Timeout as e:
-        logger.error(f"ElevenLabs API request timed out after 5.0s: {e}")
-        raise ElevenLabsSynthesisError(f"ElevenLabs request timed out after 5.0s: {e}") from e
+        logger.error(f"ElevenLabs API request timed out after 15.0s: {e}")
+        raise ElevenLabsSynthesisError(f"ElevenLabs request timed out after 15.0s: {e}") from e
     except requests.exceptions.RequestException as e:
         logger.error(f"ElevenLabs API network error: {e}")
         raise ElevenLabsSynthesisError(f"ElevenLabs network error: {e}") from e

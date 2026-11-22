@@ -244,6 +244,8 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "ZQJv3hwvRAIC7fvWZ1Qr")
 ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")
 ELEVENLABS_VOICE_BANU = os.getenv("ELEVENLABS_VOICE_BANU", "EXAVITQu4vr4xnSDxMaL")
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+if ELEVENLABS_MODEL_ID in ("eleven_v4", "v4", "eleven_turbo_v4"):
+    ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 
 # OpenAI Professional Studio TTS Settings
 TTS_ENGINE = os.getenv("TTS_ENGINE", "elevenlabs" if os.getenv("ELEVENLABS_API_KEY") else ("openai" if os.getenv("OPENAI_API_KEY") else "edge")).lower()

@@ -1788,6 +1788,101 @@ class SupabaseRepo:
             logger.error("Exception in record_worker_heartbeat: %s", exc)
         return None
 
+    def get_worker_heartbeat(self, worker_id: str = WORKER_ID) -> Optional[Dict[str, Any]]:
+        """Queries public.worker_heartbeats for worker telemetry."""
+        if not self.enabled or not worker_id:
+            return None
+        try:
+            resp = self.session.get(
+                self._rest_url("worker_heartbeats"),
+                headers=self._headers(),
+                params={
+                    "worker_id": f"eq.{worker_id}",
+                    "select": "worker_id,last_seen_at,current_job_id,metadata_json",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                return rows[0] if rows else None
+            logger.error("get_worker_heartbeat failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in get_worker_heartbeat: %s", exc)
+        return None
+
+    def get_running_job_for_worker(self, worker_id: str = WORKER_ID) -> Optional[Dict[str, Any]]:
+        """Queries public.pipeline_jobs for active RUNNING job locked by worker_id."""
+        if not self.enabled or not worker_id:
+            return None
+        try:
+            resp = self.session.get(
+                self._rest_url("pipeline_jobs"),
+                headers=self._headers(),
+                params={
+                    "locked_by": f"eq.{worker_id}",
+                    "status": "eq.RUNNING",
+                    "order": "created_at.desc",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                return rows[0] if rows else None
+            logger.error("get_running_job_for_worker failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in get_running_job_for_worker: %s", exc)
+        return None
+
+    def get_unrendered_listings(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Fetches listings where pipeline_status IN ('NEW', 'QUEUED').
+        """
+        if not self.enabled:
+            return []
+        try:
+            resp = self.session.get(
+                self._rest_url("listings"),
+                headers=self._headers(),
+                params={
+                    "select": "id,bina_id,title,pipeline_status,content_revision,created_at",
+                    "pipeline_status": "in.(NEW,QUEUED)",
+                    "order": "created_at.asc",
+                    "limit": str(max(1, int(limit))),
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                return resp.json() or []
+            logger.error("get_unrendered_listings failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in get_unrendered_listings: %s", exc)
+        return []
+
+    def has_active_pipeline_job(self, listing_id: str) -> bool:
+        """Checks if a QUEUED or RUNNING pipeline job already exists for listing_id."""
+        if not self.enabled or not listing_id:
+            return False
+        try:
+            resp = self.session.get(
+                self._rest_url("pipeline_jobs"),
+                headers=self._headers(),
+                params={
+                    "listing_id": f"eq.{listing_id}",
+                    "status": "in.(QUEUED,RUNNING)",
+                    "select": "id,job_type,status",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                return bool(rows)
+        except Exception as exc:
+            logger.error("Exception in has_active_pipeline_job: %s", exc)
+        return False
+
     # ------------------------------------------------------------------
     # Cockpit Cards & Lead Timeline Events (AI Advisor & Sales Squad)
     # ------------------------------------------------------------------
