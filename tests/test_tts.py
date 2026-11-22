@@ -518,6 +518,36 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
         })
         self.assertEqual(res_urgent_elite["channel_niche"], CHANNEL_TIKTOK)
 
+    def test_generate_tts_for_listing_accepts_visual_profile(self):
+        """Verifies generate_tts_for_listing accepts visual_profile without error and weaves into script."""
+        from unittest.mock import patch
+        from src.media.tts_service import generate_tts_for_listing
+        from src.ai.vision_analyzer import PropertyVisualProfile
+
+        sample_listing = {
+            "bina_id": "test_vp_999",
+            "location": "Nərimanov r.",
+            "rooms": 3,
+            "area": 120,
+            "price": 280000,
+        }
+        vp = PropertyVisualProfile(
+            renovation_quality="modern_luxury",
+            hook_sentence_az="Lüks təmirli gözəl mənzil!",
+            standout_features=["genis zal", "panoramik pəncərələr"],
+        )
+        with tempfile.TemporaryDirectory() as td:
+            with patch("src.media.tts_service.synthesize_speech_async", return_value=25.0):
+                res = generate_tts_for_listing(
+                    listing=sample_listing,
+                    output_dir=Path(td),
+                    tts_engine="edge-tts",
+                    visual_profile=vp,
+                )
+                script_text = res[0]
+                self.assertIn("Lüks təmirli gözəl mənzil!", script_text)
+
+
 
 if __name__ == "__main__":
     unittest.main()

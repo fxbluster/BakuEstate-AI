@@ -644,6 +644,7 @@ def generate_tts_for_listing(
     price_drop_info: Optional[Dict[str, Any]] = None,
     model_id: Optional[str] = None,
     voice_speed: Optional[float] = None,
+    visual_profile: Optional[Any] = None,
 ) -> Tuple[str, str, str, float, str, bool]:
     """
     Synchronous wrapper to generate full Azerbaijani narration script,
@@ -680,6 +681,7 @@ def generate_tts_for_listing(
             listing,
             script_angle=script_angle,
             price_drop_info=price_drop_info,
+            visual_profile=visual_profile,
         )
     script_text = normalize_azerbaijani_phonetics(raw_script)
 
