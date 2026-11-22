@@ -1,7 +1,7 @@
 # 📌 Cari İcraat Vəziyyəti (TASK_STATE.md)
-- **Son Yenilənmə:** 2026-11-19 01:41 (Baku UTC+4)
-- **Aktiv Rejim:** İcraat Tamamlandı (In Production)
-- **Aktiv Məqsəd:** Pre-Flight Verification Gate & Selective Publishing Lifecycle
+- **Son Yenilənmə:** 2026-11-22 22:30 (Baku UTC+4)
+- **Aktiv Rejim:** İstehsalat Tamamlandı və Canlı Nəzarətdə (In Production)
+- **Aktiv Məqsəd:** Multimodal Video Pipeline (GPT-4o Vision + ElevenLabs v2) & 24/7 Watchdog Supervisor
 
 ## 1. Tamamlananlar (Faktiki Sübutlu)
 - [x] Web CRM Frictionless Auth aradan qaldırıldı və Netlify-a yerləşdirildi (200 OK)
@@ -49,3 +49,15 @@
   * Test & Build: Vitest (51/51 test keçdi, 100%), ESLint (0 warning/error), Next.js 15.5.29 production build (0 xəta, 10 marşrut uğurla tərtib edildi).
   * Canlı İstehsalat Yerləşdirməsi: Netlify istehsalatına uğurla deploy edildi (`https://bakuestate-crm.netlify.app`, Deploy ID: `6b01a25e091df351b10225cc`).
   * Canlı İstehsalat Sınağı: Canlı `/api/ai/copilot` endpoint-i `action: 'agent_chat'` ilə həm Müdir, həm də Farabi üçün yoxlanıldı (HTTP 200, canlı söhbət Supabase `agent_conversations` cədvəlində saxlanıldı).
+- [x] Multimodal Video Pipeline və 24/7 Watchdog Supervisor (100% Sübutlu İcraat):
+  * Memarlıq Layihəsi Təsdiqləndi: `docs/designs/video_pipeline_multimodal_engine.md` və `/egm-review-loop` ilə tam audit olundu (`goldfish_review_report.md` resolved).
+  * GPT-4o Multimodal Vision Analizatoru (`src/ai/vision_analyzer.py`): Cloudflare IP blokunu dəf etmək üçün lokal base64 JPEG formatında şəkillər göndərilir, təmir keyfiyyəti (`renovation_quality`) və Bakı ləhcəsində açılış cümləsi (`hook_sentence_az`) çıxarılır. 8/8 test keçdi (`tests/test_vision_analyzer.py`).
+  * ElevenLabs SOTA TTS Model İnteqrasiyası (`src/media/elevenlabs_tts.py`): Mövcud olmayan `eleven_v4` modeli `eleven_multilingual_v2` ilə əvəzləndi, HTTP timeout 5s-dən 15s-ə qaldırıldı. 33M simvol hədiyyəsi ilə Arif (`ZQJv3hwvRAIC7fvWZ1Qr`) və Banu səsləri aktivləşdirildi.
+  * TTS & Pipeline Əlaqələndirilməsi (`src/media/tts_service.py`, `run_pipeline.py`): `generate_tts_for_listing` və `generate_azerbaijani_script` funksiyalarına `visual_profile` parametri əlavə edildi, vizual xüsusiyyətlər birbaşa videonun ssenarisinə toxundu.
+  * Watchdog Daemon & Zəhərli Həb Qoruyucusu (`src/worker/watchdog.py`): Worker prosesini nəzarətdə saxlayır, qəzaya uğradıqda eksponensial gözləmə ilə yenidən başladır. Eyni elan 2 dəfə qəzaya səbəb olduqda `POISON_PILL_ABORT` ilə zərərsizləşdirilir. 5/5 test keçdi (`tests/test_watchdog.py`).
+  * Gözləyən Elanların Bərpası (`scripts/backfill_unrendered_jobs.py`): Videosu olmayan 6 elan aşkar edildi və `--commit` bayrağı ilə canlı Supabase `pipeline_jobs` növbəsinə yazıldı.
+  * Windows 24/7 Xidmət İnteqrasiyası (`scripts/setup_worker_service.ps1`): NVENC/QuickSync GPU sürətləndirilməsini qorumaq üçün Windows User Startup qovluğuna (`BakuEstateWorkerService.bat`) qeyd edildi və arxa planda işə salındı.
+  * Canlı İstehsalat Renderləri Təsdiqləndi:
+    - Elan 6560444: GPT-4o Vision `needs_repair` deteksiya etdi, Banu səsi ilə 62.7s video render olundu, Supabase CDN-ə yükləndi (`https://ejsaccbeatmwqodwwzwu.supabase.co/storage/v1/object/public/baku-estate-media/videos/6560444/v1__at_baku.serfeli.evler.mp4`), `ab_metadata["visual_profile"]` yazıldı, status: `DRAFT_READY`.
+    - Elan 6567513: GPT-4o Vision `needs_repair` deteksiya etdi ("Geniş pəncərələrlə işıqlı və ferah interyer!"), Arif səsi ilə 61.35s video render olundu, Supabase CDN-ə yükləndi (`https://ejsaccbeatmwqodwwzwu.supabase.co/storage/v1/object/public/baku-estate-media/videos/6567513/v1__at_bakuestate.premium.mp4`), `ab_metadata["visual_profile"]` yazıldı, status: `DRAFT_READY`.
+    - Elan 5867067: Watchdog daemon tərəfindən arxa planda avtonom icra olunur.
