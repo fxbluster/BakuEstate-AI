@@ -327,6 +327,7 @@ flowchart TD
     *   Instantiates `BakuEstatePipeline(enable_supabase=True)`.
     *   Iterates through target listings `['6343052', '6304638', '5867067', '6567513', '6560444', '6589921']`.
     *   Invokes `pipeline.process_listing_video_and_dispatch(listing, voice_id=designated_voice, trigger_reason="MANUAL_RERENDER", skip_telegram_dispatch=True)`.
+    *   Supports `--listing-id` for targeted single re-renders, `--exclude` to skip already rendered listings, and `--dry-run` for preflight verification.
     *   Includes 1.5s inter-job sleep to preserve ElevenLabs concurrency headroom.
 
 #### 9. `tests/test_tts.py` (Modify)

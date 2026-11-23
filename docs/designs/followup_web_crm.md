@@ -1,14 +1,14 @@
 # BakuEstate-AI: 24/7 Follow-Up, Elan Təkrarsızlığı və Veb CRM Sistemi
 
 *   **Author:** fxbluster
-*   **Status:** Implemented (In Review)
+*   **Status:** Implemented (In Production)
 *   **Date:** 2026-11-18
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-BakuEstate-AI hazırda `bina.az` elanlarından 9:16 video hazırlamaq, vahid uçot, təkrar elanların qarşısını alan yaddaş, elan dəyişikliklərinin tarixçəsi və müştəri/mülkiyyətçi follow-up idarəetməsini təmin edir. Sistem **bulud-əsaslı (Variant B)** memarlıqla işləyir: **Supabase Postgres** bütün elan, render, paylaşım, mülkiyyətçi, müştəri, iş növbəsi və worker statusu məlumatları üçün yeganə əsas baza olur; **Netlify** üzərində 24/7 işləyən sürtünməsiz (frictionless) operator çıxışlı **Next.js Veb CRM saytı** (`https://bakuestate-crm.netlify.app` — `web/middleware.ts` vasitəsilə `/login` birbaşa `/`-ə 307 yönləndirilir və cədvəllərə `anon` DML icazələri verilib) və **Supabase Edge Functions Telegram Webhook** birbaşa bu bazaya yazır; Windows kompüter isə `pipeline_jobs` növbəsindən `bina.az` yığımı, FFmpeg montajı və ElevenLabs səsləndirməsini icra edən lokal işçi (`worker`) kimi fəaliyyət göstərir.
+BakuEstate-AI hazırda `bina.az` elanlarından 9:16 video hazırlamaq, vahid uçot, təkrar elanların qarşısını alan yaddaş, elan dəyişikliklərinin tarixçəsi və müştəri/mülkiyyətçi follow-up idarəetməsini təmin edir. Sistem **bulud-əsaslı (Variant B)** memarlıqla işləyir: **Supabase Postgres** bütün elan, render, paylaşım, mülkiyyətçi, müştəri, iş növbəsi və worker statusu məlumatları üçün yeganə əsas baza olur; **Vercel** üzərində 24/7 işləyən sürtünməsiz (frictionless) operator çıxışlı **Next.js Veb CRM saytı** (`https://bakuestate-ai.vercel.app` — `web/middleware.ts` vasitəsilə `/login` birbaşa `/`-ə 307 yönləndirilir və cədvəllərə `anon` DML icazələri verilib) və **Supabase Edge Functions Telegram Webhook** birbaşa bu bazaya yazır; Windows kompüter isə `pipeline_jobs` növbəsindən `bina.az` yığımı, FFmpeg montajı və ElevenLabs səsləndirməsini icra edən lokal işçi (`worker`) kimi fəaliyyət göstərir.
 
 Yeni və təkrar olmayan elanlar, eləcə də aktiv elanlarda `≥ 5%` qiymət düşüşləri (**Rejim 3**) avtomatik olaraq yeni versiyalı video render növbəsinə düşür — lakin satılmış, arxivlənmiş və ya vasitəçidən imtina etmiş elanlar, valyuta dəyişməsindən yaranan saxta endirimlər və gündəlik kvota/soyuma limitini aşan işlər sərt qaydalarla bloklanır. Render tamamlandıqda video dərhal Telegram-a göndərilmir; video Veb CRM-də səssizcə `DRAFT_READY` kimi səhnələşdirilir (`render_versions` cədvəlində `rendered_price` saxlanılmaqla) və avtomatik Telegram video göndərişi Veb CRM-dəki Pre-Flight yoxlama qapısı ilə əvəzlənərək dekuplinq edilib.
 
@@ -25,7 +25,7 @@ Bu memarlığa keçiddən əvvəlki kod bazasının auditi 5 konkret əməliyyat
 ## Goals
 
 *   **Vahid Həqiqət Mənbəyi (Single Source of Truth):** Bütün elanlar, dəyişiklik tarixçəsi, render versiyaları, paylaşımlar, mülkiyyətçi əlaqələri, müştəri sorğuları, follow-up tapşırıqları, iş növbəsi (`pipeline_jobs`) və worker canlılığı (`worker_heartbeats`) yalnız **Supabase Postgres** bazasında saxlanılır; ikitərəfli Notion sinxronizasiyası və lokal SQLite-ın əsas baza rolu ləğv edilir.
-*   **24/7 Mobil və Veb İdarəetmə:** Netlify üzərində host edilən sürtünməsiz (frictionless) operator çıxışlı Veb CRM saytı (`https://bakuestate-crm.netlify.app` — `web/middleware.ts` vasitəsilə daimi `307` ilə `/`-ə yönləndirmə) və buludda çalışan **Telegram Webhook** vasitəsilə Windows kompüter sönülü olsa belə müştəri/mülkiyyətçi follow-up əməliyyatları, status dəyişikliyi və Telegram xatırlatmaları fasiləsiz işləyir.
+*   **24/7 Mobil və Veb İdarəetmə:** Vercel üzərində host edilən sürtünməsiz (frictionless) operator çıxışlı Veb CRM saytı (`https://bakuestate-ai.vercel.app` — `web/middleware.ts` vasitəsilə daimi `307` ilə `/`-ə yönləndirmə) və buludda çalışan **Telegram Webhook** vasitəsilə Windows kompüter sönülü olsa belə müştəri/mülkiyyətçi follow-up əməliyyatları, status dəyişikliyi və Telegram xatırlatmaları fasiləsiz işləyir.
 *   **Sıfır Təkrar Video + Ağıllı Qiymət Düşüşü İzləməsi:**
     *   Scraper `bina.az`-da artıq işlənmiş `bina_id`-ləri əvvəlcədən atlayır (səhifə-1 aclığı bitir).
     *   Eyni telefon nömrəsi ilə yeni `bina_id` altında təkrar paylaşım (`owner_phone_normalized` + `district` + `rooms` + `area±3%` + `floor`, bal `≥ 0.85`) aşkarlanıb təsdiqə çıxarılır.

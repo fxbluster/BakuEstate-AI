@@ -8,12 +8,12 @@
 
 ## 1. Overview
 
-This document specifies the architectural design of the **BakuEstate-AI Autonomous Executive Agent Hub**—an integrated, conversational command center inside the Web CRM powered by a council of 4 specialized executive agents with partitioned memory buffers, episodic learning, and executable action cards:
+This document specifies the architectural design of the **BakuEstate-AI Autonomous Executive Agent Hub**—an integrated, conversational command center inside the Web CRM powered by specialized executive agents with partitioned memory buffers, episodic learning, and executable action cards (later consolidated into the tri-persona cognitive copilot: `mudir`, `analitika`, and `musteri_psixologiyasi` in `left_canvas_action_stage_and_tri_persona_copilot.md`):
 
 * **Chief of Staff & Omni Dispatcher (`Müdir`)**: Central coordinator that understands macro-project context, triages operator intent, routes tasks to domain specialists in the background, and synthesizes unified briefings.
-* **Deal Strategist & Commission Shield (`Farabi`)**: Street-smart negotiation and commercial advisor specializing in buyer/seller psychology, commission defense (rebutting 50–100 AZN shaving requests), Kupça legal warranties, objection battlecards, Beh agreements, and commercial deal structuring.
+* **Deal Strategist & Commission Shield (`Farabi` / `musteri_psixologiyasi`)**: Street-smart negotiation and commercial advisor specializing in buyer/seller psychology, commission defense (rebutting 50–100 AZN shaving requests), Kupça legal warranties, objection battlecards, Beh agreements, and commercial deal structuring.
 * **Pricing & Market Arbitrageur (`Usta`)**: Neighborhood valuation expert tracking real square-meter transaction rates across Baku districts, identifying underpriced listings on bina.az, and vetting title deed encumbrances.
-* **Audience & Social Media Analyst (`Teymur`)**: Growth engineer monitoring performance across 4 social channels (`@bakuestate.official`, `@baku.serfeli.evler`, `@bakuestate.premium`, `@baku_emlak_ai`), evaluating video hooks, viewing retention, and comment-to-lead pipelines.
+* **Audience & Social Media Analyst (`Teymur` / `analitika`)**: Growth engineer monitoring performance across 4 social channels (`@bakuestate.official`, `@baku.serfeli.evler`, `@bakuestate.premium`, `@baku_emlak_ai`), evaluating video hooks, viewing retention, and comment-to-lead pipelines.
 
 Interaction is split between an **Omni-Chat Command Room** (top-level routing and cross-domain synthesis) and **Dedicated Specialist Rooms** (deep domain isolation). Memory is partitioned into immutable agency rules configured in code constants and evolving episodic takeaways (`agent_learned_insights`), preventing context bloating while fostering continuous adaptation to the local Azerbaijani real estate market.
 
@@ -56,7 +56,7 @@ The architecture operates on a decoupled client-serverless model where the Web C
 
 ```mermaid
 flowchart TD
-    subgraph Client["Web CRM Client (Next.js 15 App Router)"]
+    subgraph Client["Web CRM Client (Next.js 16 App Router)"]
         Sidebar["Desktop Sidebar & Trigger\n(⚡ AI Qərargahı)"]
         OmniChat["Omni-Chat Command Room\n(Müdir Dispatcher)"]
         SpecRooms["Specialist Rooms\n(Farabi, Usta, Teymur)"]

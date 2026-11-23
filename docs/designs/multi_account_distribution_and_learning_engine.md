@@ -1,7 +1,7 @@
 # BakuEstate-AI: Multi-Account Social Distribution, Broker Funnel & Continuous AI Learning Engine
 
 * **Author:** Dəniz & Antigravity
-* **Status:** In Review (Round 1 Approved Fixes)
+* **Status:** Implemented (In Production)
 * **Date:** 2026-11-19
 
 --------------------------------------------------------------------------------
@@ -33,7 +33,7 @@ While BakuEstate-AI possesses an automated video rendering engine, pre-flight li
 
 * **Goal 1 (Curated Social Lead Funnel):** Standardize video captions and kinetic CTAs to direct viewers to Instagram/TikTok comments and DMs without inflating portal prices or leaking property location specifics.
 * **Goal 2 (Multi-Account Niche Matrix):** Partition public distribution across segmented social channels (e.g., `@bakuestate.premium` for luxury/central properties $\ge \text{250 000 AZN}$ vs. `@baku.serfeli.evler` for budget/mortgage properties $< \text{150 000 AZN}$) with synchronized telemetry in the Web CRM.
-* **Goal 3 (Voice Quality Invariance & Deterministic Engines):** Standardize speech synthesis on high-fidelity Azerbaijani voice profiles (Arif via ElevenLabs, Banu/Babek via Edge-TTS) with deterministic fallback cascades and strict phonetic preprocessing (`AZN` $\rightarrow$ `manat`, `m²` $\rightarrow$ `kvadrat metr`).
+* **Goal 3 (Voice Quality Invariance & Deterministic Engines):** Standardize speech synthesis on high-fidelity native Azerbaijani ElevenLabs voice profiles (Arif `ZQJv3hwvRAIC7fvWZ1Qr` for Luxury/General, Ayan `DZaip8UahF0Qri1FxU8M` for Affordable/TikTok) with deterministic fallback cascades to Edge-TTS (`az-AZ-BabekNeural`, `az-AZ-BanuNeural`) and strict phonetic preprocessing (`AZN` $\rightarrow$ `manat`, `m²` $\rightarrow$ `kvadrat metr`).
 * **Goal 4 (Citadel-Pattern AI Intelligence Loop):** Introduce a lead timeline and mutation store where operator interactions (buyer calls, seller negotiations, commission agreements) are recorded, and an LLM intelligence engine surfaces automated action cards and objection handling scripts.
 
 --------------------------------------------------------------------------------
@@ -50,7 +50,7 @@ While BakuEstate-AI possesses an automated video rendering engine, pre-flight li
 
 ### CUJ 1: Automated Ingestion, Safe-Zone Compositing, and Multi-Account Publication
 1. **Ingestion & Assignment:** The worker scrapes a fresh bina.az listing (e.g., a 240 m² 4-room apartment at 1 000 000 AZN in Sahil). `AccountRouter` deterministically classifies it as `LUXURY`, routing it to `@bakuestate.premium`, selecting ElevenLabs voice profile `Arif` (`ZQJv3hwvRAIC7fvWZ1Qr`), and picking ambient lounge music.
-2. **Safe-Zone Rendering:** `ffmpeg_compositor.py` renders a 9:16 vertical video adhering to Reels/TikTok safe margins: kinetic subtitles centered at $y \in [1250, 1420]$ px, hero price badge centered at $y = 186$ px ($x=80$ px, $w=920$ px), and all owner phone numbers purged. The final 4 seconds display a full-screen CTA: *"Dəqiq ünvan, ətraflı video və baxış üçün ŞƏRHƏ 'EV' yazın və ya DM göndərin!"*.
+2. **Safe-Zone Rendering:** `ffmpeg_compositor.py` renders a 9:16 vertical video adhering to Reels/TikTok safe margins: kinetic subtitles baseline at $y = 1380$ px (`MarginV=540`), hero price badge centered at $y = 186$ px ($x=80$ px, $w=920$ px, display $\ge 3.2$s), compact watermark pill ($180 \times 40$ px at $x=860, y=24$), and all owner phone numbers purged. The final 4 seconds display a full-screen CTA: *"Dəqiq ünvan, ətraflı video və baxış üçün ŞƏRHƏ 'EV' yazın və ya DM göndərin!"*.
 3. **Pre-flight & 1-Tap Handover:** The operator opens the Web CRM, verifies live listing status via residential proxy preflight, and clicks **[ 🚀 Təsdiqlə və Telegram-a Göndər ]**. Telegram delivers the high-bitrate MP4 alongside a 1-tap copyable caption block and direct links.
 4. **Mobile Publication:** The operator switches to the target account via isolated Android Work Profile, uploads the reel, pastes the caption, and confirms publication in Telegram via `/published <bina_id> <post_url>`.
 

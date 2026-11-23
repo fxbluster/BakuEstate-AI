@@ -27,7 +27,7 @@ Operators managing social distribution handle dozens of video assets weekly. Bec
 - The Web CRM Pre-Flight verification modal must feature a color-coded account pill badge.
 
 ### 2. Audio Quality Variance & Quota Telemetry Silence
-While ElevenLabs produces lifelike Azerbaijani speech via Arif (`ZQJv3hwvRAIC7fvWZ1Qr`) and Banu (`EXAVITQu4vr4xnSDxMaL`), previous routing relegated several accounts to Edge-TTS. Furthermore, when ElevenLabs quotas or character limits are reached, the system silently degraded to Edge-TTS without emitting SRE alerts to Telegram or tagging render metadata, leaving operators unaware of why a video featured robotic audio.
+While ElevenLabs produces lifelike Azerbaijani speech via Arif (`ZQJv3hwvRAIC7fvWZ1Qr`) and Ayan (`DZaip8UahF0Qri1FxU8M` / Banu profile; unverified foreign voice `EXAVITQu4vr4xnSDxMaL` purged), previous routing relegated several accounts to Edge-TTS. Furthermore, when ElevenLabs quotas or character limits are reached, the system silently degraded to Edge-TTS without emitting SRE alerts to Telegram or tagging render metadata, leaving operators unaware of why a video featured robotic audio.
 
 ### 3. Skewed Metrics & Disconnected Pipeline Attribution
 In `web/components/AnalyticsClient.tsx`, calculating a single global median view count (e.g., 20,000 views) skews normalized scoring against luxury properties, which naturally average 1,500–3,000 views but generate substantially higher commission margins. In addition, standard social engagement metrics ($\text{ER\%}$) are missing, there are no per-account filter tabs, and the analytics dashboard does not connect inbound public engagement to downstream CRM pipeline milestones (`showing_scheduled`, `won_closed`, and `actual_commission_azn`).
@@ -40,8 +40,8 @@ In `web/components/AnalyticsClient.tsx`, calculating a single global median view
   1. Telegram delivery message Line 1 (`🎯 PAYLAŞILACAQ HESAB: @handle (NİŞ)`).
   2. Output MP4 filename (`video_{bina_id}_v{n}__at_{clean_handle}.mp4`).
   3. Web CRM Pre-Flight verification modal pill badge.
-  *(Upper-third video watermark pill remains generic `BAKU ESTATE / VERIFIED LISTING` (330px) to preserve content portability, cross-promotion flexibility, and cache reusability).*
-* **G2 (100% Studio Voiceover Guarantee):** Reconfigure `account_router.py` to route all 4 distribution niches (`LUXURY`, `AFFORDABLE`, `GENERAL`, `TIKTOK`) exclusively to ElevenLabs neural voices (Arif and Banu).
+  *(Upper-third video watermark pill was later refined to a compact 180x40 pill placed at (x=860, y=24) in the V2 compositor to preserve content portability, cross-promotion flexibility, and prevent canvas edge clipping).*
+* **G2 (100% Studio Voiceover Guarantee):** Reconfigure `account_router.py` to route all 4 distribution niches (`LUXURY`, `AFFORDABLE`, `GENERAL`, `TIKTOK`) exclusively to ElevenLabs neural voices (Arif and Ayan).
 * **G3 (SRE Telemetry & Automated Fallback Warning):** Detect quota depletion, timeouts ($\le 5.0\text{s}$), and API errors in `tts_service.py` / `elevenlabs_tts.py`, gracefully fall back to Edge-TTS to avoid blocking the pipeline, record canonical metadata in `render_versions.ab_metadata`, and deliver an immediate high-priority warning card to Telegram with a 1-tap re-render callback button.
 * **G4 (Isolated Per-Niche Analytics & Fair Scoring):** Overhaul `AnalyticsClient.tsx` to compute rolling median views and NER independently per channel niche, guarding against cold-start sample skew with calibrated baseline anchors and division-by-zero guards.
 * **G5 (Standard Social Engagement & Real Attribution Funnel):** Implement platform-resilient Engagement Rate calculations ($\text{ER\%}$) and a 4-tier lead attribution funnel grounded in mobile Instagram reality (Views $\rightarrow$ Video Engagement $\rightarrow$ Scraped Intent Comments $\rightarrow$ Bio Links / Inbound CRM Leads $\rightarrow$ Showings $\rightarrow$ Commissions).
@@ -174,7 +174,7 @@ flowchart TD
 * **Voice Configuration Matrix:**
   All niches in `account_router.py` return `"voice_engine": "elevenlabs"`. Voice constants are configured in `config/settings.py`:
   - `ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")` (male, prestigious).
-  - `ELEVENLABS_VOICE_BANU = os.getenv("ELEVENLABS_VOICE_BANU", "EXAVITQu4vr4xnSDxMaL")` (female, articulate).
+  - `ELEVENLABS_VOICE_AYAN = os.getenv("ELEVENLABS_VOICE_AYAN", "DZaip8UahF0Qri1FxU8M")` (female, articulate; `ELEVENLABS_VOICE_BANU` aliased to Ayan; `EXAVITQu4vr4xnSDxMaL` purged).
   - `ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")`
   - **Niche Allocation:**
     - `LUXURY`: Arif, `voice_speed = 1.0`, `stability = 0.65`, `style = 0.10`.
@@ -357,7 +357,7 @@ flowchart TD
 #### 2. `config/settings.py` (Modify)
 * **Type / Scope**: Environment Configuration
 * **Proposed Changes**:
-  - Define voice constants `ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")` and `ELEVENLABS_VOICE_BANU = os.getenv("ELEVENLABS_VOICE_BANU", "EXAVITQu4vr4xnSDxMaL")`.
+  - Define voice constants `ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")` and `ELEVENLABS_VOICE_AYAN = os.getenv("ELEVENLABS_VOICE_AYAN", "DZaip8UahF0Qri1FxU8M")` (with `ELEVENLABS_VOICE_BANU = ELEVENLABS_VOICE_AYAN`; `EXAVITQu4vr4xnSDxMaL` purged).
   - Standardize default `ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")`.
   - Define `AGENCY_WHATSAPP_PHONE = os.getenv("AGENCY_WHATSAPP_PHONE", "994501234567")` for public WhatsApp attribution links.
 

@@ -1,14 +1,14 @@
 # BakuEstate-AI Standalone Web CRM AI Engine: Antigravity Desktop Bridge Decommissioning & Serverless Gemini API Architecture
 
 *   **Author:** fxbluster
-*   **Status:** Approved
+*   **Status:** Implemented (In Production)
 *   **Date:** 2026-11-20
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-This design document formalizes the architectural transition of BakuEstate-AI from a stationary desktop-dependent Python MCP bridge to a standalone, 24/7 serverless cloud architecture integrated directly into the Next.js 15 Web CRM on Netlify and Supabase.
+This design document formalizes the architectural transition of BakuEstate-AI from a stationary desktop-dependent Python MCP bridge to a standalone, 24/7 serverless cloud architecture integrated directly into the Next.js Web CRM on Vercel and Supabase.
 
 BakuEstate-AI provides an automated video production pipeline and an operational sales cockpit for real estate brokers in Baku, Azerbaijan. In the previous iteration, an asynchronous desktop MCP bridge (`src/mcp/baku_estate_mcp_server.py`) and a local squad orchestrator daemon (`src/ai/squad_orchestrator.py`) were introduced to run AI advisory logic on a local workstation. In practice, this created an operational bottleneck: real estate brokers operating in the field (inspecting apartments in Yasamal, meeting clients in Sabail, or negotiating via WhatsApp) cannot maintain an active Python process or an open Antigravity desktop IDE on a stationary PC.
 
@@ -25,7 +25,7 @@ Adopting the proven Citadel CRM serverless architecture, this transition complet
 ## Goals
 
 *   **Goal 1 — Complete Desktop Bridge Decommissioning:** Fully retire `src/mcp/baku_estate_mcp_server.py` and decouple `src/ai/squad_orchestrator.py` without breaking existing test suites (retaining 100% passing tests across the Python test suite). Preserve `src/mcp_server.py` and `start_mcp_server.bat` for developer real estate video generation.
-*   **Goal 2 — Direct Serverless Web API Route:** Implement `web/app/api/ai/copilot/route.ts` as an authenticated, server-side gateway utilizing `@google/genai` and `GEMINI_API_KEY` stored securely in Netlify environment variables, ensuring zero secrets leak to the client bundle.
+*   **Goal 2 — Direct Serverless Web API Route:** Implement `web/app/api/ai/copilot/route.ts` as an authenticated, server-side gateway utilizing `@google/genai` and `GEMINI_API_KEY` stored securely in Vercel environment variables, ensuring zero secrets leak to the client bundle.
 *   **Goal 3 — Cost-Optimized Hybrid Model Routing:** Route high-frequency chat and drafting to `gemini-3.1-flash-lite` (~$0.0006/req, <1.5s latency), escalating exclusively to `gemini-3.8-flash` (~$0.002/req) with `generationConfig: { thinkingLevel: 'low' }` for deep Sentinel margin audits, call debriefings, and Strategist daily cockpit selection.
 *   **Goal 4 — Staged 0ms Cockpit Hydration & Local Cache:** Render the Web CRM Morning Cockpit instantly (0ms) on mobile launch using cached lead data (`bakuestate_cached_leads_v1`) and pure TypeScript deterministic heuristics (`web/lib/copilot-core.ts`), followed by an opportunistic background AI elevation with mutation-aware invalidation and manual `[ 🔄 Yenilə ]` refresh.
 *   **Goal 5 — Interactive Web CRM Copilot Console:** Build an embedded Copilot drawer (`web/components/CopilotDrawer.tsx`) supporting:
@@ -42,7 +42,7 @@ Adopting the proven Citadel CRM serverless architecture, this transition complet
 ## Open Questions & Resolved Decisions
 
 *   **Decision 1 (Voice Debrief Format & Codec Resilience):** 
-    *   *Problem:* iOS Safari does not support `audio/webm;codecs=opus`. Furthermore, audio payloads over mobile connections can breach Netlify serverless limits.
+    *   *Problem:* iOS Safari does not support `audio/webm;codecs=opus`. Furthermore, audio payloads over mobile connections can breach serverless limits.
     *   *Resolution:* Implement dynamic MIME-type detection in `CopilotDrawer.tsx` (`audio/webm;codecs=opus` on Chrome/Android, `audio/mp4` / `audio/aac` on iOS Safari). Enforce a strict 45-second recording ceiling (<1.5 MB). Treat mobile keyboard speech-to-text as the primary zero-overhead option.
 *   **Decision 2 (Telemetry Storage & Budget Check):** 
     *   *Problem:* Runtime `SUM(cost_usd)` aggregation over historical rows causes unindexed database load and race conditions.
@@ -51,7 +51,7 @@ Adopting the proven Citadel CRM serverless architecture, this transition complet
 ## Critical User Journeys (CUJs)
 
 ### CUJ 1: Mobile Broker Opens Web CRM Cockpit on the Go
-*   **Given**: A real estate broker opens `https://bakuestate-crm.netlify.app` on an iPhone Safari browser at 10:15 AM while en route to an apartment inspection. The desktop workstation is offline.
+*   **Given**: A real estate broker opens `https://bakuestate-ai.vercel.app` on an iPhone Safari browser at 10:15 AM while en route to an apartment inspection. The desktop workstation is offline.
 *   **When**: The broker views the CRM Dashboard.
 *   **Then**: The Cockpit HUD renders immediately (0ms) using locally cached leads and deterministic heuristics. In the background, `web/app/api/ai/copilot/route.ts` evaluates the background refresh timestamp; if stale, it invokes `gemini-3.8-flash` to refine objection hooks and prioritize top leads, silently updating the cards without UI freezing or desktop dependencies.
 

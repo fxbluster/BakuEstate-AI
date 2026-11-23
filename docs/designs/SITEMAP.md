@@ -2,7 +2,7 @@
 
 | Document | Status | Scope |
 | :--- | :--- | :--- |
-| [`followup_web_crm.md`](followup_web_crm.md) | `Implemented (In Production)` | 24/7 Cloud Supabase + Netlify Web CRM + Telegram Webhook + Local Windows Worker |
+| [`followup_web_crm.md`](followup_web_crm.md) | `Implemented (In Production)` | 24/7 Cloud Supabase + Vercel Web CRM + Telegram Webhook + Local Windows Worker |
 | [`social_lifecycle_and_audience_intelligence.md`](social_lifecycle_and_audience_intelligence.md) | `Implemented (In Production)` | Social publication state machine, zero-credential public telemetry, comment-to-lead pipeline, and A/B learning loop |
 | [`preflight_and_selective_publishing.md`](preflight_and_selective_publishing.md) | `Implemented (In Production)` | Real-time bina.az liveness & price check gate, silent draft staging, 1-tap copyable Telegram captions, and post-publish drift alerts |
 | [`multi_account_distribution_and_learning_engine.md`](multi_account_distribution_and_learning_engine.md) | `Implemented (In Production)` | Multi-account niche distribution, curated broker funnel, safe-zone Reels compositing, and Citadel-pattern continuous AI learning loop |

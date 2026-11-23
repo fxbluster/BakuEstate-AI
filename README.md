@@ -17,7 +17,7 @@ Supabase pg_cron (5m / daily) ─► followup-dispatcher & storage-pruner ──
 Windows PC (start_worker.bat) ─► src/worker/local_worker.py ──────────────────────┘         │
                                   ├── bina.az Scraper (pre-scrape skip + liveness)          │
                                   ├── ChangeDetector (AZN norm, repost score, Rejim 3)      │
-                                  ├── TTS (ElevenLabs / OpenAI / Edge, versioned audio)     │
+                                  ├── TTS (ElevenLabs Dual-Voice Studio / Edge-TTS fallback)│
                                   ├── FFmpeg 1080x1920 Video (video_{bina_id}_v{n}.mp4)     │
                                   └── Versioned Storage Upload + Idempotent Telegram Send ──┘
 ```
@@ -155,11 +155,11 @@ python run_pipeline.py --pages 1 --limit 1
 
 Python test suite:
 ```bash
-python -m unittest discover -s tests
+pytest tests/ -v
 ```
-Web CRM build & lint check:
+Web CRM Vitest suite & build:
 ```bash
 cd web
-npm run lint
+npm test
 npm run build
 ```

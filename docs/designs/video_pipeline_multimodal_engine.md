@@ -1,7 +1,7 @@
 # BakuEstate Video Pipeline Autonomous Worker Recovery & SOTA Multimodal Engine
 
 *   **Author:** Elvin Ismailov
-*   **Status:** Approved (Ready for Implementation)
+*   **Status:** Implemented (In Production)
 *   **Date:** 2026-11-22
 
 ---
@@ -34,7 +34,7 @@ This design document addresses the root cause of the video production stall (stu
 *   **Goal 1 (Immediate Recovery)**: Re-establish continuous worker execution to process all pending unrendered listings and resume scheduled Bina.az scraping.
 *   **Goal 2 (Daemon Resilience)**: Implement automated worker watchdog / Windows background persistence so the worker automatically recovers from machine reboots, crashes, or sleep states without requiring a persistent open terminal window.
 *   **Goal 3 (Multimodal Visual Enrichment)**: Integrate OpenAI GPT-4o Vision into the pre-render phase to visually inspect locally downloaded listing photos, identifying architectural strengths and eliminating generic text hallucinations.
-*   **Goal 4 (SOTA ElevenLabs Narration at Scale)**: Fully transition production voice generation to ElevenLabs (`eleven_multilingual_v2` / Arif Azerbaijani narrator) utilizing the 33M character grant, with dynamic pauses, natural conversational inflections, and acoustic ducking over background audio.
+*   **Goal 4 (SOTA ElevenLabs Narration at Scale)**: Fully transition production voice generation to ElevenLabs (`eleven_multilingual_v2` / Arif `ZQJv3hwvRAIC7fvWZ1Qr` for Luxury/General and Ayan `DZaip8UahF0Qri1FxU8M` for Affordable/TikTok) utilizing the 33M character grant, with dynamic pauses, natural conversational inflections, and acoustic ducking over background audio.
 *   **Goal 5 (Idempotency and Cost Guardrails)**: Enforce strict per-listing render hash deduplication to prevent accidental double-spending of API tokens while maintaining high-speed video generation.
 
 ---
