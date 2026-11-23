@@ -674,7 +674,7 @@ export function PreflightModal({
                 <button
                   type="button"
                   disabled={isDispatchingTelegram}
-                  onClick={handleDispatchToTelegram}
+                  onClick={() => handleDispatchToTelegram(false)}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2 text-xs font-bold text-slate-950 shadow-sm transition hover:brightness-110 active:scale-[0.99] disabled:opacity-50"
                 >
                   {isDispatchingTelegram ? (

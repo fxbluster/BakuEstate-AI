@@ -104,20 +104,15 @@ export async function POST(request: Request) {
   let resolvedListingUuid: string | null = isUuid ? listing_id : null;
 
   try {
-    const selectQuery = supabaseAdmin.from("listings").select("id, bina_id");
-    let query: unknown = selectQuery;
-    if (typeof (selectQuery as { eq?: unknown }).eq === "function") {
-      query = isUuid
-        ? (selectQuery as { eq: (col: string, val: string) => unknown }).eq("id", listing_id)
-        : (selectQuery as { eq: (col: string, val: string) => unknown }).eq("bina_id", String(listing_id));
-    } else if (typeof (selectQuery as { or?: unknown }).or === "function") {
-      query = (selectQuery as { or: (cond: string) => unknown }).or(
-        isUuid ? `id.eq.${listing_id}` : `bina_id.eq.${listing_id}`
-      );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adminAny = supabaseAdmin as any;
+    let query = adminAny.from("listings").select("id, bina_id");
+    if (isUuid) {
+      query = query.eq("id", listing_id);
+    } else {
+      query = query.eq("bina_id", String(listing_id));
     }
-    const { data: listing } =
-      (await (query as { maybeSingle?: () => Promise<{ data: { id?: string; bina_id?: string } | null }> })?.maybeSingle?.()) ??
-      {};
+    const { data: listing } = await query.maybeSingle();
 
     if (listing) {
       resolvedListingUuid = listing.id ?? null;
