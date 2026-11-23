@@ -1551,7 +1551,9 @@ async function handleCallbackQuery(
       const voice = idx === -1 ? "nova" : rest.slice(idx + 1);
       const voiceMap: Record<string, { voice_engine: string; voice_id: string }> = {
         eleven_male: { voice_engine: "elevenlabs", voice_id: "ZQJv3hwvRAIC7fvWZ1Qr" },
-        eleven_female: { voice_engine: "elevenlabs", voice_id: "EXAVITQu4vr4xnSDxMaL" },
+        eleven_female: { voice_engine: "elevenlabs", voice_id: "DZaip8UahF0Qri1FxU8M" },
+        eleven_arif: { voice_engine: "elevenlabs", voice_id: "ZQJv3hwvRAIC7fvWZ1Qr" },
+        eleven_ayan: { voice_engine: "elevenlabs", voice_id: "DZaip8UahF0Qri1FxU8M" },
         nova: { voice_engine: "openai", voice_id: "nova" },
         edge: { voice_engine: "edge", voice_id: "az-AZ-BabekNeural" },
       };

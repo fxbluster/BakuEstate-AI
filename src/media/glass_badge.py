@@ -191,54 +191,64 @@ def create_logo_watermark(
     output_path: Optional[Path] = None,
     logo_path: Optional[Path] = None,
     brand_text: str = "BAKU ESTATE",
-    opacity: float = 0.78
+    opacity: float = 0.78,
+    width: int = 180,
+    height: int = 40
 ) -> Path:
     """
-    Generates a sleek, semi-transparent brand logo watermark pill (icon + brand name)
+    Generates a compact, semi-transparent brand logo watermark pill (icon + brand name)
     for anti-theft content protection across the full video duration.
-    Expanded dimensions: 330x74 for content portability across all channels.
+    Compact pill dimensions: width=180, height=40 for mobile safe-zone placement at x=860, y=24.
     """
     if logo_path is None:
         logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo.png"
 
-    w, h = 330, 74
+    w, h = width, height
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     # Subtle translucent dark smoked glass pill
+    radius = h // 2
     draw.rounded_rectangle(
         [0, 0, w, h],
-        radius=37,
+        radius=radius,
         fill=(10, 14, 22, 130),
         outline=(245, 215, 145, 95),
         width=1
     )
 
-    icon_size = 54
-    icon_x, icon_y = 10, (h - icon_size) // 2
+    icon_size = max(16, h - 12)
+    icon_x = 6
+    icon_y = (h - icon_size) // 2
 
     if logo_path.exists():
         try:
             with Image.open(logo_path) as raw_logo:
                 logo = raw_logo.convert("RGBA")
-                # Center-crop slightly to focus tightly on the emblem
                 lw, lh = logo.size
                 margin = int(min(lw, lh) * 0.14)
                 logo = logo.crop((margin, margin, lw - margin, lh - margin))
                 logo = logo.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
 
-                # Apply circular mask for clean modern badge look
+                # Circular mask for emblem
                 mask = Image.new("L", (icon_size, icon_size), 0)
                 ImageDraw.Draw(mask).ellipse([0, 0, icon_size, icon_size], fill=255)
                 img.paste(logo, (icon_x, icon_y), mask)
         except Exception as e:
             logger.warning(f"Could not embed logo image {logo_path}: {e}")
 
-    font_brand = get_best_font(size=21, bold=True)
-    font_sub = get_best_font(size=14, bold=False)
+    font_brand_size = max(10, int(h * 0.32))  # 12-13pt for h=40
+    font_sub_size = max(7, int(h * 0.20))     # 8-9pt for h=40
 
-    draw.text((76, 15), brand_text, font=font_brand, fill=(255, 245, 215, 240))
-    draw.text((77, 43), "VERIFIED LISTING", font=font_sub, fill=(210, 220, 235, 230))
+    font_brand = get_best_font(size=font_brand_size, bold=True)
+    font_sub = get_best_font(size=font_sub_size, bold=False)
+
+    text_x = icon_x + icon_size + 6
+    text_y_brand = max(4, int(h * 0.15))
+    text_y_sub = max(18, int(h * 0.54))
+
+    draw.text((text_x, text_y_brand), brand_text, font=font_brand, fill=(255, 245, 215, 240))
+    draw.text((text_x, text_y_sub), "VERIFIED LISTING", font=font_sub, fill=(210, 220, 235, 230))
 
     # Apply global subtle opacity so watermark protects video without distracting
     if 0.0 < opacity < 1.0:
@@ -258,47 +268,69 @@ def create_cta_badge(
     listing: Optional[Dict[str, Any]] = None,
     output_path: Optional[Path] = None,
     width: int = 920,
-    height: int = 150
+    height: int = 140
 ) -> Path:
     """
     Renders a sleek, mobile safe-zone Call-to-Action badge for the final 3.5 seconds.
     Standardized kinetic CTA:
       Line 1: 'DƏQİQ ÜNVAN VƏ BAXIŞ ÜÇÜN'
-      Line 2: 'ŞƏRHƏ \'EV\' YAZIN VƏ YA DM GÖNDƏRİN'
-    Positioned at y=1380 to keep the bottom 390px free from TikTok/Reels UI button collisions.
-    Strictly 0 owner phone leakage.
+      Line 2: 'ŞƏRHƏ 'EV' YAZIN VƏ YA DM GÖNDƏRİN'
+      Line 3: 'WHATSAPP: <AGENCY_WHATSAPP_PHONE>'
+    Positioned at y=1540 to keep the bottom clear of TikTok/Reels UI button collisions.
+    Displays AGENCY_WHATSAPP_PHONE exclusively (protecting direct owner privacy).
     """
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     draw.rounded_rectangle(
         [0, 0, width, height],
-        radius=30,
+        radius=26,
         fill=(15, 23, 42, 220),
         outline=(16, 185, 129, 130),
         width=2
     )
 
-    font_top = get_best_font(size=23, bold=True)
-    font_sub = get_best_font(size=30, bold=True)
+    try:
+        from config.settings import AGENCY_WHATSAPP_PHONE
+    except ImportError:
+        AGENCY_WHATSAPP_PHONE = os.getenv("AGENCY_WHATSAPP_PHONE", "994501234567")
+
+    phone_raw = re.sub(r"\D", "", str(AGENCY_WHATSAPP_PHONE or "994501234567"))
+    if len(phone_raw) == 12 and phone_raw.startswith("994"):
+        formatted_phone = f"+994 {phone_raw[3:5]} {phone_raw[5:8]} {phone_raw[8:10]} {phone_raw[10:]}"
+    elif len(phone_raw) == 10 and phone_raw.startswith("0"):
+        formatted_phone = f"+994 {phone_raw[1:3]} {phone_raw[3:6]} {phone_raw[6:8]} {phone_raw[8:]}"
+    elif phone_raw:
+        formatted_phone = f"+{phone_raw}"
+    else:
+        formatted_phone = "+994 50 123 45 67"
+
+    font_top = get_best_font(size=20, bold=True)
+    font_sub = get_best_font(size=24, bold=True)
+    font_phone = get_best_font(size=22, bold=True)
 
     line1 = "DƏQİQ ÜNVAN VƏ BAXIŞ ÜÇÜN"
     line2 = "ŞƏRHƏ 'EV' YAZIN VƏ YA DM GÖNDƏRİN"
+    line3 = f"WHATSAPP: {formatted_phone}"
 
-    # Center text
+    # Center text lines
     bbox1 = draw.textbbox((0, 0), line1, font=font_top)
     w1 = bbox1[2] - bbox1[0]
-    draw.text(((width - w1) // 2, 28), line1, font=font_top, fill=(245, 215, 145, 255))
+    draw.text(((width - w1) // 2, 16), line1, font=font_top, fill=(245, 215, 145, 255))
 
     bbox2 = draw.textbbox((0, 0), line2, font=font_sub)
     w2 = bbox2[2] - bbox2[0]
-    draw.text(((width - w2) // 2, 74), line2, font=font_sub, fill=(255, 255, 255, 255))
+    draw.text(((width - w2) // 2, 48), line2, font=font_sub, fill=(255, 255, 255, 255))
+
+    bbox3 = draw.textbbox((0, 0), line3, font=font_phone)
+    w3 = bbox3[2] - bbox3[0]
+    draw.text(((width - w3) // 2, 88), line3, font=font_phone, fill=(52, 211, 153, 255))
 
     if not output_path:
         output_path = Path("data/output/cta_badge.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(output_path), "PNG")
-    logger.info(f"Created standardized kinetic CTA badge: {output_path}")
+    logger.info(f"Created standardized kinetic CTA badge: {output_path} ({width}x{height})")
     return output_path
 
 
@@ -337,15 +369,15 @@ def get_hero_overlay_filter(
     video_width: int = 1080,
     video_height: int = 1920,
     start_time: float = 0.2,
-    end_time: float = 2.5,
+    end_time: float = 3.2,
     target_y: int = 186
 ) -> Tuple[str, str]:
     """
-    Returns (filter_str, escaped_path) for FFmpeg with optimized 2.5s hero timing:
+    Returns (filter_str, escaped_path) for FFmpeg with optimized min 3.2s hero timing:
     - Centered at x=80 px, y=186 px (for w=920, h=176 inside 1080x1920)
     - Smooth slide-down in first 0.35s
-    - Floats proudly for ~2.0s to hook viewer attention
-    - Dissolves / disappears cleanly at 2.5s into the apartment walkthrough
+    - Floats proudly for >= 3.0s to hook viewer attention
+    - Dissolves / disappears cleanly at 3.2s into the apartment walkthrough
     """
     posix_path = str(badge_path.resolve()).replace("\\", "/")
     if ":" in posix_path:

@@ -24,11 +24,13 @@ try:
     from config.settings import (
         ELEVENLABS_MODEL_ID,
         ELEVENLABS_VOICE_ARIF,
+        ELEVENLABS_VOICE_AYAN,
         ELEVENLABS_VOICE_BANU,
     )
 except ImportError:
     ELEVENLABS_VOICE_ARIF = "ZQJv3hwvRAIC7fvWZ1Qr"
-    ELEVENLABS_VOICE_BANU = "EXAVITQu4vr4xnSDxMaL"
+    ELEVENLABS_VOICE_AYAN = "DZaip8UahF0Qri1FxU8M"
+    ELEVENLABS_VOICE_BANU = "DZaip8UahF0Qri1FxU8M"
     ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 
 from src.cloud.supabase_repo import (
@@ -503,37 +505,37 @@ class TestMultiAccountAndAdvisor(unittest.TestCase):
         self.assertEqual(ab_meta_fail["fallback_engine"], "edge-tts")
 
     # -------------------------------------------------------------------------
-    # 1f. test_watermark_330px_layout_and_boundaries
+    # 1f. test_watermark_180px_layout_and_boundaries
     # -------------------------------------------------------------------------
-    def test_watermark_330px_layout_and_boundaries(self):
+    def test_watermark_180px_layout_and_boundaries(self):
         """
-        Asserts 330px verified watermark layout, safe-zone positioning, and visual collision avoidance:
-        - Image dimensions are strictly 330x74 px
-        - Safe-zone positioning: x = 1080 - 330 - 36 = 714 px, y = 86 px (occupying y = 86..160 px)
-        - Vertical clearance: Hero badge starts at y = 186 px, providing >= 26 px clear separation
+        Asserts 180px verified watermark layout, safe-zone positioning, and visual collision avoidance:
+        - Image dimensions are strictly 180x40 px
+        - Safe-zone positioning: x = 1080 - 180 - 40 = 860 px, y = 24 px (occupying y = 24..64 px)
+        - Vertical clearance: Hero badge starts at y = 186 px, providing >= 122 px clear separation
         - Generic brand text ('BAKU ESTATE' / 'VERIFIED LISTING') ensures 100% video portability
         """
         from PIL import Image
-        watermark_path = self.temp_dir / "watermark_330.png"
+        watermark_path = self.temp_dir / "watermark_180.png"
         res_watermark = create_logo_watermark(output_path=watermark_path)
         self.assertTrue(res_watermark.exists())
 
         with Image.open(res_watermark) as img:
-            self.assertEqual(img.size, (330, 74), f"Watermark pill dimensions must be 330x74 px. Got {img.size}")
+            self.assertEqual(img.size, (180, 40), f"Watermark pill dimensions must be 180x40 px. Got {img.size}")
 
         # Safe-Zone Positioning Calculations
         canvas_w, _canvas_h = 1080, 1920
-        pill_w, pill_h = 330, 74
-        margin_right = 36
+        pill_w, pill_h = 180, 40
+        margin_right = 40
         target_x = canvas_w - pill_w - margin_right
-        target_y = 86
+        target_y = 24
 
-        self.assertEqual(target_x, 714, "Watermark target_x must be 714 px")
-        self.assertEqual(target_y, 86, "Watermark target_y must be 86 px")
+        self.assertEqual(target_x, 860, "Watermark target_x must be 860 px")
+        self.assertEqual(target_y, 24, "Watermark target_y must be 24 px")
 
         # Bounding box bounds
-        watermark_bottom_y = target_y + pill_h  # 86 + 74 = 160 px
-        self.assertEqual(watermark_bottom_y, 160)
+        watermark_bottom_y = target_y + pill_h  # 24 + 40 = 64 px
+        self.assertEqual(watermark_bottom_y, 64)
 
         # Hero badge vertical separation
         hero_target_y = 186

@@ -158,7 +158,7 @@ class TestTypographyUI(unittest.TestCase):
 
         # 1. Alias mapping check
         self.assertEqual(resolve_elevenlabs_voice_id("Arif"), "ZQJv3hwvRAIC7fvWZ1Qr")
-        self.assertEqual(resolve_elevenlabs_voice_id("banu"), "EXAVITQu4vr4xnSDxMaL")
+        self.assertEqual(resolve_elevenlabs_voice_id("banu"), "DZaip8UahF0Qri1FxU8M")
 
         # 2. Quota exhaustion 401/429 raises ElevenLabsSynthesisError (fallback handled in tts_service)
         out_audio = self.temp_dir / "fallback.mp3"

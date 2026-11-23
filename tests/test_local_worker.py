@@ -681,7 +681,7 @@ class TestMultiAccountNicheRouting(unittest.TestCase):
         self.assertEqual(res["channel_niche"], "TIKTOK")
         self.assertEqual(res["target_account_handle"], "@baku_emlak_ai")
         self.assertEqual(res["voice_engine"], "elevenlabs")
-        self.assertEqual(res["voice_id"], "EXAVITQu4vr4xnSDxMaL")
+        self.assertEqual(res["voice_id"], "DZaip8UahF0Qri1FxU8M")
         self.assertEqual(res["voice_speed"], 1.15)
         self.assertEqual(res["music_track"], "viral_bass.mp3")
 
@@ -730,7 +730,7 @@ class TestMultiAccountNicheRouting(unittest.TestCase):
         self.assertEqual(res_149k["channel_niche"], "AFFORDABLE")
         self.assertEqual(res_149k["target_account_handle"], "@baku.serfeli.evler")
         self.assertEqual(res_149k["voice_engine"], "elevenlabs")
-        self.assertEqual(res_149k["voice_id"], "EXAVITQu4vr4xnSDxMaL")
+        self.assertEqual(res_149k["voice_id"], "DZaip8UahF0Qri1FxU8M")
         self.assertEqual(res_149k["voice_speed"], 1.0)
         self.assertEqual(res_149k["music_track"], "upbeat_acoustic.mp3")
 
@@ -826,12 +826,12 @@ class TestMultiAccountNicheRouting(unittest.TestCase):
         self.mock_repo.create_render_version.assert_called_once()
         _, rv_kwargs = self.mock_repo.create_render_version.call_args
         self.assertEqual(rv_kwargs["voice_engine"], "elevenlabs")
-        self.assertEqual(rv_kwargs["voice_id"], "EXAVITQu4vr4xnSDxMaL")
+        self.assertEqual(rv_kwargs["voice_id"], "DZaip8UahF0Qri1FxU8M")
 
         # Assert process_listing_video_and_dispatch received routed voice settings
         _, p_kwargs = self.mock_pipeline.process_listing_video_and_dispatch.call_args
         self.assertEqual(p_kwargs["voice_engine"], "elevenlabs")
-        self.assertEqual(p_kwargs["voice_id"], "EXAVITQu4vr4xnSDxMaL")
+        self.assertEqual(p_kwargs["voice_id"], "DZaip8UahF0Qri1FxU8M")
 
 
 if __name__ == "__main__":

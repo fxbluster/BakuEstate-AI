@@ -141,7 +141,9 @@ def get_archived_keyboard(bina_id: str) -> Dict[str, Any]:
 
 VOICE_CHOICE_MAP: Dict[str, tuple[str, Optional[str]]] = {
     "eleven_male": ("elevenlabs", "ZQJv3hwvRAIC7fvWZ1Qr"),
-    "eleven_female": ("elevenlabs", "EXAVITQu4vr4xnSDxMaL"),
+    "eleven_female": ("elevenlabs", "DZaip8UahF0Qri1FxU8M"),
+    "eleven_arif": ("elevenlabs", "ZQJv3hwvRAIC7fvWZ1Qr"),
+    "eleven_ayan": ("elevenlabs", "DZaip8UahF0Qri1FxU8M"),
     "nova": ("openai", None),
     "edge": ("edge", None),
 }

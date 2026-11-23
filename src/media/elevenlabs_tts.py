@@ -9,6 +9,7 @@ import sys
 import re
 import json
 import base64
+import time
 import logging
 from pathlib import Path
 from datetime import timedelta
@@ -20,6 +21,7 @@ from config.settings import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_VOICE_ID,
     ELEVENLABS_VOICE_ARIF,
+    ELEVENLABS_VOICE_AYAN,
     ELEVENLABS_VOICE_BANU,
     ELEVENLABS_MODEL_ID,
 )
@@ -33,13 +35,21 @@ class ElevenLabsSynthesisError(Exception):
     pass
 
 
+ELEVENLABS_VOICE_ARIF = (
+    os.getenv("ELEVENLABS_VOICE_ARIF") or ELEVENLABS_VOICE_ARIF or "ZQJv3hwvRAIC7fvWZ1Qr"
+)
+ELEVENLABS_VOICE_AYAN = (
+    os.getenv("ELEVENLABS_VOICE_AYAN") or ELEVENLABS_VOICE_AYAN or "DZaip8UahF0Qri1FxU8M"
+)
+
 ELEVENLABS_VOICE_ALIASES: Dict[str, str] = {
     "eleven_male": ELEVENLABS_VOICE_ARIF,
     "arif": ELEVENLABS_VOICE_ARIF,
     "male": ELEVENLABS_VOICE_ARIF,
-    "eleven_female": ELEVENLABS_VOICE_BANU,
-    "female": ELEVENLABS_VOICE_BANU,
-    "banu": ELEVENLABS_VOICE_BANU,
+    "eleven_female": ELEVENLABS_VOICE_AYAN,
+    "female": ELEVENLABS_VOICE_AYAN,
+    "ayan": ELEVENLABS_VOICE_AYAN,
+    "banu": ELEVENLABS_VOICE_AYAN,
 }
 
 
@@ -204,9 +214,9 @@ def synthesize_elevenlabs_speech(
     api_key: Optional[str] = None,
     voice_id: Optional[str] = None,
     model_id: Optional[str] = None,
-    stability: float = 0.52,
-    similarity_boost: float = 0.82,
-    style: float = 0.28,
+    stability: float = 0.50,
+    similarity_boost: float = 0.85,
+    style: float = 0.20,
     use_speaker_boost: bool = True,
     version_num: Optional[int] = None,
     speed: Optional[float] = None,
@@ -269,14 +279,37 @@ def synthesize_elevenlabs_speech(
     }
 
     logger.info(f"Synthesizing speech via ElevenLabs (Voice: {target_voice_id}, Model: {target_model}, Speed: {speed})...")
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=15.0)
-    except requests.exceptions.Timeout as e:
-        logger.error(f"ElevenLabs API request timed out after 15.0s: {e}")
-        raise ElevenLabsSynthesisError(f"ElevenLabs request timed out after 15.0s: {e}") from e
-    except requests.exceptions.RequestException as e:
-        logger.error(f"ElevenLabs API network error: {e}")
-        raise ElevenLabsSynthesisError(f"ElevenLabs network error: {e}") from e
+    max_attempts = 3
+    resp = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=15.0)
+        except requests.exceptions.Timeout as e:
+            if attempt < max_attempts:
+                delay = 1.5 * (2 ** (attempt - 1))
+                logger.warning(
+                    f"ElevenLabs request timeout on attempt {attempt}/{max_attempts}, retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+            logger.error(f"ElevenLabs API request timed out after 15.0s on attempt {attempt}: {e}")
+            raise ElevenLabsSynthesisError(f"ElevenLabs request timed out after 15.0s: {e}") from e
+        except requests.exceptions.RequestException as e:
+            logger.error(f"ElevenLabs API network error: {e}")
+            raise ElevenLabsSynthesisError(f"ElevenLabs network error: {e}") from e
+
+        if resp.status_code in (429, 503) and attempt < max_attempts:
+            delay = 1.5 * (2 ** (attempt - 1))
+            logger.warning(
+                f"ElevenLabs API returned HTTP {resp.status_code} on attempt {attempt}/{max_attempts}. "
+                f"Retrying in {delay:.1f}s (exponential backoff)..."
+            )
+            time.sleep(delay)
+            continue
+        break
+
+    if resp is None:
+        raise ElevenLabsSynthesisError("No response received from ElevenLabs API")
 
     if resp.status_code in (401, 402, 429) or (500 <= resp.status_code < 600) or (resp.status_code == 400 and "quota" in resp.text.lower()):
         err_msg = (

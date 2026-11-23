@@ -22,7 +22,16 @@ from datetime import timedelta
 from typing import Dict, Any, Tuple, Optional, List
 import edge_tts
 
-from config.settings import EDGE_TTS_VOICE, EDGE_TTS_RATE, OUTPUT_DIR
+from config.settings import (
+    EDGE_TTS_VOICE,
+    EDGE_TTS_RATE,
+    OUTPUT_DIR,
+    ELEVENLABS_VOICE_ARIF,
+    ELEVENLABS_VOICE_AYAN,
+)
+
+ELEVENLABS_VOICE_ARIF_ID = os.getenv("ELEVENLABS_VOICE_ARIF") or ELEVENLABS_VOICE_ARIF or "ZQJv3hwvRAIC7fvWZ1Qr"
+ELEVENLABS_VOICE_AYAN_ID = os.getenv("ELEVENLABS_VOICE_AYAN") or ELEVENLABS_VOICE_AYAN or "DZaip8UahF0Qri1FxU8M"
 
 logger = logging.getLogger("tts_service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -470,8 +479,6 @@ def generate_azerbaijani_script(
 
     return " ".join(parts)
 
-    return " ".join(parts)
-
 
 def convert_cues_to_word_level_srt(cues: List[Any], words_per_chunk: int = 3) -> str:
     """
@@ -589,7 +596,7 @@ def _resolve_tts_routing(
 ) -> Tuple[str, Optional[str], Optional[str], str]:
     """
     Resolves (engine, eleven_voice_id, openai_voice, edge_voice) cleanly without
-    mutating global os.environ. Supports friendly aliases like 'eleven_male', 'eleven_female', 'nova'.
+    mutating global os.environ. Supports friendly aliases like 'eleven_male', 'eleven_female', 'nova', 'ayan', 'arif'.
     """
     eleven_key = os.getenv("ELEVENLABS_API_KEY", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
@@ -599,34 +606,43 @@ def _resolve_tts_routing(
     openai_voice: Optional[str] = None
     edge_voice: str = default_edge_voice
 
-    if raw_engine in ("eleven_male", "arif"):
+    # Normalize friendly voice aliases
+    normalized_voice_id = voice_id
+    if voice_id and str(voice_id).strip():
+        raw_vid = str(voice_id).strip().lower()
+        if raw_vid in ("eleven_female", "ayan", "banu", "female"):
+            normalized_voice_id = ELEVENLABS_VOICE_AYAN_ID
+        elif raw_vid in ("eleven_male", "arif", "male"):
+            normalized_voice_id = ELEVENLABS_VOICE_ARIF_ID
+
+    if raw_engine in ("eleven_male", "arif", "male"):
         engine = "elevenlabs"
-        eleven_voice_id = voice_id or "ZQJv3hwvRAIC7fvWZ1Qr"
-    elif raw_engine in ("eleven_female",):
+        eleven_voice_id = normalized_voice_id or ELEVENLABS_VOICE_ARIF_ID
+    elif raw_engine in ("eleven_female", "ayan", "female", "banu"):
         engine = "elevenlabs"
-        eleven_voice_id = voice_id or "EXAVITQu4vr4xnSDxMaL"
+        eleven_voice_id = normalized_voice_id or ELEVENLABS_VOICE_AYAN_ID
     elif raw_engine == "nova":
         engine = "openai"
-        openai_voice = voice_id or "nova"
+        openai_voice = normalized_voice_id or "nova"
     elif raw_engine in ("elevenlabs", "openai", "edge"):
         engine = raw_engine
         if engine == "elevenlabs":
-            eleven_voice_id = voice_id
+            eleven_voice_id = normalized_voice_id
         elif engine == "openai":
-            openai_voice = voice_id
-        elif engine == "edge" and voice_id:
-            edge_voice = voice_id
+            openai_voice = normalized_voice_id
+        elif engine == "edge" and normalized_voice_id:
+            edge_voice = normalized_voice_id
     else:
         engine = os.getenv(
             "TTS_ENGINE",
             "elevenlabs" if eleven_key else ("openai" if openai_key else "edge"),
         ).strip().lower()
         if engine == "elevenlabs":
-            eleven_voice_id = voice_id
+            eleven_voice_id = normalized_voice_id
         elif engine == "openai":
-            openai_voice = voice_id
-        elif engine == "edge" and voice_id:
-            edge_voice = voice_id
+            openai_voice = normalized_voice_id
+        elif engine == "edge" and normalized_voice_id:
+            edge_voice = normalized_voice_id
 
     return engine, eleven_voice_id, openai_voice, edge_voice
 
@@ -729,7 +745,7 @@ def generate_tts_for_listing(
             )
             fallback_triggered = True
 
-    if (selected_engine == "openai" or (fallback_triggered and selected_engine == "elevenlabs")) and openai_key:
+    if selected_engine == "openai" and openai_key:
         try:
             from src.media.openai_tts import synthesize_openai_speech
             logger.info("Using OpenAI Studio TTS for natural professional voiceover...")
@@ -739,16 +755,15 @@ def generate_tts_for_listing(
                 output_srt_path=srt_path,
                 api_key=openai_key,
                 voice=openai_voice,
-                model=model_id if selected_engine == "openai" else None,
+                model=model_id,
             )
-            is_fallback = fallback_triggered
             return (
                 script_text,
                 str(audio_path.resolve()),
                 str(srt_path.resolve()),
                 duration,
-                "openai" if not is_fallback else "edge_fallback",
-                is_fallback,
+                "openai",
+                False,
             )
         except Exception as e:
             logger.warning(f"OpenAI TTS failed: {e}. Falling back to Edge-TTS.")
@@ -763,8 +778,21 @@ def generate_tts_for_listing(
             effective_rate = EDGE_TTS_RATE or "+10%"
 
         target_voice_str = str(eleven_voice_id or voice_id or "").strip().lower()
-        if target_voice_str in ("exavitqu4vr4xnsdxmal", "banu", "female", "eleven_female"):
+        if target_voice_str in (
+            "dzaip8uahf0qri1fxu8m",
+            "ayan",
+            "banu",
+            "female",
+            "eleven_female",
+        ):
             effective_voice = "az-AZ-BanuNeural"
+        elif target_voice_str in (
+            "zqjv3hwvraic7fvwz1qr",
+            "arif",
+            "male",
+            "eleven_male",
+        ):
+            effective_voice = "az-AZ-BabekNeural"
         else:
             effective_voice = edge_voice or EDGE_TTS_VOICE or "az-AZ-BabekNeural"
     else:

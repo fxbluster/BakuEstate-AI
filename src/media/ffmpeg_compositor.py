@@ -82,7 +82,7 @@ def get_windows_font_path(bold: bool = True) -> str:
 def convert_srt_to_ass(srt_path: Path, ass_path: Path) -> Path:
     """
     Converts an SRT subtitle file to a 1080x1920 ASS subtitle file.
-    Places subtitles in the safe zone (MarginV=580, baseline y=1340 in [1250, 1420] px)
+    Places subtitles in the safe zone (MarginV=540, baseline y=1380 in [1250, 1420] px)
     with high-contrast TikTok viral yellow font, black outline, and NO opaque black boxes.
     """
     ass_header = """[Script Info]
@@ -94,7 +94,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: ModernSub,Segoe UI,54,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.8,1.8,2,60,60,580,1
+Style: ModernSub,Segoe UI,52,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.8,1.8,2,60,60,540,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -342,7 +342,7 @@ class VideoCompositor:
             )
 
             final_vf = ",".join(filter_chains)
-            video_filter = f"[0:v]{final_vf}[v_base];movie='{escaped_watermark}'[wm];[v_base][wm]overlay=x=714:y=86[vout]"
+            video_filter = f"[0:v]{final_vf}[v_base];movie='{escaped_watermark}'[wm];[v_base][wm]overlay=x=860:y=24[vout]"
 
             # Resolve background music with fallback to assets/music/luxury_beat.mp3
             resolved_bg_music = None
@@ -382,8 +382,8 @@ class VideoCompositor:
                 has_whoosh = whoosh_sfx.exists() and num_images > 1
 
                 audio_inputs = [
-                    f"[2:a]volume=0.22,lowpass=f=3800[bg_pre];"
-                    f"[bg_pre][1:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg];"
+                    f"[2:a]volume=0.25[bg_pre];"
+                    f"[bg_pre][1:a]sidechaincompress=threshold=0.06:ratio=4:attack=25:release=300[ducked_bg];"
                 ]
                 mix_sources = ["[ducked_bg]", "[1:a]"]
                 next_input_idx = 3
@@ -417,7 +417,7 @@ class VideoCompositor:
                     next_input_idx += 1
 
                 num_mix = len(mix_sources)
-                mix_chain = "".join(mix_sources) + f"amix=inputs={num_mix}:normalize=0[amixed];"
+                mix_chain = "".join(mix_sources) + f"amix=inputs={num_mix}:normalize=0,alimiter=limit=0.95:attack=5:release=50[amixed];"
                 fade_chain = f"[amixed]afade=t=out:st={fade_start:.2f}:d=1.2[aout]"
                 
                 audio_filter = "".join(audio_inputs) + mix_chain + fade_chain
@@ -545,27 +545,27 @@ class VideoCompositor:
             create_logo_watermark(logo_watermark_path)
 
             # Build video filtergraph timings
-            hero_end_time = min(2.5, max(0.8, total_duration - 1.5))
+            hero_end_time = min(3.2, max(1.5, total_duration - 1.5))
             cta_start_time = max(0.5, total_duration - 6.5)
 
-            # 6. Convert subtitles to kinetic ASS with automatic CTA safe-shift (safe-zone baseline y in [1250, 1420] px)
+            # 6. Convert subtitles to kinetic ASS (safe-zone baseline y=1380px, stationary safe zone)
             ass_path = temp_dir / "subtitles_kinetic.ass"
             convert_srt_to_kinetic_ass(
                 Path(srt_path),
                 ass_path,
-                margin_v=580,
-                margin_v_cta=660,
+                margin_v=540,
+                margin_v_cta=540,
                 cta_start_time=cta_start_time,
-                font_size=64,
+                font_size=52,
             )
             escaped_ass = escape_ffmpeg_path(ass_path)
 
             v_filters = [
                 f"[0:v][1:v]overlay=0:0:format=auto[v_scrim]",
-                f"[v_scrim][4:v]overlay=x=714:y=86:format=auto[v_brand]",
+                f"[v_scrim][4:v]overlay=x=860:y=24:format=auto[v_brand]",
                 f"[2:v]fade=in:st=0:d=0.4:alpha=1[v_hero_faded]",
                 f"[v_brand][v_hero_faded]overlay=x=(W-w)/2:y=186:enable='between(t,0,{hero_end_time:.2f})':format=auto[v_hero]",
-                f"[v_hero][3:v]overlay=x=(W-w)/2:y=1380:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
+                f"[v_hero][3:v]overlay=x=(W-w)/2:y=1540:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
                 f"[v_cta]subtitles='{escaped_ass}'[v_out]"
             ]
             filter_complex_v = ";".join(v_filters)
@@ -610,8 +610,8 @@ class VideoCompositor:
                 has_whoosh = whoosh_sfx.exists() and len(transitions) > 0
 
                 a_chains = [
-                    f"[6:a]volume=0.20,lowpass=f=3800[bg_pre]",
-                    f"[bg_pre][5:a]sidechaincompress=threshold=0.08:ratio=5:attack=30:release=350[ducked_bg]"
+                    f"[6:a]volume=0.25[bg_pre]",
+                    f"[bg_pre][5:a]sidechaincompress=threshold=0.06:ratio=4:attack=25:release=300[ducked_bg]"
                 ]
                 mix_sources = ["[ducked_bg]", "[5:a]"]
 
@@ -638,7 +638,7 @@ class VideoCompositor:
                     next_in += 1
 
                 fade_start = max(1.0, total_duration - 1.2)
-                a_chains.append(f"{''.join(mix_sources)}amix=inputs={len(mix_sources)}:duration=first:dropout_transition=2,volume=1.0,afade=t=out:st={fade_start:.2f}:d=1.2[a_out]")
+                a_chains.append(f"{''.join(mix_sources)}amix=inputs={len(mix_sources)}:duration=first:dropout_transition=2,alimiter=limit=0.95:attack=5:release=50,afade=t=out:st={fade_start:.2f}:d=1.2[a_out]")
 
                 full_filter_complex = f"{filter_complex_v};{';'.join(a_chains)}"
                 cmd.extend([

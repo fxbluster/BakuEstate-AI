@@ -279,9 +279,9 @@ class TestTTSService(unittest.TestCase):
             call_kwargs = mock_post.call_args[1]
             payload = call_kwargs["json"]
             self.assertEqual(payload["voice_settings"]["speed"], 1.15)
-            self.assertEqual(payload["voice_settings"]["stability"], 0.52)
-            self.assertEqual(payload["voice_settings"]["similarity_boost"], 0.82)
-            self.assertEqual(payload["voice_settings"]["style"], 0.28)
+            self.assertEqual(payload["voice_settings"]["stability"], 0.50)
+            self.assertEqual(payload["voice_settings"]["similarity_boost"], 0.85)
+            self.assertEqual(payload["voice_settings"]["style"], 0.20)
             self.assertTrue(payload["voice_settings"]["use_speaker_boost"])
             self.assertEqual(call_kwargs["timeout"], 15.0)
 
@@ -299,27 +299,28 @@ class TestTTSService(unittest.TestCase):
         srt_p = out_dir / "err_test.srt"
 
         # 1. Direct call raises ElevenLabsSynthesisError on 401, 402, 429, 500, timeout
-        for code in (401, 402, 429, 500, 503):
-            mock_err_resp = MagicMock()
-            mock_err_resp.status_code = code
-            mock_err_resp.text = f"Error {code}"
-            with patch("requests.post", return_value=mock_err_resp):
+        with patch("time.sleep", return_value=None):
+            for code in (401, 402, 429, 500, 503):
+                mock_err_resp = MagicMock()
+                mock_err_resp.status_code = code
+                mock_err_resp.text = f"Error {code}"
+                with patch("requests.post", return_value=mock_err_resp):
+                    with self.assertRaises(ElevenLabsSynthesisError):
+                        synthesize_elevenlabs_speech(
+                            text="Test error",
+                            output_audio_path=audio_p,
+                            output_srt_path=srt_p,
+                            api_key="xi-key",
+                        )
+
+            with patch("requests.post", side_effect=requests.exceptions.Timeout("Read timed out")):
                 with self.assertRaises(ElevenLabsSynthesisError):
                     synthesize_elevenlabs_speech(
-                        text="Test error",
+                        text="Test timeout",
                         output_audio_path=audio_p,
                         output_srt_path=srt_p,
                         api_key="xi-key",
                     )
-
-        with patch("requests.post", side_effect=requests.exceptions.Timeout("Read timed out")):
-            with self.assertRaises(ElevenLabsSynthesisError):
-                synthesize_elevenlabs_speech(
-                    text="Test timeout",
-                    output_audio_path=audio_p,
-                    output_srt_path=srt_p,
-                    api_key="xi-key",
-                )
 
         # 2. generate_tts_for_listing catches ElevenLabsSynthesisError and falls back to Edge-TTS
         sample = {"bina_id": "fallback_test", "price": 100000}
@@ -428,36 +429,40 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
             CHANNEL_AFFORDABLE,
             CHANNEL_GENERAL,
         )
-        from config.settings import ELEVENLABS_VOICE_ARIF, ELEVENLABS_VOICE_BANU
+        from config.settings import ELEVENLABS_VOICE_ARIF, ELEVENLABS_VOICE_AYAN
 
-        # 1. TIKTOK niche (urgent or price drop >= 10%)
+        # 1. TIKTOK niche (urgent or price drop >= 10%) -> Ayan
         res_tiktok = route_listing_to_channel({"price": 500_000, "is_urgent": True})
         self.assertEqual(res_tiktok["channel_niche"], CHANNEL_TIKTOK)
         self.assertEqual(res_tiktok["voice_engine"], "elevenlabs")
-        self.assertEqual(res_tiktok["voice_id"], ELEVENLABS_VOICE_BANU)
+        self.assertEqual(res_tiktok["voice_id"], "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(res_tiktok["voice_id"], ELEVENLABS_VOICE_AYAN)
         self.assertEqual(res_tiktok["voice_speed"], 1.15)
         self.assertIsInstance(res_tiktok["voice_speed"], float)
 
-        # 2. LUXURY niche
+        # 2. LUXURY niche -> Arif
         res_lux = route_listing_to_channel({"price": 300_000})
         self.assertEqual(res_lux["channel_niche"], CHANNEL_LUXURY)
         self.assertEqual(res_lux["voice_engine"], "elevenlabs")
+        self.assertEqual(res_lux["voice_id"], "ZQJv3hwvRAIC7fvWZ1Qr")
         self.assertEqual(res_lux["voice_id"], ELEVENLABS_VOICE_ARIF)
         self.assertEqual(res_lux["voice_speed"], 1.0)
         self.assertIsInstance(res_lux["voice_speed"], float)
 
-        # 3. AFFORDABLE niche
+        # 3. AFFORDABLE niche -> Ayan
         res_aff = route_listing_to_channel({"price": 95_000})
         self.assertEqual(res_aff["channel_niche"], CHANNEL_AFFORDABLE)
         self.assertEqual(res_aff["voice_engine"], "elevenlabs")
-        self.assertEqual(res_aff["voice_id"], ELEVENLABS_VOICE_BANU)
+        self.assertEqual(res_aff["voice_id"], "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(res_aff["voice_id"], ELEVENLABS_VOICE_AYAN)
         self.assertEqual(res_aff["voice_speed"], 1.0)
         self.assertIsInstance(res_aff["voice_speed"], float)
 
-        # 4. GENERAL niche
+        # 4. GENERAL niche -> Arif
         res_gen = route_listing_to_channel({"price": 180_000, "location": "Yasamal"})
         self.assertEqual(res_gen["channel_niche"], CHANNEL_GENERAL)
         self.assertEqual(res_gen["voice_engine"], "elevenlabs")
+        self.assertEqual(res_gen["voice_id"], "ZQJv3hwvRAIC7fvWZ1Qr")
         self.assertEqual(res_gen["voice_id"], ELEVENLABS_VOICE_ARIF)
         self.assertEqual(res_gen["voice_speed"], 1.0)
         self.assertIsInstance(res_gen["voice_speed"], float)
@@ -471,7 +476,7 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
             CHANNEL_TIKTOK,
         )
 
-        # Elite central districts -> LUXURY even if price is < 250k
+        # Elite central districts -> LUXURY (Arif: ZQJv3hwvRAIC7fvWZ1Qr) even if price is < 250k
         elite_samples = [
             {"location": "Səbail rayonu, Sahil m.", "price": 180000},
             {"district_normalized": "Nəsimi", "price": 150000},
@@ -486,8 +491,9 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
             res = route_listing_to_channel(sample)
             self.assertEqual(res["channel_niche"], CHANNEL_LUXURY, f"Failed for {sample}")
             self.assertEqual(res["voice_engine"], "elevenlabs")
+            self.assertEqual(res["voice_id"], "ZQJv3hwvRAIC7fvWZ1Qr")
 
-        # Suburban districts -> AFFORDABLE even if price is > 120k (but < 250k)
+        # Suburban districts -> AFFORDABLE (Ayan: DZaip8UahF0Qri1FxU8M) even if price is > 120k (but < 250k)
         suburban_samples = [
             {"location": "Xırdalan şəhəri, Heydər Əliyev pr.", "price": 140000},
             {"district_normalized": "Masazır", "price": 135000},
@@ -501,22 +507,75 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
             res = route_listing_to_channel(sample)
             self.assertEqual(res["channel_niche"], CHANNEL_AFFORDABLE, f"Failed for {sample}")
             self.assertEqual(res["voice_engine"], "elevenlabs")
+            self.assertEqual(res["voice_id"], "DZaip8UahF0Qri1FxU8M")
 
-        # Price boundary <= 120k -> AFFORDABLE
+        # Price boundary <= 120k -> AFFORDABLE (Ayan)
         res_aff_price = route_listing_to_channel({"price": 120000, "location": "Yasamal"})
         self.assertEqual(res_aff_price["channel_niche"], CHANNEL_AFFORDABLE)
+        self.assertEqual(res_aff_price["voice_id"], "DZaip8UahF0Qri1FxU8M")
 
-        # Price boundary > 120k and < 250k non-elite non-suburban -> GENERAL
+        # Price boundary > 120k and < 250k non-elite non-suburban -> GENERAL (Arif)
         res_gen_price = route_listing_to_channel({"price": 120001, "location": "Yasamal"})
         self.assertEqual(res_gen_price["channel_niche"], CHANNEL_GENERAL)
+        self.assertEqual(res_gen_price["voice_id"], "ZQJv3hwvRAIC7fvWZ1Qr")
 
-        # Priority 1: urgent overrides elite central district
+        # Priority 1: urgent overrides elite central district -> TIKTOK (Ayan)
         res_urgent_elite = route_listing_to_channel({
             "price": 400000,
             "location": "Ağ Şəhər",
             "is_urgent": True,
         })
         self.assertEqual(res_urgent_elite["channel_niche"], CHANNEL_TIKTOK)
+        self.assertEqual(res_urgent_elite["voice_id"], "DZaip8UahF0Qri1FxU8M")
+
+    def test_voice_resolution_and_purged_foreign_voice(self):
+        """Asserts voice resolution for Arif and Ayan, and verifies EXAVITQu4vr4xnSDxMaL is completely absent."""
+        from src.media.elevenlabs_tts import resolve_elevenlabs_voice_id, ELEVENLABS_VOICE_ALIASES
+        from src.media.tts_service import _resolve_tts_routing
+        from config.settings import ELEVENLABS_VOICE_ARIF, ELEVENLABS_VOICE_AYAN
+
+        # 1. Voice resolution for Arif
+        self.assertEqual(resolve_elevenlabs_voice_id("arif"), "ZQJv3hwvRAIC7fvWZ1Qr")
+        self.assertEqual(resolve_elevenlabs_voice_id("male"), "ZQJv3hwvRAIC7fvWZ1Qr")
+        self.assertEqual(resolve_elevenlabs_voice_id("eleven_male"), "ZQJv3hwvRAIC7fvWZ1Qr")
+        self.assertEqual(resolve_elevenlabs_voice_id(ELEVENLABS_VOICE_ARIF), "ZQJv3hwvRAIC7fvWZ1Qr")
+
+        # 2. Voice resolution for Ayan
+        self.assertEqual(resolve_elevenlabs_voice_id("ayan"), "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(resolve_elevenlabs_voice_id("female"), "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(resolve_elevenlabs_voice_id("eleven_female"), "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(resolve_elevenlabs_voice_id("banu"), "DZaip8UahF0Qri1FxU8M")
+        self.assertEqual(resolve_elevenlabs_voice_id(ELEVENLABS_VOICE_AYAN), "DZaip8UahF0Qri1FxU8M")
+
+        # 3. tts_service _resolve_tts_routing
+        _eng, arif_vid, _, _ = _resolve_tts_routing("arif", None, "az-AZ-BabekNeural")
+        self.assertEqual(arif_vid, "ZQJv3hwvRAIC7fvWZ1Qr")
+        _eng, ayan_vid, _, _ = _resolve_tts_routing("ayan", None, "az-AZ-BanuNeural")
+        self.assertEqual(ayan_vid, "DZaip8UahF0Qri1FxU8M")
+        _eng, ef_vid, _, _ = _resolve_tts_routing("eleven_female", None, "az-AZ-BanuNeural")
+        self.assertEqual(ef_vid, "DZaip8UahF0Qri1FxU8M")
+
+        # 4. Assert EXAVITQu4vr4xnSDxMaL is completely absent
+        banned_id = "EXAVITQu4vr4xnSDxMaL"
+        self.assertNotIn(banned_id, ELEVENLABS_VOICE_ALIASES.values())
+        self.assertNotEqual(ELEVENLABS_VOICE_ARIF, banned_id)
+        self.assertNotEqual(ELEVENLABS_VOICE_AYAN, banned_id)
+
+        code_files = [
+            Path("src/media/elevenlabs_tts.py"),
+            Path("src/media/tts_service.py"),
+            Path("src/worker/account_router.py"),
+            Path("config/settings.py"),
+        ]
+        for fpath in code_files:
+            full_path = Path(__file__).resolve().parent.parent / fpath
+            if full_path.exists():
+                content = full_path.read_text(encoding="utf-8")
+                self.assertNotIn(
+                    banned_id,
+                    content,
+                    f"Forbidden foreign voice ID {banned_id} found in {fpath}!",
+                )
 
     def test_generate_tts_for_listing_accepts_visual_profile(self):
         """Verifies generate_tts_for_listing accepts visual_profile without error and weaves into script."""

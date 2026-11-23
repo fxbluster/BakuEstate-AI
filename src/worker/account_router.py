@@ -20,11 +20,13 @@ from typing import Any, Dict
 try:
     from config.settings import (
         ELEVENLABS_VOICE_ARIF,
+        ELEVENLABS_VOICE_AYAN,
         ELEVENLABS_VOICE_BANU,
     )
 except ImportError:
     ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")
-    ELEVENLABS_VOICE_BANU = os.getenv("ELEVENLABS_VOICE_BANU", "EXAVITQu4vr4xnSDxMaL")
+    ELEVENLABS_VOICE_AYAN = os.getenv("ELEVENLABS_VOICE_AYAN", "DZaip8UahF0Qri1FxU8M")
+    ELEVENLABS_VOICE_BANU = ELEVENLABS_VOICE_AYAN
 
 CHANNEL_TIKTOK = "TIKTOK"
 CHANNEL_LUXURY = "LUXURY"
@@ -154,7 +156,7 @@ def route_listing_to_channel(listing: Dict[str, Any]) -> Dict[str, Any]:
             "target_account_handle": ACCOUNT_TIKTOK,
             "channel_niche": CHANNEL_TIKTOK,
             "voice_engine": "elevenlabs",
-            "voice_id": ELEVENLABS_VOICE_BANU,
+            "voice_id": ELEVENLABS_VOICE_AYAN,
             "voice_speed": 1.15,
             "music_track": "viral_bass.mp3",
         }
@@ -180,7 +182,7 @@ def route_listing_to_channel(listing: Dict[str, Any]) -> Dict[str, Any]:
             "target_account_handle": ACCOUNT_AFFORDABLE,
             "channel_niche": CHANNEL_AFFORDABLE,
             "voice_engine": "elevenlabs",
-            "voice_id": ELEVENLABS_VOICE_BANU,
+            "voice_id": ELEVENLABS_VOICE_AYAN,
             "voice_speed": 1.0,
             "music_track": "upbeat_acoustic.mp3",
         }

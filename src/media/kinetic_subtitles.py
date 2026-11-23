@@ -5,9 +5,8 @@ Generates modern 2-3 word rhythmic subtitle bursts with:
 - Dual-tone luxury color palette: Chalk White base + Champagne Gold & Mint pops
 - Architectural DIN / Bahnschrift font with soft Gaussian drop shadow
 - Zero cartoon black strokes (Outline=1.8, Shadow=2.2 with alpha transparency)
-- Mobile safe-zone positioning (MarginV=580, baseline y=1340)
-- CTA Phase Safe-Shift: automatically shifts subtitles upward to MarginV=660 (y=1260)
-  when the CTA card appears in the final seconds, staying within safe-zone baseline y in [1250, 1420] px.
+- Mobile safe-zone positioning (MarginV=540, baseline y=1380)
+- Subtitles remain stationary in safe zone without vertical jumping during CTA (margin_v_cta = margin_v = 540)
 """
 
 import os
@@ -170,19 +169,19 @@ def split_srt_block_into_chunks(text: str, start_s: float, end_s: float, max_wor
 def convert_srt_to_kinetic_ass(
     srt_path: Path,
     ass_path: Path,
-    margin_v: int = 580,
-    margin_v_cta: int = 660,
+    margin_v: int = 540,
+    margin_v_cta: int = 540,
     cta_start_time: Optional[float] = None,
-    font_size: int = 64
+    font_size: int = 52
 ) -> Path:
     """
     Converts an SRT file into modern kinetic ASS subtitles with:
     - 2 to 3-word rhythmic chunks
     - Micro-bounce spring pop animation: {\\t(0,90,\\fscx108\\fscy108)\\t(90,180,\\fscx100\\fscy100)}
     - Punchy vibrant gold-yellow & mint emerald keyword highlights
-    - High-visibility 64pt typography with clean outline & drop shadow
-    - Clean safe-zone placement (MarginV=580 default, baseline y=1340 in [1250, 1420] px)
-    - If cta_start_time is given, subtitles during CTA shift upward to margin_v_cta (660, baseline y=1260 in [1250, 1420] px)
+    - High-visibility 52pt typography with clean outline & drop shadow
+    - Clean safe-zone placement (MarginV=540 default, baseline y=1380 in [1250, 1420] px)
+    - Subtitles remain stationary at margin_v_cta = margin_v = 540 to eliminate vertical jumping during CTA
     """
     font_name = get_font_name()
 
@@ -244,10 +243,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def build_kinetic_ass_from_words(
     words_with_timestamps: List[Dict[str, Any]],
     ass_path: Path,
-    margin_v: int = 580,
-    margin_v_cta: int = 660,
+    margin_v: int = 540,
+    margin_v_cta: int = 540,
     cta_start_time: Optional[float] = None,
-    font_size: int = 64
+    font_size: int = 52
 ) -> Path:
     """
     Directly builds 2-3 word kinetic bursts from millisecond-accurate word timestamps

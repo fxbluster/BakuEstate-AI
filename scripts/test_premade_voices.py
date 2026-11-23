@@ -5,10 +5,8 @@ import json
 API_KEY = "sk_38c6454138b8179c2cff321b96f1b64befb4b4403c1e4639"
 
 test_voices = [
-    ("Brian", "nPczCjzI2devNBz1zQrb"),
-    ("Adam", "pNInz6obpgDQGcFmaJgB"),
-    ("George", "JBFqnCBsd6RMkjVDRZzb"),
-    ("Sarah", "EXAVITQu4vr4xnSDxMaL")
+    ("Arif", "ZQJv3hwvRAIC7fvWZ1Qr"),
+    ("Ayan", "DZaip8UahF0Qri1FxU8M"),
 ]
 
 for name, vid in test_voices:
