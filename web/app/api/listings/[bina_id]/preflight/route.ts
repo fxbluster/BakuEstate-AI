@@ -98,8 +98,11 @@ export async function POST(
   const supabase = createAdminClient();
 
   // 3. Query listing, latest render_version, and publication from Supabase
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const isListingUuid = listing_id && UUID_REGEX.test(listing_id);
+
   let listingQuery = supabase.from("listings").select("*");
-  if (listing_id) {
+  if (isListingUuid) {
     listingQuery = listingQuery.eq("id", listing_id);
   } else {
     listingQuery = listingQuery.eq("bina_id", String(numericBinaId));
