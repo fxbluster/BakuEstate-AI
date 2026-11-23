@@ -228,6 +228,13 @@ def main() -> None:
         default=None,
         help="Optional single bina_id to re-render instead of all 6.",
     )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        nargs="*",
+        default=[],
+        help="List of bina_ids to exclude from batch re-render.",
+    )
     args = parser.parse_args()
 
     pipeline = BakuEstatePipeline(enable_supabase=True)
@@ -238,6 +245,9 @@ def main() -> None:
         if not targets:
             logger.error("Specified listing ID %s is not in canonical target list.", args.listing_id)
             sys.exit(1)
+    elif args.exclude:
+        excluded_set = {str(x).strip() for x in args.exclude}
+        targets = [t for t in TARGET_LISTINGS if t["bina_id"] not in excluded_set]
 
     summary = rerender_batch(
         pipeline=pipeline,
