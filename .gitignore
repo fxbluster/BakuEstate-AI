@@ -14,6 +14,8 @@ venv/
 # Data and browser profiles
 data/profiles/
 data/downloads/
+data/logs/
+data/worker_active_job.json
 data/test_*
 data/output/*.mp4
 data/output/*.mp3
