@@ -844,66 +844,69 @@ export function ListingsClient({ initialListings }: ListingsClientProps) {
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-obsidian-950 via-obsidian-950/20 to-transparent" />
 
-                  <div className="absolute top-3 left-3 flex flex-wrap gap-1.5 max-w-[85%]">
-                    <span className="rounded-lg bg-obsidian-950/85 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 border border-gold-500/30">
-                      #{item.bina_id}
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold backdrop-blur-md ${
-                        nicheInfo.niche === "LUXURY"
-                          ? "border-amber-400/50 bg-amber-950/85 text-amber-200"
-                          : nicheInfo.niche === "AFFORDABLE"
-                          ? "border-emerald-400/50 bg-emerald-950/85 text-emerald-200"
-                          : nicheInfo.niche === "TIKTOK"
-                          ? "border-rose-400/50 bg-rose-950/85 text-rose-200"
-                          : "border-sky-400/50 bg-sky-950/85 text-sky-200"
-                      }`}
-                    >
-                      <span>
-                        {nicheInfo.niche === "LUXURY"
-                          ? "💎"
-                          : nicheInfo.niche === "AFFORDABLE"
-                          ? "🏠"
-                          : nicheInfo.niche === "TIKTOK"
-                          ? "🔥"
-                          : "🏢"}
+                  {/* Card Header Badges: Single Flex Row with Zero Collision */}
+                  <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-2 pointer-events-none z-10">
+                    <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0 pointer-events-auto">
+                      <span className="rounded-lg bg-obsidian-950/85 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 border border-gold-500/30">
+                        #{item.bina_id}
                       </span>
-                      <span>{nicheInfo.handle}</span>
-                    </span>
-                    <StatusBadge
-                      label={ARCHETYPE_LABELS[item.archetype]}
-                      tone="neutral"
-                    />
-                    {item.has_bill_of_sale && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-950/85 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
-                        <FileCheck2 className="h-3 w-3" />
-                        Kupça
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Video Version Indicator */}
-                  <div className="absolute top-3 right-3">
-                    {render ? (
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold backdrop-blur-sm ${
-                          render.status === "COMPLETED"
-                            ? "border-emerald-500/50 bg-emerald-950/85 text-emerald-200"
-                            : render.status === "FAILED"
-                              ? "border-rose-500/50 bg-rose-950/85 text-rose-200"
-                              : "border-violet-500/50 bg-violet-950/85 text-violet-200"
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold backdrop-blur-md ${
+                          nicheInfo.niche === "LUXURY"
+                            ? "border-amber-400/50 bg-amber-950/85 text-amber-200"
+                            : nicheInfo.niche === "AFFORDABLE"
+                            ? "border-emerald-400/50 bg-emerald-950/85 text-emerald-200"
+                            : nicheInfo.niche === "TIKTOK"
+                            ? "border-rose-400/50 bg-rose-950/85 text-rose-200"
+                            : "border-sky-400/50 bg-sky-950/85 text-sky-200"
                         }`}
                       >
-                        <Film className="h-3 w-3" />
-                        v{render.version_num} •{" "}
-                        {(RENDER_STATUS_META[render.status] ?? { label: render.status }).label}
+                        <span>
+                          {nicheInfo.niche === "LUXURY"
+                            ? "💎"
+                            : nicheInfo.niche === "AFFORDABLE"
+                            ? "🏠"
+                            : nicheInfo.niche === "TIKTOK"
+                            ? "🔥"
+                            : "🏢"}
+                        </span>
+                        <span>{nicheInfo.handle}</span>
                       </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-obsidian-950/80 px-2.5 py-0.5 text-[11px] text-slate-400">
-                        <Film className="h-3 w-3" />
-                        Video yoxdur
-                      </span>
-                    )}
+                      <StatusBadge
+                        label={ARCHETYPE_LABELS[item.archetype]}
+                        tone="neutral"
+                      />
+                      {item.has_bill_of_sale && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-950/85 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                          <FileCheck2 className="h-3 w-3" />
+                          Kupça
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Video Version Indicator */}
+                    <div className="flex-shrink-0 pointer-events-auto">
+                      {render ? (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold backdrop-blur-sm ${
+                            render.status === "COMPLETED"
+                              ? "border-emerald-500/50 bg-emerald-950/85 text-emerald-200"
+                              : render.status === "FAILED"
+                                ? "border-rose-500/50 bg-rose-950/85 text-rose-200"
+                                : "border-violet-500/50 bg-violet-950/85 text-violet-200"
+                          }`}
+                        >
+                          <Film className="h-3 w-3" />
+                          v{render.version_num} •{" "}
+                          {(RENDER_STATUS_META[render.status] ?? { label: render.status }).label}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-obsidian-950/80 px-2.5 py-0.5 text-[11px] text-slate-400">
+                          <Film className="h-3 w-3" />
+                          Video yoxdur
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Price Overlay */}

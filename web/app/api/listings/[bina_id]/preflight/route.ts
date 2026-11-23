@@ -45,6 +45,7 @@ interface PreflightRequestBody {
   listing_id?: string;
   render_version_id?: string;
   dispatch_to_telegram?: boolean;
+  bypass_live_check?: boolean;
 }
 
 export async function POST(
@@ -88,7 +89,12 @@ export async function POST(
     // Body is optional if listing_id is derived from bina_id
   }
 
-  const { listing_id, render_version_id, dispatch_to_telegram = false } = body;
+  const {
+    listing_id,
+    render_version_id,
+    dispatch_to_telegram = false,
+    bypass_live_check = false,
+  } = body;
   const supabase = createAdminClient();
 
   // 3. Query listing, latest render_version, and publication from Supabase
@@ -141,363 +147,382 @@ export async function POST(
       0
   );
 
-  // 4. Fetch https://bina.az/items/${bina_id} with 8-second timeout & desktop User-Agent
-  const targetUrl = `https://bina.az/items/${numericBinaId}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-  let fetchRes: Response;
-  let html = "";
-
-  try {
-    fetchRes = await fetch(targetUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": DESKTOP_USER_AGENT,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "az,ru;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-      },
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    responseTimeMs = Date.now() - startTime;
-    clearTimeout(timeoutId);
-  } catch (fetchErr: unknown) {
-    clearTimeout(timeoutId);
-    responseTimeMs = Date.now() - startTime;
-    const isTimeout =
-      fetchErr instanceof Error && fetchErr.name === "AbortError";
-    const errorMessage = isTimeout
-      ? "bina.az sorğusu 8 saniyəlik vaxt limitini aşdı (Timeout)."
-      : `bina.az ilə əlaqə qurularkən şəbəkə xətası: ${
-          fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
-        }`;
-
-    // Audit log
-    await supabase.from("preflight_checks").insert({
-      listing_id: listing.id,
-      bina_id: numericBinaId,
-      result: "SCRAPE_ERROR",
-      response_time_ms: responseTimeMs,
-    });
-
-    return NextResponse.json(
-      {
-        ok: false,
-        reason: "SCRAPE_ERROR",
-        message: errorMessage,
-        response_time_ms: responseTimeMs,
-      },
-      { status: 502 }
-    );
-  }
-
-  // 5. Liveness Check & Residential Worker Delegation
-  const isHttpDelisted = fetchRes.status === 404 || fetchRes.status === 410;
-
-  if (!isHttpDelisted) {
-    try {
-      html = await fetchRes.text();
-    } catch {
-      html = "";
-    }
-  }
-
   let portalPrice: number | null = null;
 
-  // Detect Cloudflare Turnstile / anti-bot challenge on datacenter IPs (e.g. Netlify AWS)
-  const isCloudflareBlocked =
-    fetchRes.status === 403 ||
-    fetchRes.status === 429 ||
-    html.includes("<title>Just a moment...</title>") ||
-    html.includes("cf-browser-verification") ||
-    html.includes("Attention Required! | Cloudflare");
-
-  if (isCloudflareBlocked) {
-    console.log(
-      `[PREFLIGHT] Cloudflare challenge detected on Netlify IP. Delegating to residential Local Worker via pipeline_jobs...`
-    );
-
-    const idempotencyKey = `preflight_${numericBinaId}_${Date.now()}`;
-    const { data: job, error: jobErr } = await supabase
-      .from("pipeline_jobs")
-      .insert({
-        idempotency_key: idempotencyKey,
-        job_type: "PREFLIGHT_CHECK",
-        listing_id: listing.id,
-        trigger_source: "WEB_UI",
-        params_json: {
-          bina_id: numericBinaId,
-          listing_id: listing.id,
-          expected_price: expectedPrice,
+  if (bypass_live_check) {
+    if (!expectedPrice || expectedPrice <= 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          message: "Bazadakı elan üçün etibarlı qiymət tapılmadı.",
         },
-        status: "QUEUED",
-      })
-      .select("id")
-      .single();
+        { status: 400 }
+      );
+    }
+    portalPrice = expectedPrice;
+    responseTimeMs = Date.now() - startTime;
+  } else {
+    // 4. Fetch https://bina.az/items/${bina_id} with 8-second timeout & desktop User-Agent
+    const targetUrl = `https://bina.az/items/${numericBinaId}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    if (!jobErr && job?.id) {
-      // Poll pipeline_jobs for up to 6.5s (16 x 400ms)
-      const pollStart = Date.now();
-      let workerResult: Record<string, unknown> | null = null;
+    let fetchRes: Response;
+    let html = "";
 
-      while (Date.now() - pollStart < 6500) {
-        await new Promise((r) => setTimeout(r, 400));
+    try {
+      fetchRes = await fetch(targetUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": DESKTOP_USER_AGENT,
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "az,ru;q=0.9,en;q=0.8",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      responseTimeMs = Date.now() - startTime;
+      clearTimeout(timeoutId);
+    } catch (fetchErr: unknown) {
+      clearTimeout(timeoutId);
+      responseTimeMs = Date.now() - startTime;
+      const isTimeout =
+        fetchErr instanceof Error && fetchErr.name === "AbortError";
+      const errorMessage = isTimeout
+        ? "bina.az sorğusu 8 saniyəlik vaxt limitini aşdı (Timeout)."
+        : `bina.az ilə əlaqə qurularkən şəbəkə xətası: ${
+            fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+          }`;
 
-        const { data: jobStatus } = await supabase
-          .from("pipeline_jobs")
-          .select("status, error_message")
-          .eq("id", job.id)
-          .single();
+      // Audit log
+      await supabase.from("preflight_checks").insert({
+        listing_id: listing.id,
+        bina_id: numericBinaId,
+        result: "SCRAPE_ERROR",
+        response_time_ms: responseTimeMs,
+      });
 
-        if (jobStatus?.status === "SUCCEEDED") {
-          // Query latest preflight_checks entry for this listing
-          const { data: checkData } = await supabase
-            .from("preflight_checks")
-            .select("*")
-            .eq("listing_id", listing.id)
-            .order("checked_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "SCRAPE_ERROR",
+          message: errorMessage,
+          can_fallback_to_db: true,
+          db_price: expectedPrice,
+          response_time_ms: responseTimeMs,
+        },
+        { status: 502 }
+      );
+    }
 
-          if (checkData) {
-            workerResult = checkData;
+    // 5. Liveness Check & Residential Worker Delegation
+    const isHttpDelisted = fetchRes.status === 404 || fetchRes.status === 410;
+
+    if (!isHttpDelisted) {
+      try {
+        html = await fetchRes.text();
+      } catch {
+        html = "";
+      }
+    }
+
+    // Detect Cloudflare Turnstile / anti-bot challenge on datacenter IPs (e.g. Vercel AWS)
+    const isCloudflareBlocked =
+      fetchRes.status === 403 ||
+      fetchRes.status === 429 ||
+      html.includes("<title>Just a moment...</title>") ||
+      html.includes("cf-browser-verification") ||
+      html.includes("Attention Required! | Cloudflare");
+
+    if (isCloudflareBlocked) {
+      console.log(
+        `[PREFLIGHT] Cloudflare challenge detected on Vercel IP. Delegating to residential Local Worker via pipeline_jobs...`
+      );
+
+      const idempotencyKey = `preflight_${numericBinaId}_${Date.now()}`;
+      const { data: job, error: jobErr } = await supabase
+        .from("pipeline_jobs")
+        .insert({
+          idempotency_key: idempotencyKey,
+          job_type: "PREFLIGHT_CHECK",
+          listing_id: listing.id,
+          trigger_source: "WEB_UI",
+          params_json: {
+            bina_id: numericBinaId,
+            listing_id: listing.id,
+            expected_price: expectedPrice,
+          },
+          status: "QUEUED",
+        })
+        .select("id")
+        .single();
+
+      if (!jobErr && job?.id) {
+        // Poll pipeline_jobs for up to 6.5s (16 x 400ms)
+        const pollStart = Date.now();
+        let workerResult: Record<string, unknown> | null = null;
+
+        while (Date.now() - pollStart < 6500) {
+          await new Promise((r) => setTimeout(r, 400));
+
+          const { data: jobStatus } = await supabase
+            .from("pipeline_jobs")
+            .select("status, error_message")
+            .eq("id", job.id)
+            .single();
+
+          if (jobStatus?.status === "SUCCEEDED") {
+            // Query latest preflight_checks entry for this listing
+            const { data: checkData } = await supabase
+              .from("preflight_checks")
+              .select("*")
+              .eq("listing_id", listing.id)
+              .order("checked_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (checkData) {
+              workerResult = checkData;
+              break;
+            }
+          } else if (jobStatus?.status === "FAILED") {
             break;
           }
-        } else if (jobStatus?.status === "FAILED") {
-          break;
-        }
-      }
-
-      if (workerResult) {
-        responseTimeMs = Date.now() - startTime;
-        if (workerResult.result === "REMOVED_ON_BINA") {
-          return NextResponse.json({
-            ok: false,
-            reason: "REMOVED_ON_BINA",
-            message: "Elan bina.az-dan silinib və ya satılıb.",
-            response_time_ms: responseTimeMs,
-          });
         }
 
-        if (workerResult.portal_price !== undefined && workerResult.portal_price !== null) {
-          const parsed = parseFloat(String(workerResult.portal_price));
-          if (!Number.isNaN(parsed) && parsed > 0) {
-            portalPrice = parsed;
+        if (workerResult) {
+          responseTimeMs = Date.now() - startTime;
+          if (workerResult.result === "REMOVED_ON_BINA") {
+            return NextResponse.json({
+              ok: false,
+              reason: "REMOVED_ON_BINA",
+              message: "Elan bina.az-dan silinib və ya satılıb.",
+              response_time_ms: responseTimeMs,
+            });
+          }
+
+          if (workerResult.portal_price !== undefined && workerResult.portal_price !== null) {
+            const parsed = parseFloat(String(workerResult.portal_price));
+            if (!Number.isNaN(parsed) && parsed > 0) {
+              portalPrice = parsed;
+            }
           }
         }
       }
     }
-  }
 
-  const lowerHtml = html.toLowerCase();
-  const hasDeletedClass =
-    html.includes("item_status_deleted") ||
-    /class=["'][^"']*item_status_deleted[^"']*["']/i.test(html);
+    const lowerHtml = html.toLowerCase();
+    const hasDeletedClass =
+      html.includes("item_status_deleted") ||
+      /class=["'][^"']*item_status_deleted[^"']*["']/i.test(html);
 
-  const hasDeletedText = REMOVED_DOM_PHRASES.some((phrase) =>
-    lowerHtml.includes(phrase)
-  );
-
-  // Check Next.js __NEXT_DATA__ dehydrated JSON if present
-  let isNextDataDeleted = false;
-  try {
-    const nextMatch = html.match(
-      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+    const hasDeletedText = REMOVED_DOM_PHRASES.some((phrase) =>
+      lowerHtml.includes(phrase)
     );
-    if (nextMatch && nextMatch[1]) {
-      const nextJson = JSON.parse(nextMatch[1]);
-      const currentItem = nextJson?.props?.pageProps?.currentItemData;
-      const statusCode = nextJson?.props?.pageProps?.statusCode;
-      if (statusCode === 404 || statusCode === 410) {
-        isNextDataDeleted = true;
-      }
-      if (currentItem) {
-        const itemStatus = String(currentItem.status || "").toLowerCase();
-        if (
-          ["deleted", "removed", "expired", "archived", "sold", "inactive"].includes(
-            itemStatus
-          ) ||
-          currentItem.isDeleted ||
-          currentItem.isExpired
-        ) {
-          isNextDataDeleted = true;
-        }
-      }
-    }
-  } catch {
-    // Ignore JSON parsing errors
-  }
 
-  const isRemoved =
-    isHttpDelisted || hasDeletedClass || hasDeletedText || isNextDataDeleted;
-
-  if (isRemoved) {
-    // Update listing: source_availability='REMOVED_ON_BINA', editorial_status='ARCHIVED'
-    await supabase
-      .from("listings")
-      .update({
-        source_availability: "REMOVED_ON_BINA",
-        editorial_status: "ARCHIVED",
-      })
-      .eq("id", listing.id);
-
-    // Update publication if present
-    if (publication) {
-      await supabase
-        .from("publications")
-        .update({
-          preflight_status: "REMOVED_ON_BINA",
-          last_preflight_error: "Elan bina.az-dan silinib və ya satılıb.",
-        })
-        .eq("id", publication.id);
-    }
-
-    // Log to preflight_checks (result='REMOVED_ON_BINA')
-    await supabase.from("preflight_checks").insert({
-      listing_id: listing.id,
-      bina_id: numericBinaId,
-      result: "REMOVED_ON_BINA",
-      response_time_ms: responseTimeMs,
-    });
-
-    return NextResponse.json({
-      ok: false,
-      reason: "REMOVED_ON_BINA",
-      message: "Elan bina.az-dan silinib və ya satılıb.",
-      response_time_ms: responseTimeMs,
-    });
-  }
-
-  // 6. Robust Multi-Layer Price Extraction & Comparison (if not already extracted by worker)
-  if (portalPrice === null) {
-    // Layer 1: __NEXT_DATA__ JSON parsing (canonical bina.az pageProps)
+    // Check Next.js __NEXT_DATA__ dehydrated JSON if present
+    let isNextDataDeleted = false;
     try {
       const nextMatch = html.match(
-      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
-    );
-    if (nextMatch && nextMatch[1]) {
-      const nextJson = JSON.parse(nextMatch[1]);
-      const pageProps = nextJson?.props?.pageProps;
-
-      // Check currentItemData.price
-      const currentItem = pageProps?.currentItemData;
-      if (currentItem?.price !== undefined && currentItem?.price !== null) {
-        if (typeof currentItem.price === "object") {
-          const rawTotal = currentItem.price.total ?? currentItem.price.value;
-          if (rawTotal !== undefined && rawTotal !== null) {
-            const p = parseFloat(String(rawTotal));
-            if (!Number.isNaN(p) && p > 0) portalPrice = p;
+        /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+      );
+      if (nextMatch && nextMatch[1]) {
+        const nextJson = JSON.parse(nextMatch[1]);
+        const currentItem = nextJson?.props?.pageProps?.currentItemData;
+        const statusCode = nextJson?.props?.pageProps?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          isNextDataDeleted = true;
+        }
+        if (currentItem) {
+          const itemStatus = String(currentItem.status || "").toLowerCase();
+          if (
+            ["deleted", "removed", "expired", "archived", "sold", "inactive"].includes(
+              itemStatus
+            ) ||
+            currentItem.isDeleted ||
+            currentItem.isExpired
+          ) {
+            isNextDataDeleted = true;
           }
-        } else if (
-          typeof currentItem.price === "number" ||
-          typeof currentItem.price === "string"
-        ) {
-          const p = parseFloat(String(currentItem.price));
+        }
+      }
+    } catch {
+      // Ignore JSON parsing errors
+    }
+
+    const isRemoved =
+      isHttpDelisted || hasDeletedClass || hasDeletedText || isNextDataDeleted;
+
+    if (isRemoved) {
+      // Update listing: source_availability='REMOVED_ON_BINA', editorial_status='ARCHIVED'
+      await supabase
+        .from("listings")
+        .update({
+          source_availability: "REMOVED_ON_BINA",
+          editorial_status: "ARCHIVED",
+        })
+        .eq("id", listing.id);
+
+      // Update publication if present
+      if (publication) {
+        await supabase
+          .from("publications")
+          .update({
+            preflight_status: "REMOVED_ON_BINA",
+            last_preflight_error: "Elan bina.az-dan silinib və ya satılıb.",
+          })
+          .eq("id", publication.id);
+      }
+
+      // Log to preflight_checks (result='REMOVED_ON_BINA')
+      await supabase.from("preflight_checks").insert({
+        listing_id: listing.id,
+        bina_id: numericBinaId,
+        result: "REMOVED_ON_BINA",
+        response_time_ms: responseTimeMs,
+      });
+
+      return NextResponse.json({
+        ok: false,
+        reason: "REMOVED_ON_BINA",
+        message: "Elan bina.az-dan silinib və ya satılıb.",
+        response_time_ms: responseTimeMs,
+      });
+    }
+
+    // 6. Robust Multi-Layer Price Extraction & Comparison (if not already extracted by worker)
+    if (portalPrice === null) {
+      // Layer 1: __NEXT_DATA__ JSON parsing (canonical bina.az pageProps)
+      try {
+        const nextMatch = html.match(
+          /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+        );
+        if (nextMatch && nextMatch[1]) {
+          const nextJson = JSON.parse(nextMatch[1]);
+          const pageProps = nextJson?.props?.pageProps;
+
+          // Check currentItemData.price
+          const currentItem = pageProps?.currentItemData;
+          if (currentItem?.price !== undefined && currentItem?.price !== null) {
+            if (typeof currentItem.price === "object") {
+              const rawTotal = currentItem.price.total ?? currentItem.price.value;
+              if (rawTotal !== undefined && rawTotal !== null) {
+                const p = parseFloat(String(rawTotal));
+                if (!Number.isNaN(p) && p > 0) portalPrice = p;
+              }
+            } else if (
+              typeof currentItem.price === "number" ||
+              typeof currentItem.price === "string"
+            ) {
+              const p = parseFloat(String(currentItem.price));
+              if (!Number.isNaN(p) && p > 0) portalPrice = p;
+            }
+          }
+
+          // Check apolloState Item:ID
+          if (portalPrice === null && pageProps?.apolloState) {
+            const itemObj = pageProps.apolloState[`Item:${numericBinaId}`];
+            if (itemObj?.price !== undefined && itemObj?.price !== null) {
+              if (typeof itemObj.price === "object") {
+                const rawTotal = itemObj.price.total ?? itemObj.price.value;
+                if (rawTotal !== undefined && rawTotal !== null) {
+                  const p = parseFloat(String(rawTotal));
+                  if (!Number.isNaN(p) && p > 0) portalPrice = p;
+                }
+              } else if (
+                typeof itemObj.price === "number" ||
+                typeof itemObj.price === "string"
+              ) {
+                const p = parseFloat(String(itemObj.price));
+                if (!Number.isNaN(p) && p > 0) portalPrice = p;
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignore JSON parsing errors
+      }
+
+      // Layer 2: Regex for Apollo GraphQL cached Price object in HTML
+      if (portalPrice === null) {
+        const apolloMatch = html.match(
+          /"price":\s*\{\s*"__typename":\s*"Price"[^}]*"total":\s*(\d+)/
+        );
+        if (apolloMatch && apolloMatch[1]) {
+          const p = parseFloat(apolloMatch[1]);
           if (!Number.isNaN(p) && p > 0) portalPrice = p;
         }
       }
 
-      // Check apolloState Item:ID
-      if (portalPrice === null && pageProps?.apolloState) {
-        const itemObj = pageProps.apolloState[`Item:${numericBinaId}`];
-        if (itemObj?.price !== undefined && itemObj?.price !== null) {
-          if (typeof itemObj.price === "object") {
-            const rawTotal = itemObj.price.total ?? itemObj.price.value;
-            if (rawTotal !== undefined && rawTotal !== null) {
-              const p = parseFloat(String(rawTotal));
-              if (!Number.isNaN(p) && p > 0) portalPrice = p;
-            }
-          } else if (
-            typeof itemObj.price === "number" ||
-            typeof itemObj.price === "string"
-          ) {
-            const p = parseFloat(String(itemObj.price));
-            if (!Number.isNaN(p) && p > 0) portalPrice = p;
+      // Layer 3: Schema.org / JSON-LD Offer Price
+      if (portalPrice === null) {
+        const ldMatch = html.match(
+          /"@type":\s*"Offer"[^}]*"price":\s*"(\d+)"/
+        );
+        if (ldMatch && ldMatch[1]) {
+          const p = parseFloat(ldMatch[1]);
+          if (!Number.isNaN(p) && p > 0) portalPrice = p;
+        }
+      }
+
+      // Layer 4: Styled-components price text preceding currency symbol (AZN or ₼)
+      if (portalPrice === null) {
+        const scMatch =
+          html.match(/>([\d\s]{3,15})<\/[a-z0-9]+>[^<]{0,20}(?:AZN|₼)/i) ||
+          html.match(/>([\d\s]{3,15})\s*(?:<!--.*?-->\s*)*(?:AZN|₼)/i);
+        if (scMatch && scMatch[1]) {
+          const rawDigits = scMatch[1].replace(/\D/g, "");
+          if (rawDigits) {
+            const parsed = parseFloat(rawDigits);
+            if (!Number.isNaN(parsed) && parsed > 0) portalPrice = parsed;
           }
         }
       }
-    }
-  } catch {
-    // Ignore JSON parsing errors
-  }
 
-  // Layer 2: Regex for Apollo GraphQL cached Price object in HTML
-  if (portalPrice === null) {
-    const apolloMatch = html.match(
-      /"price":\s*\{\s*"__typename":\s*"Price"[^}]*"total":\s*(\d+)/
-    );
-    if (apolloMatch && apolloMatch[1]) {
-      const p = parseFloat(apolloMatch[1]);
-      if (!Number.isNaN(p) && p > 0) portalPrice = p;
-    }
-  }
-
-  // Layer 3: Schema.org / JSON-LD Offer Price
-  if (portalPrice === null) {
-    const ldMatch = html.match(
-      /"@type":\s*"Offer"[^}]*"price":\s*"(\d+)"/
-    );
-    if (ldMatch && ldMatch[1]) {
-      const p = parseFloat(ldMatch[1]);
-      if (!Number.isNaN(p) && p > 0) portalPrice = p;
-    }
-  }
-
-  // Layer 4: Styled-components price text preceding currency symbol (AZN or ₼)
-  if (portalPrice === null) {
-    const scMatch =
-      html.match(/>([\d\s]{3,15})<\/[a-z0-9]+>[^<]{0,20}(?:AZN|₼)/i) ||
-      html.match(/>([\d\s]{3,15})\s*(?:<!--.*?-->\s*)*(?:AZN|₼)/i);
-    if (scMatch && scMatch[1]) {
-      const rawDigits = scMatch[1].replace(/\D/g, "");
-      if (rawDigits) {
-        const parsed = parseFloat(rawDigits);
-        if (!Number.isNaN(parsed) && parsed > 0) portalPrice = parsed;
+      // Layer 5: Legacy HTML span with class="price-val"
+      if (portalPrice === null) {
+        const priceValMatch = html.match(
+          /class=["'][^"']*price-val[^"']*["'][^>]*>([\s\S]*?)<\//i
+        );
+        if (priceValMatch && priceValMatch[1]) {
+          const rawVal = priceValMatch[1].replace(/<[^>]*>/g, "").replace(/\s+/g, "");
+          const parsed = parseFloat(rawVal);
+          if (!Number.isNaN(parsed) && parsed > 0) portalPrice = parsed;
+        }
       }
     }
-  }
 
-  // Layer 5: Legacy HTML span with class="price-val"
-  if (portalPrice === null) {
-    const priceValMatch = html.match(
-      /class=["'][^"']*price-val[^"']*["'][^>]*>([\s\S]*?)<\//i
-    );
-    if (priceValMatch && priceValMatch[1]) {
-      const rawVal = priceValMatch[1].replace(/<[^>]*>/g, "").replace(/\s+/g, "");
-      const parsed = parseFloat(rawVal);
-      if (!Number.isNaN(parsed) && parsed > 0) portalPrice = parsed;
-    }
-  }
-  }
+    if (portalPrice === null || Number.isNaN(portalPrice) || portalPrice <= 0) {
+      console.error(
+        `[PREFLIGHT ERROR] bina_id=${numericBinaId} fetchStatus=${fetchRes.status} htmlLen=${html.length} snippet=${html.slice(0, 300)}`
+      );
 
-  if (portalPrice === null || Number.isNaN(portalPrice) || portalPrice <= 0) {
-    console.error(
-      `[PREFLIGHT ERROR] bina_id=${numericBinaId} fetchStatus=${fetchRes.status} htmlLen=${html.length} snippet=${html.slice(0, 300)}`
-    );
-
-    await supabase.from("preflight_checks").insert({
-      listing_id: listing.id,
-      bina_id: numericBinaId,
-      result: "SCRAPE_ERROR",
-      response_time_ms: responseTimeMs,
-    });
-
-    return NextResponse.json(
-      {
-        ok: false,
-        reason: "SCRAPE_ERROR",
-        message:
-          "bina.az portalından qiymət dəyəri oxuna bilmədi. bina.az bulud serverlərini (Netlify) blokladığı üçün yerli worker (local_worker.py) tələb olunur.",
+      await supabase.from("preflight_checks").insert({
+        listing_id: listing.id,
+        bina_id: numericBinaId,
+        result: "SCRAPE_ERROR",
         response_time_ms: responseTimeMs,
-        debug_fetch_status: fetchRes.status,
-        debug_html_len: html.length,
-      },
-      { status: 502 }
-    );
+      });
+
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "SCRAPE_ERROR",
+          message:
+            "bina.az portalından canlı qiymət oxuna bilmədi (Vercel bulud IP bloklaması). Bazadakı təsdiqlənmiş qiymətlə göndərə və ya yerli worker-i (local_worker.py) işə sala bilərsiniz.",
+          can_fallback_to_db: true,
+          db_price: expectedPrice,
+          response_time_ms: responseTimeMs,
+          debug_fetch_status: fetchRes.status,
+          debug_html_len: html.length,
+        },
+        { status: 502 }
+      );
+    }
   }
 
   // Compare with render_version?.rendered_price || listing.price_azn / price_azn_normalized
@@ -555,7 +580,7 @@ export async function POST(
   await supabase.from("preflight_checks").insert({
     listing_id: listing.id,
     bina_id: numericBinaId,
-    result: "PASSED",
+    result: bypass_live_check ? "PASSED_WITH_DB_FALLBACK" : "PASSED",
     portal_price: portalPrice,
     video_price: expectedPrice,
     price_delta_pct: 0,

@@ -53,22 +53,26 @@ vi.mock("@/lib/supabase/admin", () => ({
       }
 
       if (table === "listings") {
+        const mockListingData = {
+          data: {
+            id: "listing-test-1",
+            bina_id: "5616503",
+            title: "Nəsimi 3 otaqlı",
+            price_azn_normalized: 185000,
+            location: "Nəsimi rayonu",
+            owner_phone_raw: "+994501234567",
+            contact_name: "Əli Məmmədov",
+            has_bill_of_sale: true,
+          },
+          error: null,
+        };
         return {
           select: () => ({
+            eq: () => ({
+              maybeSingle: () => mockListingData,
+            }),
             or: () => ({
-              maybeSingle: () => ({
-                data: {
-                  id: "listing-test-1",
-                  bina_id: "5616503",
-                  title: "Nəsimi 3 otaqlı",
-                  price_azn_normalized: 185000,
-                  location: "Nəsimi rayonu",
-                  owner_phone_raw: "+994501234567",
-                  contact_name: "Əli Məmmədov",
-                  has_bill_of_sale: true,
-                },
-                error: null,
-              }),
+              maybeSingle: () => mockListingData,
             }),
           }),
         };

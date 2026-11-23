@@ -122,7 +122,13 @@ export function VideoPipelineCard({
       const data = await res.json();
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Teleqram dispetçerində xəta baş verdi");
+        const errorMsg =
+          typeof data.error === "string"
+            ? data.error
+            : data.error && typeof data.error === "object"
+              ? String((data.error as { message?: string }).message || (data.error as { details?: string }).details || JSON.stringify(data.error))
+              : "Teleqram dispetçerində xəta baş verdi";
+        throw new Error(errorMsg);
       }
 
       if (data.dispatch_mode === "QUEUED_WORKER") {
@@ -132,7 +138,15 @@ export function VideoPipelineCard({
       }
       setCooldownSeconds(15);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Bilinməyən xəta baş verdi";
+      let msg = "Bilinməyən xəta baş verdi";
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (err && typeof err === "object") {
+        const errObj = err as Record<string, unknown>;
+        msg = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
+      } else if (typeof err === "string") {
+        msg = err;
+      }
       setDispatchError(msg);
       setDispatchStatus("error");
     } finally {
@@ -159,10 +173,16 @@ export function VideoPipelineCard({
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Montaj növbəsinə əlavə edilərkən xəta baş verdi");
+        const errorMsg =
+          typeof data.error === "string"
+            ? data.error
+            : data.error && typeof data.error === "object"
+              ? String((data.error as { message?: string }).message || (data.error as { details?: string }).details || JSON.stringify(data.error))
+              : "Montaj növbəsinə əlavə edilərkən xəta baş verdi";
+        throw new Error(errorMsg);
       }
 
       setQueueStatus("success");
@@ -170,7 +190,15 @@ export function VideoPipelineCard({
         isRendered: false,
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Montaj xətası baş verdi";
+      let msg = "Montaj xətası baş verdi";
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (err && typeof err === "object") {
+        const errObj = err as Record<string, unknown>;
+        msg = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
+      } else if (typeof err === "string") {
+        msg = err;
+      }
       setQueueError(msg);
       setQueueStatus("error");
     } finally {

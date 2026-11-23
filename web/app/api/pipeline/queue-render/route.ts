@@ -96,26 +96,38 @@ export async function POST(request: Request) {
 
   const supabaseAdmin = createAdminClient();
 
-  // Resolve listing details if needed
+  // Resolve listing details safely avoiding Postgres UUID cast syntax error on 7-digit bina_id
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const isUuid = UUID_REGEX.test(listing_id);
+
   let binaId = body.bina_id;
-  let resolvedListingId = listing_id;
+  let resolvedListingUuid: string | null = isUuid ? listing_id : null;
 
   try {
-    const { data: listing } = await supabaseAdmin
-      .from("listings")
-      .select("id, bina_id")
-      .or(`id.eq.${listing_id},bina_id.eq.${listing_id}`)
-      .maybeSingle();
+    const selectQuery = supabaseAdmin.from("listings").select("id, bina_id");
+    let query: unknown = selectQuery;
+    if (typeof (selectQuery as { eq?: unknown }).eq === "function") {
+      query = isUuid
+        ? (selectQuery as { eq: (col: string, val: string) => unknown }).eq("id", listing_id)
+        : (selectQuery as { eq: (col: string, val: string) => unknown }).eq("bina_id", String(listing_id));
+    } else if (typeof (selectQuery as { or?: unknown }).or === "function") {
+      query = (selectQuery as { or: (cond: string) => unknown }).or(
+        isUuid ? `id.eq.${listing_id}` : `bina_id.eq.${listing_id}`
+      );
+    }
+    const { data: listing } =
+      (await (query as { maybeSingle?: () => Promise<{ data: { id?: string; bina_id?: string } | null }> })?.maybeSingle?.()) ??
+      {};
 
     if (listing) {
-      resolvedListingId = listing.id || listing_id;
-      binaId = binaId || listing.bina_id || listing_id;
+      resolvedListingUuid = listing.id ?? null;
+      binaId = binaId || listing.bina_id;
     }
-  } catch {
-    // Non-fatal query fallback
+  } catch (lookupErr) {
+    console.warn("[QUEUE_RENDER] Listing lookup notice:", lookupErr);
   }
 
-  binaId = binaId || listing_id;
+  binaId = binaId || (isUuid ? "unknown" : listing_id);
 
   try {
     const { data: job, error: jobErr } = await supabaseAdmin
@@ -123,7 +135,7 @@ export async function POST(request: Request) {
       .insert({
         idempotency_key: `initial_render:${binaId}:${Date.now()}`,
         job_type: "RENDER_INITIAL",
-        listing_id: resolvedListingId,
+        listing_id: resolvedListingUuid,
         trigger_source: "WEB_UI",
         params_json: {
           bina_id: binaId,
@@ -140,15 +152,17 @@ export async function POST(request: Request) {
     }
 
     // Record audit event in listing_events
-    try {
-      await supabaseAdmin.from("listing_events").insert({
-        listing_id: resolvedListingId,
-        event_type: "STATUS_CHANGED",
-        actor: "web_user",
-        notes: `Montaj boru xəttinə göndərildi (job_id: ${job?.id}, voice: ${voice_preset || "Arif"})`,
-      });
-    } catch {
-      // Non-fatal audit log
+    if (resolvedListingUuid) {
+      try {
+        await supabaseAdmin.from("listing_events").insert({
+          listing_id: resolvedListingUuid,
+          event_type: "STATUS_CHANGED",
+          actor: "web_user",
+          notes: `Montaj boru xəttinə göndərildi (job_id: ${job?.id}, voice: ${voice_preset || "Arif"})`,
+        });
+      } catch {
+        // Non-fatal audit log
+      }
     }
 
     return NextResponse.json({
@@ -156,11 +170,20 @@ export async function POST(request: Request) {
       job_id: job?.id,
     } as QueueRenderResponse);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    let message = "Montaj növbəsinə əlavə edilərkən xəta baş verdi.";
+    if (err instanceof Error) {
+      message = err.message;
+    } else if (err && typeof err === "object") {
+      const errObj = err as Record<string, unknown>;
+      message = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
+    } else if (typeof err === "string") {
+      message = err;
+    }
+    console.error("[QUEUE_RENDER ERROR]:", err);
     return NextResponse.json(
       {
         success: false,
-        error: message || "Montaj növbəsinə əlavə edilərkən xəta baş verdi.",
+        error: message,
       } as QueueRenderResponse,
       { status: 500 }
     );

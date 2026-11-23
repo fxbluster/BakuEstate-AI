@@ -355,7 +355,7 @@ export function PreflightModal({
   }, [isOpen, listing?.id]);
 
   // Explicit user confirmation to dispatch to Telegram
-  async function handleDispatchToTelegram() {
+  async function handleDispatchToTelegram(bypassLiveCheck = false) {
     if (!listing || isDispatchingTelegram || telegramSent) return;
     setIsDispatchingTelegram(true);
     setTelegramError(null);
@@ -368,6 +368,7 @@ export function PreflightModal({
           listing_id: listing.id,
           render_version_id: listing.latestRender?.id || null,
           dispatch_to_telegram: true, // User clicked confirm
+          bypass_live_check: bypassLiveCheck,
         }),
       });
 
@@ -379,6 +380,7 @@ export function PreflightModal({
 
       if (res.ok && data.ok) {
         setTelegramSent(true);
+        setStatusState("PASSED");
         if (data.telegram_message_id) {
           setResultData((prev) => (prev ? { ...prev, telegram_message_id: data.telegram_message_id } : data));
         }
@@ -810,14 +812,20 @@ export function PreflightModal({
                       "bina.az portalına qoşularkən xəta baş verdi və ya şəbəkə vaxtı bitdi."}
                   </p>
                   <p className="text-xs text-rose-300/80">
-                    Şəbəkə bağlantısını yoxlayın və ya bir neçə saniyə sonra
-                    təkrar cəhd edin.
+                    Bulud IP bloklaması zamanı yerli worker (local_worker.py) işə sala və ya bazadakı təsdiqlənmiş qiymətlə birbaşa davam edə bilərsiniz.
                   </p>
                 </div>
               </div>
+
+              {telegramError && (
+                <div className="mt-2 rounded-xl border border-rose-500/40 bg-rose-500/20 p-2.5 text-xs text-rose-200 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-400 flex-shrink-0" />
+                  <span>{telegramError}</span>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-2">
+            <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={onClose}
@@ -835,6 +843,28 @@ export function PreflightModal({
                 <RefreshCw className="h-3.5 w-3.5" />
                 <span>Yenidən Yoxla</span>
               </button>
+              {(listing.price_azn_normalized || listing.price) && (
+                <button
+                  type="button"
+                  disabled={isDispatchingTelegram}
+                  onClick={() => handleDispatchToTelegram(true)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 text-xs font-bold shadow-md hover:brightness-110 active:scale-[0.99] transition disabled:opacity-50"
+                >
+                  {isDispatchingTelegram ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Telegram-a Göndərilir...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-3.5 w-3.5" />
+                      <span>
+                        🛡️ Baza Qiyməti ilə Göndər ({formatAzn(listing.price_azn_normalized || listing.price)})
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         )}
