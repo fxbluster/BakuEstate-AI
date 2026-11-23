@@ -378,32 +378,6 @@ def generate_azerbaijani_script(
     desc_lower = (str(listing.get("description", "")) + " " + str(listing.get("title", ""))).lower()
     is_stone = any(kw in desc_lower for kw in ["daş", "minsk", "leninqrad", "eksperimental", "xruşşov"])
 
-    # Build verified architectural visual highlights in natural Baku conversational dialect
-    visual_elements: List[str] = []
-    if vp_data:
-        hook_txt = (vp_data.get("hook_sentence_az") or "").strip()
-        if hook_txt and not any(hook_txt in p for p in parts):
-            visual_elements.append(hook_txt if hook_txt.endswith((".", "!")) else f"{hook_txt}!")
-
-        vl = (vp_data.get("view_and_lighting") or "").strip()
-        if vl:
-            visual_elements.append(f"Baxın, {vl.rstrip('.')} ilə otaqlar gün boyu işıqlı və fərəhdir.")
-
-        fc = (vp_data.get("floor_and_ceiling") or "").strip()
-        if fc:
-            visual_elements.append(f"Təmirində keyfiyyətli materiallardan istifadə olunub: {fc.rstrip('.')}.")
-
-        ka = (vp_data.get("kitchen_appliances") or "").strip()
-        if ka:
-            visual_elements.append(f"Mətbəx tam təchiz edilib: {ka.rstrip('.')}.")
-
-        standouts = vp_data.get("standout_features") or []
-        if isinstance(standouts, list) and standouts:
-            clean_feats = [str(f).strip() for f in standouts if str(f).strip()]
-            if clean_feats:
-                feats_str = ", ".join(clean_feats[:3])
-                visual_elements.append(f"Həmçinin burada {feats_str} kimi rahatlıqlar düşünülüb.")
-
     if arch == "luxury":
         # Luxury Penthouse / High-End Tower Archetype
         parts.append(f"{loc_intro} premium səviyyəli möhtəşəm mənzil təqdim olunur.")
@@ -415,7 +389,6 @@ def generate_azerbaijani_script(
             suffix = azerbaijani_ordinal_suffix(floor)
             parts.append(f"Mənzil müasir elit kompleksin {floor}{suffix} mərtəbəsində yerləşir.")
         parts.append("Yüksək tavanlar, bahalı təmir materialları və 24 saat qorunan həyəti ilə şəxsi statusunuzun ən gözəl təcəssümüdür.")
-        parts.extend(visual_elements)
         if has_kupca:
             parts.append("Mülkiyyət sənədi çıxarışdır, ipotekaya tam yararlıdır.")
         parts.append(f"Təklif olunan qiymət {spoken_price}.")
@@ -427,7 +400,6 @@ def generate_azerbaijani_script(
         if rooms and area:
             parts.append(f"Geniş {rooms} otaqlı, {int(area)} kvadrat metr yaşayış sahəsi və abadlaşdırılmış həyətyanı sahəsi var.")
         parts.append("Təmiz hava, filterli hovuz, söhbətgah və rahat ailə istirahəti üçün hər bir şərait qurulub.")
-        parts.extend(visual_elements)
         if has_kupca:
             parts.append("Həm torpağın, həm tikilinin tam dövlət çıxarışı var.")
         parts.append(f"Qiyməti {spoken_price}.")
@@ -439,7 +411,6 @@ def generate_azerbaijani_script(
         if area:
             parts.append(f"Ümumi sahəsi {int(area)} kvadrat metr olan bu obyekt stabil icarə potensialına malikdir.")
         parts.append("Geniş vitraj fasad və əlverişli infrastruktur investisiyanın sürətli geri qayıtmasını təmin edir.")
-        parts.extend(visual_elements)
         if has_kupca:
             parts.append("Qeyri-yaşayış sənədi tam qaydasındadır.")
         parts.append(f"İnvestisiya dəyəri {spoken_price}.")
@@ -462,8 +433,6 @@ def generate_azerbaijani_script(
 
         if is_stone:
             parts.append("Bina tam daşdır — qalın daş divarlar yayda təbii sərinlik, qışda isə ideal istilik saxlayır.")
-
-        parts.extend(visual_elements)
 
         if has_kupca:
             parts.append("Ən əsası nədir bilirsiniz? Dövlət çıxarışı, yəni kupçası var! İpotekaya tam hazırdır!")

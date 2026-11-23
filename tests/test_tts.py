@@ -608,5 +608,73 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
 
 
 
+    def test_elevenlabs_default_model_is_eleven_v4(self):
+        """Verifies synthesize_elevenlabs_speech defaults to eleven_v4 model without forced downgrade."""
+        from unittest.mock import patch, MagicMock
+        from src.media.elevenlabs_tts import synthesize_elevenlabs_speech
+        import base64
+
+        temp_dir = tempfile.TemporaryDirectory()
+        out_dir = Path(temp_dir.name)
+        audio_p = out_dir / "v4_test.mp3"
+        srt_p = out_dir / "v4_test.srt"
+
+        fake_alignment = {
+            "characters": ["E", "v"],
+            "character_start_times_seconds": [0.0, 0.2],
+            "character_end_times_seconds": [0.2, 0.4]
+        }
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "audio_base64": base64.b64encode(b"ID3FakeV4Audio").decode("utf-8"),
+            "alignment": fake_alignment
+        }
+
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            duration = synthesize_elevenlabs_speech(
+                text="Ev",
+                output_audio_path=audio_p,
+                output_srt_path=srt_p,
+                api_key="xi-v4key",
+            )
+            mock_post.assert_called_once()
+            call_kwargs = mock_post.call_args[1]
+            payload = call_kwargs["json"]
+            self.assertEqual(payload["model_id"], "eleven_v4")
+
+        temp_dir.cleanup()
+
+    def test_generate_azerbaijani_script_no_english_leakage(self):
+        """Verifies script generation purges raw English GPT-4o vision elements and maintains pure Azerbaijani."""
+        from src.ai.vision_analyzer import PropertyVisualProfile
+
+        sample_listing = {
+            "bina_id": "test_pure_az_101",
+            "location": "Ağ Şəhər",
+            "rooms": 4,
+            "area": 160,
+            "price": 650000,
+            "has_bill_of_sale": True,
+        }
+        vp = PropertyVisualProfile(
+            renovation_quality="ultra_luxury",
+            hook_sentence_az="Dəniz mənzərəli eksklüziv mənzil!",
+            view_and_lighting="large panoramic windows overlooking the Caspian sea",
+            floor_and_ceiling="marble flooring and recessed LED lighting",
+            kitchen_appliances="unknown",
+            standout_features=["swimming pool in need of renovation", "smart home"],
+        )
+        script = generate_azerbaijani_script(sample_listing, visual_profile=vp)
+        self.assertIn("Dəniz mənzərəli eksklüziv mənzil!", script)
+        self.assertNotIn("unknown", script.lower())
+        self.assertNotIn("panoramic windows", script.lower())
+        self.assertNotIn("marble flooring", script.lower())
+        self.assertNotIn("swimming pool", script.lower())
+        # Word count should remain tight (~50-70 words) for 25-30s pacing
+        word_count = len(script.split())
+        self.assertLessEqual(word_count, 75, f"Script word count too long ({word_count} words)")
+
+
 if __name__ == "__main__":
     unittest.main()

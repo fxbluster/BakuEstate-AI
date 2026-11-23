@@ -237,10 +237,10 @@ def synthesize_elevenlabs_speech(
         (model_id.strip() if isinstance(model_id, str) and model_id.strip() else None)
         or os.getenv("ELEVENLABS_MODEL_ID")
         or ELEVENLABS_MODEL_ID
-        or "eleven_multilingual_v2"
+        or "eleven_v4"
     )
-    if not raw_model or raw_model.strip().lower() in ("eleven_v4", "v4", "eleven_turbo_v4", "none"):
-        target_model = "eleven_multilingual_v2"
+    if not raw_model or raw_model.strip().lower() in ("none", "", "eleven_multilingual_v2", "multilingual_v2"):
+        target_model = "eleven_v4"
     else:
         target_model = raw_model.strip()
 
