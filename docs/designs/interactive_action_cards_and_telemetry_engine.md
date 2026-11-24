@@ -1,7 +1,7 @@
 # BakuEstate-AI Interactive Action Cards, Cross-System Telemetry Ingestion, and Council Automation Engine (Executive Agent Hub V2)
 
 *   **Author:** fxbluster
-*   **Status:** Approved
+*   **Status:** Superseded by Left-Canvas Stage & Floating Window Cards
 *   **Date:** 2026-11-21
 
 --------------------------------------------------------------------------------

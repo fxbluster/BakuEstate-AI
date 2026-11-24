@@ -1,7 +1,7 @@
 # BakuEstate-AI: Left-Canvas Interactive Action Stage & Tri-Persona Cognitive Copilot
 
 *   **Author:** Dəniz & Antigravity (EGM Architecture & Ideation Squad)
-*   **Status:** Implemented (In Production)
+*   **Status:** Superseded by Floating Window Cards (docs/designs/floating_window_cards_and_truthful_telemetry.md)
 *   **Date:** 2026-11-22
 
 --------------------------------------------------------------------------------
