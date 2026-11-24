@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Film,
   Send,
+  ShieldAlert,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatAzn } from "@/lib/format";
@@ -175,6 +176,7 @@ export type PreflightStatusState =
   | "PASSED"
   | "PRICE_CHANGED"
   | "REMOVED_ON_BINA"
+  | "SCRAPE_FALLBACK_PROMPT"
   | "ERROR";
 
 export interface PreflightResponseData {
@@ -187,11 +189,14 @@ export interface PreflightResponseData {
     | "ERROR";
   message?: string;
   error?: string;
+  can_fallback_to_db?: boolean;
+  db_price?: number;
   old_price?: number;
   new_price?: number;
   delta_pct?: number;
   portal_price?: number;
   video_price?: number;
+  response_time_ms?: number;
   telegram_message_id?: number | string;
   telegram_url?: string;
   already_dispatched?: boolean;
@@ -318,6 +323,12 @@ export function PreflightModal({
               : null,
           });
         }
+      } else if (data.reason === "SCRAPE_ERROR" || res.status === 502) {
+        setStatusState("SCRAPE_FALLBACK_PROMPT");
+        setErrorMessage(
+          data.message ||
+            "bina.az portalı bulud IP-sini blokladı. Canlı qiymət oxuna bilmədi."
+        );
       } else {
         setStatusState("ERROR");
         setErrorMessage(
@@ -795,7 +806,80 @@ export function PreflightModal({
           </div>
         )}
 
-        {/* State 5: ERROR */}
+        {/* State 5: SCRAPE_FALLBACK_PROMPT (Amber Cloud IP Block Recovery) */}
+        {statusState === "SCRAPE_FALLBACK_PROMPT" && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-5 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-full bg-amber-500/20 border border-amber-500/50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <ShieldAlert className="h-6 w-6 text-amber-400" />
+                </div>
+                <div className="space-y-1.5 flex-1">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-2.5 py-0.5 text-xs font-semibold text-amber-300 border border-amber-500/40">
+                    ⚠️ Bulud Bloklaması (502 Scrape Error)
+                  </span>
+                  <p className="text-sm font-medium text-amber-200 leading-snug">
+                    bina.az portalı bulud server IP-sini blokladığı üçün canlı qiymət oxuna bilmədi.
+                  </p>
+                  <p className="text-xs text-amber-300/80">
+                    Bazadakı təsdiqlənmiş qiymətlə ({formatAzn(resultData?.db_price || listing.price_azn_normalized || listing.price)}) davam etmək və Teleqrama göndərmək istəyirsiniz?
+                  </p>
+                </div>
+              </div>
+
+              {telegramError && (
+                <div className="mt-2 rounded-xl border border-rose-500/40 bg-rose-500/20 p-2.5 text-xs text-rose-200 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-400 flex-shrink-0" />
+                  <span>{telegramError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="exec-btn-secondary text-xs"
+              >
+                Ləğv Et
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (listing) runInitialPreflightCheck(listing);
+                }}
+                className="exec-btn-secondary text-xs inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Yenidən Yoxla</span>
+              </button>
+              {(listing.price_azn_normalized || listing.price) && (
+                <button
+                  type="button"
+                  disabled={isDispatchingTelegram}
+                  onClick={() => handleDispatchToTelegram(true)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-obsidian-950 px-3.5 py-2 text-xs font-bold shadow-md hover:brightness-110 active:scale-[0.99] transition disabled:opacity-50"
+                >
+                  {isDispatchingTelegram ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Göndərilir...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-3.5 w-3.5" />
+                      <span>
+                        🛡️ Bazadakı Qiymətlə Göndər ({formatAzn(resultData?.db_price || listing.price_azn_normalized || listing.price)})
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* State 6: ERROR */}
         {statusState === "ERROR" && (
           <div className="space-y-4 animate-in fade-in duration-200">
             <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-5 space-y-3">

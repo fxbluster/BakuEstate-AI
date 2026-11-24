@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { QueueRenderPayload, QueueRenderResponse } from "@/lib/ai-client";
+import { extractErrorMessage } from "@/lib/errors";
 
 // Resolve operator identity
 async function resolveOperator(
@@ -165,15 +166,7 @@ export async function POST(request: Request) {
       job_id: job?.id,
     } as QueueRenderResponse);
   } catch (err: unknown) {
-    let message = "Montaj növbəsinə əlavə edilərkən xəta baş verdi.";
-    if (err instanceof Error) {
-      message = err.message;
-    } else if (err && typeof err === "object") {
-      const errObj = err as Record<string, unknown>;
-      message = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
-    } else if (typeof err === "string") {
-      message = err;
-    }
+    const message = extractErrorMessage(err);
     console.error("[QUEUE_RENDER ERROR]:", err);
     return NextResponse.json(
       {
