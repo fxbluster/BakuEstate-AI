@@ -5,9 +5,6 @@ import {
   Send,
   Play,
   Pause,
-  Maximize2,
-  Minimize2,
-  X,
   RefreshCw,
   Film,
   Building,
@@ -22,6 +19,7 @@ import {
 import type { StageCardInstance, VideoStagePayload } from "@/lib/copilot-context";
 import { useCopilot } from "@/lib/copilot-context";
 import { createClient } from "@/lib/supabase/client";
+import { extractErrorMessage } from "@/lib/errors";
 
 interface LiveListingData {
   id?: string;
@@ -233,16 +231,10 @@ export function VideoPipelineCard({
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.success) {
-        const errorMsg =
-          typeof data.error === "string"
-            ? data.error
-            : data.error && typeof data.error === "object"
-              ? String((data.error as { message?: string }).message || (data.error as { details?: string }).details || JSON.stringify(data.error))
-              : "Teleqram dispetçerində xəta baş verdi";
-        throw new Error(errorMsg);
+        throw new Error(data.error ? extractErrorMessage(data.error) : "Teleqram dispetçerində xəta baş verdi");
       }
 
       if (data.dispatch_mode === "QUEUED_WORKER") {
@@ -252,16 +244,7 @@ export function VideoPipelineCard({
       }
       setCooldownSeconds(15);
     } catch (err: unknown) {
-      let msg = "Bilinməyən xəta baş verdi";
-      if (err instanceof Error) {
-        msg = err.message;
-      } else if (err && typeof err === "object") {
-        const errObj = err as Record<string, unknown>;
-        msg = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
-      } else if (typeof err === "string") {
-        msg = err;
-      }
-      setDispatchError(msg);
+      setDispatchError(extractErrorMessage(err));
       setDispatchStatus("error");
     } finally {
       setIsDispatching(false);
@@ -290,13 +273,7 @@ export function VideoPipelineCard({
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.success) {
-        const errorMsg =
-          typeof data.error === "string"
-            ? data.error
-            : data.error && typeof data.error === "object"
-              ? String((data.error as { message?: string }).message || (data.error as { details?: string }).details || JSON.stringify(data.error))
-              : "Montaj növbəsinə əlavə edilərkən xəta baş verdi";
-        throw new Error(errorMsg);
+        throw new Error(data.error ? extractErrorMessage(data.error) : "Montaj növbəsinə əlavə edilərkən xəta baş verdi");
       }
 
       setQueueStatus("success");
@@ -304,16 +281,7 @@ export function VideoPipelineCard({
         isRendered: false,
       });
     } catch (err: unknown) {
-      let msg = "Montaj xətası baş verdi";
-      if (err instanceof Error) {
-        msg = err.message;
-      } else if (err && typeof err === "object") {
-        const errObj = err as Record<string, unknown>;
-        msg = String(errObj.message || errObj.error || errObj.details || JSON.stringify(err));
-      } else if (typeof err === "string") {
-        msg = err;
-      }
-      setQueueError(msg);
+      setQueueError(extractErrorMessage(err));
       setQueueStatus("error");
     } finally {
       setIsQueueing(false);
@@ -321,353 +289,306 @@ export function VideoPipelineCard({
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-obsidian-950/95 border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-xl transition-all duration-300">
-      {/* Header Bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-obsidian-900/90 border-b border-slate-800/80 shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-400">
-            <Film className="w-4 h-4" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-200 truncate">
-                Bina #{binaId}
-              </span>
-              {liveRender && (
-                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  v{liveRender.version_num} • {liveRender.status === "COMPLETED" ? "Hazır" : liveRender.status}
-                </span>
-              )}
-              <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                {nicheBadge}
-              </span>
-              <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                {targetAccount}
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 truncate">{title}</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              title="Yenilə"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          )}
-          {onMaximizeToggle && (
-            <button
-              onClick={onMaximizeToggle}
-              title={isMaximized ? "Kiçilt" : "Böyüt"}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
-            >
-              {isMaximized ? (
-                <Minimize2 className="w-4 h-4" />
-              ) : (
-                <Maximize2 className="w-4 h-4" />
-              )}
-            </button>
-          )}
-          {onClose && (
-            <button
-              onClick={onClose}
-              title="Bağla"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Main Content Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {isRendered ? (
-          /* Rendered State: 1080x1920 MP4 Player & Distribution */
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
-            {/* 9:16 Video Player Container (responsive scaling with isMaximized) */}
-            <div
-              className={`relative flex items-center justify-center bg-black/80 rounded-xl overflow-hidden border border-slate-800 group aspect-[9/16] ${
-                isMaximized ? "max-h-[640px] max-w-[360px]" : "max-h-[460px] max-w-[260px]"
-              } mx-auto w-full transition-all duration-300 shadow-xl`}
-            >
-              {videoCdnUrl ? (
-                <video
-                  ref={videoRef}
-                  src={videoCdnUrl}
-                  playsInline
-                  loop
-                  className="w-full h-full object-cover"
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center p-4 text-center text-slate-500">
-                  <Film className="w-10 h-10 mb-2 opacity-50" />
-                  <span className="text-xs">Video axını tapılmadı</span>
-                </div>
-              )}
-
-              {/* Play/Pause Overlay Button */}
-              <button
-                onClick={togglePlay}
-                className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors"
-              >
-                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-amber-500/90 text-obsidian-950 shadow-lg hover:scale-110 transition-transform">
-                  {isPlaying ? (
-                    <Pause className="w-6 h-6 fill-current" />
-                  ) : (
-                    <Play className="w-6 h-6 fill-current translate-x-0.5" />
-                  )}
-                </div>
-              </button>
-
-              {/* Resolution Tag */}
-              <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-amber-300 border border-amber-500/30">
-                1080 × 1920 MP4
-              </div>
-            </div>
-
-            {/* Video Specs & Dispatch Controls */}
-            <div className="flex flex-col justify-between space-y-3">
-              <div className="space-y-3">
-                {/* Pricing & Key Specs */}
-                <div className="p-3.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-xl font-bold text-amber-400 font-mono">
-                      {priceAzn.toLocaleString()} AZN
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {Math.round(priceAzn / (areaM2 || 1)).toLocaleString()} AZN/m²
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
-                    <div className="text-slate-300">
-                      <span className="text-slate-500">Otaq:</span> {rooms} otaqlı
-                    </div>
-                    <div className="text-slate-300">
-                      <span className="text-slate-500">Sahə:</span> {areaM2} m²
-                    </div>
-                    <div className="text-slate-300 col-span-2 flex items-center gap-1">
-                      <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                      <span className="truncate">{location}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Pipeline Render Specs */}
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/60 space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Səs Modeli:</span>
-                    <span className="text-slate-200 font-medium flex items-center gap-1">
-                      <Volume2 className="w-3.5 h-3.5 text-amber-400" /> ElevenLabs Arif (AZE)
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Kinetik Subtitrlər:</span>
-                    <span className="text-emerald-400 font-medium">Aktiv (Sarı vurğu)</span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Hədəf Profil:</span>
-                    <span className="text-amber-300 font-medium">{targetAccount}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Telegram Dispatch Action Section */}
-              <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                {dispatchError && (
-                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{dispatchError}</span>
-                  </div>
-                )}
-
-                {dispatchStatus === "success" && (
-                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>Video Teleqrama göndərildi!</span>
-                  </div>
-                )}
-
-                {dispatchStatus === "queued" && (
-                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-300 text-xs">
-                    <Clock className="w-4 h-4 shrink-0" />
-                    <span>Fayl &gt;20MB olduğu üçün arxa plan işçisinə növbələndi.</span>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleTelegramDispatch}
-                  disabled={isDispatching || cooldownSeconds > 0}
-                  className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg ${
-                    cooldownSeconds > 0
-                      ? "bg-slate-800 text-slate-400 cursor-not-allowed"
-                      : isDispatching
-                      ? "bg-amber-600/80 text-obsidian-950 cursor-wait"
-                      : "bg-amber-500 hover:bg-amber-400 text-obsidian-950 hover:shadow-amber-500/20 active:scale-[0.98]"
-                  }`}
-                >
-                  {isDispatching ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Göndərilir...</span>
-                    </>
-                  ) : cooldownSeconds > 0 ? (
-                    <>
-                      <Clock className="w-4 h-4" />
-                      <span>{cooldownSeconds}s sonra yenidən göndər</span>
-                    </>
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4" />
-                      <span>✈️ Teleqramıma Göndər</span>
-                    </>
-                  )}
-                </button>
-                <p className="text-[10px] text-center text-slate-500">
-                  Şəxsi Teleqram çatınıza video + Reels mətni və heşteqlər birbaşa ötürüləcək.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* Unrendered State: Scraped Bina.az Gallery & Queue Render */
-          <div className="space-y-4">
-            {/* Status Warning Badge */}
-            <div className="flex items-center justify-between p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
-              <div className="flex items-center gap-2 text-xs text-amber-300">
-                <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>Bu elanın Reels videosu hələ montaj edilməyib.</span>
-              </div>
-              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                Montaj Gözləyir
-              </span>
-            </div>
-
-            {/* Photo Carousel / Preview */}
-            <div className="relative aspect-video rounded-xl overflow-hidden bg-black/60 border border-slate-800">
-              <img
-                src={displayPhotos[activePhotoIdx]}
-                alt={`Bina ${binaId} foto ${activePhotoIdx + 1}`}
+    <div className="flex flex-col h-full w-full p-3.5 overflow-y-auto">
+      {isRendered ? (
+        /* Rendered State: Adaptive 2-Column Horizontal Split (580x510) */
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 h-full">
+          {/* 9:16 Video Player Container */}
+          <div
+            className={`relative flex items-center justify-center bg-black/80 rounded-xl overflow-hidden border border-slate-800 group aspect-[9/16] ${
+              isMaximized ? "max-h-[640px] max-w-[360px]" : "max-h-[440px] max-w-[250px]"
+            } mx-auto w-full transition-all duration-300 shadow-xl`}
+          >
+            {videoCdnUrl ? (
+              <video
+                ref={videoRef}
+                src={videoCdnUrl}
+                playsInline
+                loop
                 className="w-full h-full object-cover"
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+            ) : (
+              <div className="flex flex-col items-center justify-center p-4 text-center text-slate-500">
+                <Film className="w-10 h-10 mb-2 opacity-50" />
+                <span className="text-xs">Video axını tapılmadı</span>
+              </div>
+            )}
 
-              {/* Prev/Next buttons */}
-              {displayPhotos.length > 1 && (
-                <>
-                  <button
-                    onClick={() =>
-                      setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : displayPhotos.length - 1))
-                    }
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() =>
-                      setActivePhotoIdx((prev) => (prev < displayPhotos.length - 1 ? prev + 1 : 0))
-                    }
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </>
-              )}
+            {/* Play/Pause Overlay Button */}
+            <button
+              onClick={togglePlay}
+              className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors"
+            >
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-amber-500/90 text-obsidian-950 shadow-lg hover:scale-110 transition-transform">
+                {isPlaying ? (
+                  <Pause className="w-6 h-6 fill-current" />
+                ) : (
+                  <Play className="w-6 h-6 fill-current translate-x-0.5" />
+                )}
+              </div>
+            </button>
 
-              {/* Counter Pill */}
-              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
-                {activePhotoIdx + 1} / {displayPhotos.length}
+            {/* Resolution Tag */}
+            <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-amber-300 border border-amber-500/30">
+              1080 × 1920 MP4
+            </div>
+          </div>
+
+          {/* Video Specs & Dispatch Controls */}
+          <div className="flex flex-col justify-between space-y-3">
+            <div className="space-y-2.5">
+              {/* Header Badges & Title */}
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                    {nicheBadge}
+                  </span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-slate-800 text-slate-300 border border-slate-700">
+                    {targetAccount}
+                  </span>
+                  {liveRender && (
+                    <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      v{liveRender.version_num} • {liveRender.status === "COMPLETED" ? "Hazır" : liveRender.status}
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-xs font-semibold text-slate-200 line-clamp-1">{title}</h3>
+              </div>
+
+              {/* Pricing & Key Specs */}
+              <div className="p-3 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-lg font-bold text-amber-400 font-mono">
+                    {priceAzn.toLocaleString()} AZN
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {Math.round(priceAzn / (areaM2 || 1)).toLocaleString()} AZN/m²
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
+                  <div className="text-slate-300">
+                    <span className="text-slate-500">Otaq:</span> {rooms} otaqlı
+                  </div>
+                  <div className="text-slate-300">
+                    <span className="text-slate-500">Sahə:</span> {areaM2} m²
+                  </div>
+                  <div className="text-slate-300 col-span-2 flex items-center gap-1">
+                    <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span className="truncate">{location}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pipeline Render Specs */}
+              <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/60 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Səs Modeli:</span>
+                  <span className="text-slate-200 font-medium flex items-center gap-1">
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400" /> ElevenLabs Arif (AZE)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Kinetik Subtitrlər:</span>
+                  <span className="text-emerald-400 font-medium">Aktiv (Sarı vurğu)</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Hədəf Profil:</span>
+                  <span className="text-amber-300 font-medium">{targetAccount}</span>
+                </div>
               </div>
             </div>
 
-            {/* Thumbnail Strip */}
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {displayPhotos.map((photo, i) => (
-                <button
-                  key={i}
-                  onClick={() => setActivePhotoIdx(i)}
-                  className={`relative w-16 h-12 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
-                    activePhotoIdx === i
-                      ? "border-amber-400 scale-105"
-                      : "border-transparent opacity-60 hover:opacity-100"
-                  }`}
-                >
-                  <img src={photo} alt="" className="w-full h-full object-cover" />
-                </button>
-              ))}
-            </div>
-
-            {/* Specs Summary */}
-            <div className="p-3.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
-              <div className="flex items-baseline justify-between">
-                <span className="text-xl font-bold text-amber-400 font-mono">
-                  {priceAzn.toLocaleString()} AZN
-                </span>
-                <span className="text-xs text-slate-400">{rooms} otaqlı • {areaM2} m²</span>
-              </div>
-              <p className="text-xs text-slate-300 flex items-center gap-1.5">
-                <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                {location}
-              </p>
-            </div>
-
-            {/* Queue Action Button */}
-            <div className="space-y-2">
-              {queueError && (
-                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+            {/* Telegram Dispatch Action Section */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              {dispatchError && (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{queueError}</span>
+                  <span className="truncate">{dispatchError}</span>
                 </div>
               )}
 
-              {queueStatus === "success" && (
-                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+              {dispatchStatus === "success" && (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Montaj növbəsinə əlavə edildi! Local Worker icra edəcək.</span>
+                  <span>Video Teleqrama göndərildi!</span>
+                </div>
+              )}
+
+              {dispatchStatus === "queued" && (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-300 text-xs">
+                  <Clock className="w-4 h-4 shrink-0" />
+                  <span>Fayl &gt;20MB olduğu üçün arxa plan işçisinə növbələndi.</span>
                 </div>
               )}
 
               <button
-                onClick={handleQueueRender}
-                disabled={isQueueing || queueStatus === "success"}
-                className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg ${
-                  queueStatus === "success"
-                    ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 cursor-default"
-                    : isQueueing
+                onClick={handleTelegramDispatch}
+                disabled={isDispatching || cooldownSeconds > 0}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all duration-200 shadow-lg ${
+                  cooldownSeconds > 0
+                    ? "bg-slate-800 text-slate-400 cursor-not-allowed"
+                    : isDispatching
                     ? "bg-amber-600/80 text-obsidian-950 cursor-wait"
                     : "bg-amber-500 hover:bg-amber-400 text-obsidian-950 hover:shadow-amber-500/20 active:scale-[0.98]"
                 }`}
               >
-                {isQueueing ? (
+                {isDispatching ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Növbəyə Əlavə Edilir...</span>
+                    <span>Göndərilir...</span>
                   </>
-                ) : queueStatus === "success" ? (
+                ) : cooldownSeconds > 0 ? (
                   <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>⏳ Növbəyə Əlavə Edildi</span>
+                    <Clock className="w-4 h-4" />
+                    <span>{cooldownSeconds}s sonra yenidən göndər</span>
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>🚀 Montaj Boru Xəttinə Göndər</span>
+                    <Send className="w-4 h-4" />
+                    <span>✈️ Teleqramıma Göndər</span>
                   </>
                 )}
               </button>
               <p className="text-[10px] text-center text-slate-500">
-                Avtomatik olaraq ElevenLabs səsləndirməsi, FFmpeg vizual kompozisiyası və kinetik subtitrlər hazırlanacaq.
+                Şəxsi Teleqram çatınıza video + Reels mətni və heşteqlər birbaşa ötürüləcək.
               </p>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        /* Unrendered State: Compact Stacked Layout (480x540) */
+        <div className="space-y-3">
+          {/* Status Warning Badge */}
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20">
+            <div className="flex items-center gap-2 text-xs text-amber-300">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Bu elanın Reels videosu hələ montaj edilməyib.</span>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              Montaj Gözləyir
+            </span>
+          </div>
+
+          {/* Photo Carousel / Preview (16:9) */}
+          <div className="relative aspect-video rounded-xl overflow-hidden bg-black/60 border border-slate-800 max-h-[220px]">
+            <img
+              src={displayPhotos[activePhotoIdx]}
+              alt={`Bina ${binaId} foto ${activePhotoIdx + 1}`}
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+
+            {/* Prev/Next buttons */}
+            {displayPhotos.length > 1 && (
+              <>
+                <button
+                  onClick={() =>
+                    setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : displayPhotos.length - 1))
+                  }
+                  className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() =>
+                    setActivePhotoIdx((prev) => (prev < displayPhotos.length - 1 ? prev + 1 : 0))
+                  }
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </>
+            )}
+
+            {/* Counter Pill */}
+            <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
+              {activePhotoIdx + 1} / {displayPhotos.length}
+            </div>
+          </div>
+
+          {/* Thumbnail Strip */}
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {displayPhotos.map((photo, i) => (
+              <button
+                key={i}
+                onClick={() => setActivePhotoIdx(i)}
+                className={`relative w-14 h-10 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
+                  activePhotoIdx === i
+                    ? "border-amber-400 scale-105"
+                    : "border-transparent opacity-60 hover:opacity-100"
+                }`}
+              >
+                <img src={photo} alt="" className="w-full h-full object-cover" />
+              </button>
+            ))}
+          </div>
+
+          {/* Specs Summary */}
+          <div className="p-2.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-1.5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-base font-bold text-amber-400 font-mono">
+                {priceAzn.toLocaleString()} AZN
+              </span>
+              <span className="text-xs text-slate-400">{rooms} otaqlı • {areaM2} m²</span>
+            </div>
+            <p className="text-xs text-slate-300 flex items-center gap-1.5">
+              <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              {location}
+            </p>
+          </div>
+
+          {/* Queue Action Button */}
+          <div className="space-y-2">
+            {queueError && (
+              <div className="flex items-center gap-2 p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span className="truncate">{queueError}</span>
+              </div>
+            )}
+
+            {queueStatus === "success" && (
+              <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Montaj növbəsinə əlavə edildi! Local Worker icra edəcək.</span>
+              </div>
+            )}
+
+            <button
+              onClick={handleQueueRender}
+              disabled={isQueueing || queueStatus === "success"}
+              className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all duration-200 shadow-lg ${
+                queueStatus === "success"
+                  ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 cursor-default"
+                  : isQueueing
+                  ? "bg-amber-600/80 text-obsidian-950 cursor-wait"
+                  : "bg-amber-500 hover:bg-amber-400 text-obsidian-950 hover:shadow-amber-500/20 active:scale-[0.98]"
+              }`}
+            >
+              {isQueueing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Növbəyə Əlavə Edilir...</span>
+                </>
+              ) : queueStatus === "success" ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>⏳ Növbəyə Əlavə Edildi</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>🚀 Montaj Boru Xəttinə Göndər</span>
+                </>
+              )}
+            </button>
+            <p className="text-[10px] text-center text-slate-500">
+              Avtomatik olaraq ElevenLabs səsləndirməsi, FFmpeg vizual kompozisiyası və kinetik subtitrlər hazırlanacaq.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
