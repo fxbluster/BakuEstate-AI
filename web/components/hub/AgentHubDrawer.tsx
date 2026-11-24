@@ -11,7 +11,6 @@ import { useCopilot } from "@/lib/copilot-context";
 import { type AgentPersonaId, resolvePersonaId } from "@/lib/agent-personas";
 import { OmniChatRoom } from "./OmniChatRoom";
 import { SpecialistRoom } from "./SpecialistRoom";
-import { LeftCanvasStage } from "./LeftCanvasStage";
 import { resetAgentConversation } from "@/lib/ai-client";
 
 const PERSONA_TABS: {
@@ -45,7 +44,7 @@ const PERSONA_TABS: {
 ];
 
 export function AgentHubDrawer() {
-  const { isOpen, closeCopilot, activePersona, setActivePersona, stageCards } = useCopilot();
+  const { isOpen, closeCopilot, activePersona, setActivePersona } = useCopilot();
   const [resetConfirm, setResetConfirm] = useState(false);
   const [threadKeys, setThreadKeys] = useState<Record<string, number>>({
     mudir: 0,
@@ -102,11 +101,6 @@ export function AgentHubDrawer() {
       aria-modal="false"
       aria-hidden={!isOpen}
     >
-      {/* Left Canvas Action Stage: flex-1 min-w-0 */}
-      <div className="flex-1 min-w-0 h-full overflow-hidden pointer-events-none">
-        {stageCards && stageCards.length > 0 && <LeftCanvasStage />}
-      </div>
-
       {/* Slide-over Drawer Container on Right */}
       <div
         className={`pointer-events-auto w-full sm:w-[540px] lg:w-[620px] h-full flex flex-col bg-obsidian-950 border-l border-slate-800/90 shadow-2xl transition-transform duration-300 ease-in-out ${

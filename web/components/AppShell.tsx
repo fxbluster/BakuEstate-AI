@@ -15,6 +15,7 @@ import { WorkerStatusBadge } from "./WorkerStatusBadge";
 import { CockpitCardHUD } from "./CockpitCardHUD";
 import { CopilotProvider, useCopilot } from "@/lib/copilot-context";
 import { AgentHubDrawer } from "./hub/AgentHubDrawer";
+import { FloatingCardStage } from "./hub/stage/FloatingCardStage";
 
 const NAV_ITEMS = [
   { href: "/", label: "İcmal", shortLabel: "İcmal", icon: LayoutDashboard },
@@ -204,6 +205,9 @@ function AppShellContent({
 
       {/* Persistent Floating Copilot Trigger Button */}
       <CopilotFloatingTrigger />
+
+      {/* Autonomous Floating Card Stage */}
+      <FloatingCardStage />
 
       {/* Slide-over Agent Hub Drawer */}
       <AgentHubDrawer />
