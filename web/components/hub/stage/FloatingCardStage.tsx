@@ -84,7 +84,7 @@ export function FloatingCardStage() {
   };
 
   const getCardBadge = (card: StageCardInstance) => {
-    const payload = card.payload as Record<string, unknown> | undefined;
+    const payload = card.payload as unknown as Record<string, unknown> | undefined;
     switch (card.cardType) {
       case "VIDEO_INSPECTION": {
         const isRendered = Boolean(payload?.isRendered || payload?.videoCdnUrl);
