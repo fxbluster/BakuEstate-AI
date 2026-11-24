@@ -210,6 +210,20 @@ class TestWatchdogSupervisor(unittest.TestCase):
         supervisor.current_backoff = supervisor.initial_backoff
         self.assertEqual(supervisor.current_backoff, 5.0)
 
+    def test_handle_crash_records_restarting_telemetry(self) -> None:
+        supervisor = WatchdogSupervisor(
+            repo=self.mock_repo,
+            crash_state_path=self.crash_state_path,
+            active_job_path=self.active_job_path,
+            log_file_path=self.log_file_path,
+            initial_backoff=1.0,
+        )
+        supervisor.handle_crash(exit_code=137)
+        self.mock_repo.record_worker_heartbeat.assert_called()
+        _, kwargs = self.mock_repo.record_worker_heartbeat.call_args
+        self.assertEqual(kwargs["metadata"]["state"], "RESTARTING")
+        self.assertEqual(kwargs["metadata"]["last_crash_exit_code"], 137)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ interface RawTopCard {
   strategic_rationale?: string | null;
 }
 
-export function CockpitCardHUD() {
+export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean }) {
   const [cards, setCards] = useState<CockpitCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -272,6 +272,10 @@ export function CockpitCardHUD() {
         <span>VACİB</span>
       </span>
     );
+  }
+
+  if (hideWhenEmpty && cards.length === 0) {
+    return null;
   }
 
   return (

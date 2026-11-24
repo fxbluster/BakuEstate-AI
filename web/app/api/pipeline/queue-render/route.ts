@@ -125,6 +125,37 @@ export async function POST(request: Request) {
 
   binaId = binaId || (isUuid ? "unknown" : listing_id);
 
+  // Deduplication guard: avoid queuing duplicate RENDER_INITIAL while one is already QUEUED or RUNNING
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pipelineJobsTable = (supabaseAdmin as any).from("pipeline_jobs");
+    if (pipelineJobsTable && typeof pipelineJobsTable.select === "function") {
+      const cleanBinaId = String(binaId).replace(/[,()]/g, "");
+      const orFilter = resolvedListingUuid
+        ? `listing_id.eq.${resolvedListingUuid},params_json->>bina_id.eq.${cleanBinaId}`
+        : `params_json->>bina_id.eq.${cleanBinaId}`;
+
+      const { data: existingJobs } = await pipelineJobsTable
+        .select("id, status")
+        .eq("job_type", "RENDER_INITIAL")
+        .in("status", ["QUEUED", "RUNNING"])
+        .or(orFilter)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (Array.isArray(existingJobs) && existingJobs.length > 0 && existingJobs[0]?.id) {
+        return NextResponse.json({
+          success: true,
+          job_id: existingJobs[0].id,
+          already_queued: true,
+          message: `Elan #${binaId} artıq montaj növbəsindədir (${existingJobs[0].status === "RUNNING" ? "Hazırda render gedir" : "Növbədə gözləyir"}).`,
+        } as QueueRenderResponse);
+      }
+    }
+  } catch (dedupErr) {
+    console.warn("[QUEUE_RENDER] Active job dedup check notice:", dedupErr);
+  }
+
   try {
     const { data: job, error: jobErr } = await supabaseAdmin
       .from("pipeline_jobs")

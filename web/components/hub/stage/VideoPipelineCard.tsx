@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import {
   Send,
   Play,
@@ -191,6 +192,7 @@ export function VideoPipelineCard({
   const [isQueueing, setIsQueueing] = useState(false);
   const [queueStatus, setQueueStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [queueSuccessMsg, setQueueSuccessMsg] = useState<string | null>(null);
 
   // Cooldown countdown effect
   useEffect(() => {
@@ -276,6 +278,11 @@ export function VideoPipelineCard({
         throw new Error(data.error ? extractErrorMessage(data.error) : "Montaj növbəsinə əlavə edilərkən xəta baş verdi");
       }
 
+      setQueueSuccessMsg(
+        typeof data.message === "string" && data.message
+          ? data.message
+          : "Montaj növbəsinə əlavə edildi! Lokal Worker icra edəcək."
+      );
       setQueueStatus("success");
       updateStageCardPayload(card.id, {
         isRendered: false,
@@ -549,9 +556,19 @@ export function VideoPipelineCard({
             )}
 
             {queueStatus === "success" && (
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Montaj növbəsinə əlavə edildi! Local Worker icra edəcək.</span>
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span className="truncate">
+                    {queueSuccessMsg || "Montaj növbəsinə əlavə edildi! Lokal Worker icra edəcək."}
+                  </span>
+                </div>
+                <Link
+                  href="/worker"
+                  className="shrink-0 font-semibold text-gold-300 hover:underline"
+                >
+                  İzlə →
+                </Link>
               </div>
             )}
 

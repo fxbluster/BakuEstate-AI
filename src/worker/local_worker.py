@@ -33,8 +33,9 @@ import random
 import signal
 import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from config.settings import (
     AUTO_JOB_TTL_HOURS,
@@ -79,7 +80,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 BAKU_TZ = timezone(timedelta(hours=4))
 
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
-DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60.0
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 DEFAULT_LEASE_MINUTES = 5
 DEFAULT_LIVENESS_INTERVAL_HOURS = 12
 DEFAULT_LIVENESS_LIMIT = 50
@@ -234,6 +235,72 @@ def is_job_expired(job: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     return expires_at < current
 
 
+def get_next_baku_schedule_slot(
+    scrape_times: List[str],
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    """Returns the next scheduled Baku (UTC+4) auto-scrape slot label."""
+    if not scrape_times:
+        return None
+    baku_now = _baku_now(now)
+    parsed: List[Tuple[int, int, str]] = []
+    for raw in scrape_times:
+        try:
+            hh, mm = map(int, str(raw).strip().split(":"))
+            parsed.append((hh, mm, f"{hh:02d}:{mm:02d}"))
+        except (ValueError, TypeError):
+            continue
+    if not parsed:
+        return None
+    parsed.sort(key=lambda t: (t[0], t[1]))
+    current_hm = (baku_now.hour, baku_now.minute)
+    for hh, mm, label in parsed:
+        if (hh, mm) > current_hm:
+            return label
+    return f"Sabah {parsed[0][2]}"
+
+
+JOB_PHASE_LABELS: Dict[str, str] = {
+    "SCRAPE_NEW": "bina.az-dan yeni elanlar yığılır",
+    "RENDER_INITIAL": "Video montaj və TTS səs sintezi aparılır",
+    "RENDER_PRICE_DROP": "Qiymət endirimi videosu hazırlanır",
+    "RERENDER": "Video yenidən montaj edilir",
+    "LIVENESS_CHECK": "bina.az elan aktivliyi yoxlanılır",
+    "PREFLIGHT_CHECK": "Yayınöncəsi qiymət yoxlaması aparılır",
+    "SYNC_SOCIAL_METRICS": "Sosial media statistikası yığılır",
+    "TELEGRAM_DISPATCH": "Video Telegram-a göndərilir",
+}
+
+
+class WorkerTelemetryBuffer(logging.Handler):
+    """Thread-safe bounded log buffer capturing recent worker pipeline events."""
+
+    def __init__(self, maxlen: int = 20):
+        super().__init__(level=logging.INFO)
+        self._records: deque[Dict[str, str]] = deque(maxlen=max(1, int(maxlen)))
+        self._lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+            if len(msg) > 220:
+                msg = msg[:217] + "..."
+            ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
+            entry = {
+                "ts": ts,
+                "level": record.levelname,
+                "msg": msg,
+            }
+            with self._lock:
+                self._records.append(entry)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def snapshot(self) -> List[Dict[str, str]]:
+        with self._lock:
+            return list(self._records)
+
+
 class JobHeartbeatThread(threading.Thread):
     """
     Background thread that periodically extends `pipeline_jobs.lease_expires_at`
@@ -252,6 +319,7 @@ class JobHeartbeatThread(threading.Thread):
         lease_minutes: int = DEFAULT_LEASE_MINUTES,
         interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
         max_runtime_seconds: Optional[float] = None,
+        telemetry_fn: Optional[Callable[[], Dict[str, Any]]] = None,
     ):
         super().__init__(name=f"heartbeat-{str(job_id)[:8]}", daemon=True)
         self.repo = repo
@@ -266,6 +334,7 @@ class JobHeartbeatThread(threading.Thread):
             else _default_max_runtime_for_job_type(job_type)
         )
         self.max_runtime_seconds = max(0.05, resolved_cap)
+        self.telemetry_fn = telemetry_fn
         self._stop_event = threading.Event()
         self.lease_lost = threading.Event()
         self.runtime_cap_exceeded = threading.Event()
@@ -297,10 +366,18 @@ class JobHeartbeatThread(threading.Thread):
                     worker_id=self.worker_id,
                     lease_minutes=self.lease_minutes,
                 )
+                meta: Dict[str, Any] = {"job_type": self.job_type, "lease_extended": bool(ok)}
+                if self.telemetry_fn is not None:
+                    try:
+                        extra = self.telemetry_fn()
+                        if isinstance(extra, dict):
+                            meta.update(extra)
+                    except Exception:  # noqa: BLE001, S110
+                        pass
                 self.repo.record_worker_heartbeat(
                     worker_id=self.worker_id,
                     current_job_id=self.job_id,
-                    metadata={"job_type": self.job_type, "lease_extended": bool(ok)},
+                    metadata=meta,
                 )
                 self.heartbeat_count += 1
                 if not ok:
@@ -402,6 +479,25 @@ class BakuLocalWorker:
         self._enqueued_schedule_keys: set[str] = set()
         self._consecutive_social_rate_limits: int = 0
         self.jobs_processed = 0
+        self._started_at_iso = _utc_now().isoformat()
+        self._current_phase: str = "Tapşırıq gözlənilir"
+        self._current_bina_id: Optional[str] = None
+        self._telemetry_buffer = WorkerTelemetryBuffer(maxlen=20)
+
+    def get_telemetry_snapshot(self, **overrides: Any) -> Dict[str, Any]:
+        """Builds structured worker telemetry dictionary for worker_heartbeats.metadata_json."""
+        snapshot: Dict[str, Any] = {
+            "state": overrides.pop("state", "IDLE"),
+            "pid": os.getpid(),
+            "started_at": self._started_at_iso,
+            "jobs_processed_session": self.jobs_processed,
+            "current_phase": overrides.pop("current_phase", self._current_phase),
+            "current_bina_id": overrides.pop("current_bina_id", self._current_bina_id),
+            "next_schedule_baku": get_next_baku_schedule_slot(self.scrape_times),
+            "recent_logs": self._telemetry_buffer.snapshot(),
+        }
+        snapshot.update(overrides)
+        return snapshot
 
     def stop(self) -> None:
         logger.info("Local worker '%s' received stop request.", self.worker_id)
@@ -1713,11 +1809,19 @@ class BakuLocalWorker:
             return {"job_id": job_id, "job_type": job_type, "status": "EXPIRED"}
 
         logger.info("Executing job %s (%s) on worker '%s'...", job_id, job_type, self.worker_id)
+        params = job.get("params_json") or {}
+        bina_id_hint = str(params.get("bina_id") or "").strip() or None
+        self._current_bina_id = bina_id_hint
+        self._current_phase = JOB_PHASE_LABELS.get(job_type, f"{job_type} icra olunur")
         self._write_active_job_marker(job_id, job_type)
         self.repo.record_worker_heartbeat(
             worker_id=self.worker_id,
             current_job_id=job_id,
-            metadata={"job_type": job_type, "phase": "started"},
+            metadata=self.get_telemetry_snapshot(
+                state="PROCESSING",
+                job_type=job_type,
+                phase="started",
+            ),
         )
 
         if job_type in RENDER_JOB_TYPES:
@@ -1737,8 +1841,11 @@ class BakuLocalWorker:
             lease_minutes=self.lease_minutes,
             interval_seconds=self.heartbeat_interval_seconds,
             max_runtime_seconds=max_runtime,
+            telemetry_fn=lambda: self.get_telemetry_snapshot(state="PROCESSING"),
         )
         hb_thread.start()
+        job_outcome_status = "UNKNOWN"
+        job_outcome_error: Optional[str] = None
 
         try:
             handlers = {
@@ -1794,6 +1901,7 @@ class BakuLocalWorker:
                 }
 
             self.jobs_processed += 1
+            job_outcome_status = "SUCCEEDED"
             logger.info("Job %s (%s) SUCCEEDED.", job_id, job_type)
             return {
                 "job_id": job_id,
@@ -1803,6 +1911,7 @@ class BakuLocalWorker:
                 "result": result,
             }
         except Exception as exc:
+            job_outcome_error = str(exc)[:240]
             logger.error("Job %s (%s) error: %s", job_id, job_type, exc, exc_info=True)
             try:
                 import sentry_sdk
@@ -1844,6 +1953,7 @@ class BakuLocalWorker:
                     max_attempts,
                 )
 
+            job_outcome_status = target_status
             self.repo.complete_pipeline_job(
                 job_id,
                 status=target_status,
@@ -1861,11 +1971,20 @@ class BakuLocalWorker:
             self._clear_active_job_marker()
             hb_thread.stop()
             hb_thread.join(timeout=2.0)
+            self._current_phase = "Tapşırıq gözlənilir"
+            self._current_bina_id = None
             try:
                 self.repo.record_worker_heartbeat(
                     worker_id=self.worker_id,
                     current_job_id=None,
-                    metadata={"last_job_id": job_id, "last_job_type": job_type},
+                    metadata=self.get_telemetry_snapshot(
+                        state="IDLE",
+                        last_job_id=job_id,
+                        last_job_type=job_type,
+                        last_job_status=job_outcome_status,
+                        last_job_error=job_outcome_error,
+                        last_job_finished_at=_utc_now().isoformat(),
+                    ),
                 )
             except Exception:
                 pass
@@ -1921,7 +2040,7 @@ class BakuLocalWorker:
                 self.repo.record_worker_heartbeat(
                     worker_id=self.worker_id,
                     current_job_id=None,
-                    metadata={"state": "idle"},
+                    metadata=self.get_telemetry_snapshot(state="IDLE"),
                 )
                 self._last_idle_heartbeat_mono = now_mono
             return None
@@ -1929,8 +2048,12 @@ class BakuLocalWorker:
         return self.execute_job(job)
 
     def start(self, max_polls: Optional[int] = None) -> None:
-        """Starts the continuous 10s polling loop with graceful Ctrl+C / SIGTERM shutdown."""
+        """Starts the continuous polling loop with graceful Ctrl+C / SIGTERM shutdown."""
         self._stop_event.clear()
+        self._started_at_iso = _utc_now().isoformat()
+
+        root_logger = logging.getLogger()
+        root_logger.addHandler(self._telemetry_buffer)
 
         try:
             signal.signal(signal.SIGINT, lambda sig, frame: self.stop())
@@ -1938,42 +2061,60 @@ class BakuLocalWorker:
         except (ValueError, AttributeError):
             pass
 
-        logger.info(
-            ">>> BakuEstate-AI Local Worker '%s' started (poll=%.1fs, heartbeat=%.1fs, lease=%dm) <<<",
-            self.worker_id,
-            self.poll_interval_seconds,
-            self.heartbeat_interval_seconds,
-            self.lease_minutes,
-        )
-
-        # Initial online heartbeat
-        if self.repo.is_configured():
-            self.repo.record_worker_heartbeat(
-                worker_id=self.worker_id,
-                current_job_id=None,
-                metadata={"state": "starting"},
+        try:
+            logger.info(
+                ">>> BakuEstate-AI Local Worker '%s' started (poll=%.1fs, heartbeat=%.1fs, lease=%dm) <<<",
+                self.worker_id,
+                self.poll_interval_seconds,
+                self.heartbeat_interval_seconds,
+                self.lease_minutes,
             )
-            self._last_idle_heartbeat_mono = time.monotonic()
 
-        polls = 0
-        while not self._stop_event.is_set():
-            polls += 1
-            try:
-                outcome = self.run_once()
-            except Exception as exc:
-                logger.error("Unhandled error in worker poll tick: %s", exc, exc_info=True)
-                outcome = None
+            # Initial online heartbeat
+            if self.repo.is_configured():
+                self.repo.record_worker_heartbeat(
+                    worker_id=self.worker_id,
+                    current_job_id=None,
+                    metadata=self.get_telemetry_snapshot(
+                        state="IDLE",
+                        current_phase="Hazır — növbə izlənilir",
+                    ),
+                )
+                self._last_idle_heartbeat_mono = time.monotonic()
 
-            if max_polls is not None and polls >= max_polls:
-                break
+            polls = 0
+            while not self._stop_event.is_set():
+                polls += 1
+                try:
+                    outcome = self.run_once()
+                except Exception as exc:
+                    logger.error("Unhandled error in worker poll tick: %s", exc, exc_info=True)
+                    outcome = None
 
-            # If a job was processed, immediately check for the next queued job;
-            # otherwise sleep for poll_interval_seconds.
-            if outcome is None:
-                if self._stop_event.wait(timeout=self.poll_interval_seconds):
+                if max_polls is not None and polls >= max_polls:
                     break
 
-        logger.info("Local worker '%s' stopped cleanly (jobs_processed=%d).", self.worker_id, self.jobs_processed)
+                # If a job was processed, immediately check for the next queued job;
+                # otherwise sleep for poll_interval_seconds.
+                if outcome is None:
+                    if self._stop_event.wait(timeout=self.poll_interval_seconds):
+                        break
+
+            logger.info("Local worker '%s' stopped cleanly (jobs_processed=%d).", self.worker_id, self.jobs_processed)
+            if self.repo.is_configured():
+                try:
+                    self.repo.record_worker_heartbeat(
+                        worker_id=self.worker_id,
+                        current_job_id=None,
+                        metadata=self.get_telemetry_snapshot(
+                            state="STOPPED",
+                            current_phase="Worker dayandırıldı",
+                        ),
+                    )
+                except Exception:
+                    pass
+        finally:
+            root_logger.removeHandler(self._telemetry_buffer)
 
 
 def main() -> None:

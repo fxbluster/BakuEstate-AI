@@ -448,7 +448,12 @@ flowchart TD
 #### 33. `web/app/jobs/page.tsx` & `web/components/JobsClient.tsx` (Create)
 
 *   **Type / Scope:** İş Növbəsi Monitoru
-*   **Proposed Changes:** Canlı `pipeline_jobs` cədvəli, xəta detalları və 1 kliklik `Retry` (mövcud sətri `QUEUED` resetləməklə).
+*   **Proposed Changes:** Canlı `pipeline_jobs` cədvəli, xəta detalları, aktiv `RENDER_INITIAL` dublikat qorunması (`queue-render/route.ts`), oxunaqlı nişanlar (xam JSON yerinə), deterministik Bakı ay adları (`24 Noy, 19:39` — `M11` ləğvi), boş səhifələrdə qlobal HUD süzgəci və 1 kliklik `Retry` (mövcud sətri `QUEUED` resetləməklə).
+
+#### 33b. `web/app/worker/page.tsx`, `web/components/WorkerMonitorClient.tsx` & `supabase/migrations/202611250001_worker_telemetry_and_realtime.sql` (Create)
+
+*   **Type / Scope:** Canlı Lokal Windows Worker Monitoru (`/worker`)
+*   **Proposed Changes:** Hər 5 saniyədən bir yenilənən və Supabase Realtime (`worker_heartbeats`, `pipeline_jobs`) ilə sinxronlaşan ayrılmış `/worker` paneli: aktiv `PID`, `uptime`, növbəti Bakı avto-yığım saatı, aktiv elan/faza göstəricisi, `recent_logs` konsol axını və oflayn rejimdə 1-klik kopyalanan PowerShell başlatma əmri.
 
 #### 34. `tests/test_change_detector.py`, `tests/test_supabase_repo.py`, `tests/test_local_worker.py` (Create) & `README.md` (Modify)
 

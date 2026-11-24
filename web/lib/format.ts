@@ -26,6 +26,49 @@ import type {
 
 const BAKU_TZ = "Asia/Baku";
 
+const AZ_MONTH_SHORT = [
+  "Yan",
+  "Fev",
+  "Mar",
+  "Apr",
+  "May",
+  "İyn",
+  "İyl",
+  "Avq",
+  "Sen",
+  "Okt",
+  "Noy",
+  "Dek",
+] as const;
+
+function getBakuParts(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BAKU_TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  const monthIdx = Math.max(0, Math.min(11, Number(map.month ?? "1") - 1));
+  const hour = map.hour === "24" ? "00" : (map.hour ?? "00");
+  return {
+    year: map.year ?? "2026",
+    monthShort: AZ_MONTH_SHORT[monthIdx],
+    day: map.day ?? "01",
+    hour,
+    minute: map.minute ?? "00",
+    second: map.second ?? "00",
+  };
+}
+
 export function formatAzn(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "—";
@@ -54,26 +97,44 @@ export function formatBakuDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("az-AZ", {
-    timeZone: BAKU_TZ,
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  const p = getBakuParts(date);
+  return `${Number(p.day)} ${p.monthShort}, ${p.hour}:${p.minute}`;
+}
+
+export function formatBakuTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  const p = getBakuParts(date);
+  return `${p.hour}:${p.minute}:${p.second}`;
 }
 
 export function formatBakuDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("az-AZ", {
-    timeZone: BAKU_TZ,
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(date);
+  const p = getBakuParts(date);
+  return `${Number(p.day)} ${p.monthShort} ${p.year}`;
+}
+
+export function formatDurationAz(
+  startIso: string | null | undefined,
+  endIso?: string | null
+): string {
+  if (!startIso) return "—";
+  const startMs = new Date(startIso).getTime();
+  const endMs = endIso ? new Date(endIso).getTime() : Date.now();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "—";
+  const totalSec = Math.max(0, Math.round((endMs - startMs) / 1000));
+  if (totalSec < 60) return `${totalSec} san`;
+  const totalMin = Math.floor(totalSec / 60);
+  const remSec = totalSec % 60;
+  if (totalMin < 60) {
+    return remSec > 0 ? `${totalMin} dəq ${remSec} san` : `${totalMin} dəq`;
+  }
+  const hrs = Math.floor(totalMin / 60);
+  const remMin = totalMin % 60;
+  return remMin > 0 ? `${hrs} saat ${remMin} dəq` : `${hrs} saat`;
 }
 
 export function formatRelativeAz(iso: string | null | undefined): string {
@@ -279,6 +340,8 @@ export const JOB_TYPE_LABELS: Record<JobType, string> = {
   RERENDER: "Yenidən Render",
   LIVENESS_CHECK: "Aktivlik Yoxlaması",
   SYNC_SOCIAL_METRICS: "Sosial Telemetriya Yoxlaması",
+  PREFLIGHT_CHECK: "Yayınöncəsi Qiymət Yoxlaması",
+  TELEGRAM_DISPATCH: "Telegrama Video Göndərişi",
 };
 
 export const JOB_TRIGGER_LABELS: Record<JobTriggerSource, string> = {

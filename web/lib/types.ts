@@ -190,7 +190,9 @@ export type JobType =
   | "RENDER_PRICE_DROP"
   | "RERENDER"
   | "LIVENESS_CHECK"
-  | "SYNC_SOCIAL_METRICS";
+  | "SYNC_SOCIAL_METRICS"
+  | "PREFLIGHT_CHECK"
+  | "TELEGRAM_DISPATCH";
 
 export type JobTriggerSource =
   | "AUTO_SCHEDULER"
@@ -457,13 +459,41 @@ export interface PipelineJob {
   listings?: Pick<Listing, "id" | "bina_id" | "title"> | null;
 }
 
+export interface WorkerLogEntry {
+  ts: string;
+  level: string;
+  msg: string;
+}
+
+export interface WorkerTelemetryMetadata {
+  state?: "STARTING" | "IDLE" | "PROCESSING" | "RESTARTING" | "STOPPED" | string;
+  pid?: number;
+  started_at?: string;
+  jobs_processed_session?: number;
+  current_phase?: string | null;
+  current_bina_id?: string | null;
+  next_schedule_baku?: string | null;
+  recent_logs?: WorkerLogEntry[];
+  last_job_id?: string | null;
+  last_job_type?: string | null;
+  last_job_status?: string | null;
+  last_job_error?: string | null;
+  last_job_finished_at?: string | null;
+  last_crash_at?: string | null;
+  last_crash_exit_code?: number | null;
+}
+
 export interface WorkerStatusRow {
   worker_id: string;
   last_seen_at: string;
   current_job_id: string | null;
   current_job_type: JobType | null;
   current_job_status: JobStatus | null;
-  metadata_json: Record<string, unknown> | null;
+  metadata_json: WorkerTelemetryMetadata | null;
   is_online: boolean;
   seconds_since_heartbeat: number | null;
+  current_job_started_at?: string | null;
+  current_job_params?: Record<string, unknown> | null;
+  current_listing_bina_id?: string | null;
+  current_listing_title?: string | null;
 }

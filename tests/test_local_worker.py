@@ -833,6 +833,45 @@ class TestMultiAccountNicheRouting(unittest.TestCase):
         self.assertEqual(p_kwargs["voice_engine"], "elevenlabs")
         self.assertEqual(p_kwargs["voice_id"], "DZaip8UahF0Qri1FxU8M")
 
+    def test_worker_telemetry_metadata_and_log_buffer(self):
+        from src.worker.local_worker import (
+            WorkerTelemetryBuffer,
+            get_next_baku_schedule_slot,
+        )
+
+        buf = WorkerTelemetryBuffer(maxlen=3)
+        import logging
+        test_logger = logging.getLogger("test_telemetry_buf")
+        test_logger.setLevel(logging.INFO)
+        test_logger.addHandler(buf)
+        try:
+            test_logger.info("line 1")
+            test_logger.warning("line 2")
+            test_logger.error("line 3")
+            test_logger.info("line 4")
+        finally:
+            test_logger.removeHandler(buf)
+
+        snap = buf.snapshot()
+        self.assertEqual(len(snap), 3)
+        self.assertEqual([item["msg"] for item in snap], ["line 2", "line 3", "line 4"])
+        self.assertEqual(snap[0]["level"], "WARNING")
+
+        # Test Baku schedule countdown resolution (UTC+4)
+        utc_10am = datetime(2026, 11, 25, 6, 0, 0, tzinfo=timezone.utc)  # 10:00 Baku
+        self.assertEqual(get_next_baku_schedule_slot(["12:30", "19:30"], now=utc_10am), "12:30")
+        utc_8pm = datetime(2026, 11, 25, 16, 0, 0, tzinfo=timezone.utc)  # 20:00 Baku
+        self.assertEqual(get_next_baku_schedule_slot(["12:30", "19:30"], now=utc_8pm), "Sabah 12:30")
+
+        # Worker telemetry snapshot fields
+        meta = self.worker.get_telemetry_snapshot(state="PROCESSING", current_bina_id="6588858")
+        self.assertEqual(meta["state"], "PROCESSING")
+        self.assertEqual(meta["current_bina_id"], "6588858")
+        self.assertIn("pid", meta)
+        self.assertIn("started_at", meta)
+        self.assertIn("recent_logs", meta)
+        self.assertIn("jobs_processed_session", meta)
+
 
 if __name__ == "__main__":
     unittest.main()

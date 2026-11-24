@@ -7,6 +7,7 @@ import {
   Building2,
   Cpu,
   LayoutDashboard,
+  Server,
   Users,
   Sparkles,
   Zap,
@@ -42,6 +43,12 @@ const NAV_ITEMS = [
     label: "İş Növbəsi",
     shortLabel: "Növbə",
     icon: Cpu,
+  },
+  {
+    href: "/worker",
+    label: "Lokal Worker",
+    shortLabel: "Worker",
+    icon: Server,
   },
 ];
 
@@ -81,11 +88,11 @@ function CopilotFloatingTrigger() {
     <button
       type="button"
       onClick={() => openAgentHub("mudir")}
-      className="fixed bottom-24 md:bottom-20 right-6 z-50 flex items-center gap-2.5 rounded-full border border-gold-400/60 bg-gradient-to-r from-gold-500 via-gold-400 to-amber-500 px-5 py-3 text-xs font-extrabold text-obsidian-950 shadow-[0_10px_35px_rgba(207,160,65,0.6)] hover:brightness-110 hover:scale-105 active:scale-95 transition-all cursor-pointer animate-pulse"
+      className="md:hidden fixed bottom-20 right-4 z-50 flex items-center gap-2 rounded-full border border-gold-400/60 bg-gradient-to-r from-gold-500 via-gold-400 to-amber-500 px-4 py-2.5 text-xs font-extrabold text-obsidian-950 shadow-[0_10px_35px_rgba(207,160,65,0.5)] hover:brightness-110 active:scale-95 transition-all cursor-pointer"
       aria-label="AI Qərargahını Aç"
     >
       <Zap className="h-4 w-4 fill-obsidian-950 text-obsidian-950" />
-      <span className="tracking-wide">⚡ AI Qərargahı</span>
+      <span className="tracking-wide">AI Qərargahı</span>
     </button>
   );
 }
@@ -178,7 +185,7 @@ function AppShellContent({
       {/* Main Content Area */}
       <main className="flex-1 md:pl-64 pb-20 md:pb-8">
         <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-          <CockpitCardHUD />
+          <CockpitCardHUD hideWhenEmpty={pathname !== "/"} />
           {children}
         </div>
       </main>

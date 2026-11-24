@@ -185,6 +185,8 @@ export interface QueueRenderPayload {
 export interface QueueRenderResponse {
   success: boolean;
   job_id?: string;
+  already_queued?: boolean;
+  message?: string;
   error?: string;
 }
 

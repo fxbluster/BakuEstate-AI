@@ -249,6 +249,22 @@ class WatchdogSupervisor:
         # Compute exponential backoff
         backoff = self.current_backoff
         self.current_backoff = min(self.current_backoff * 2.0, self.max_backoff)
+
+        if self.repo and self.repo.is_configured():
+            try:
+                self.repo.record_worker_heartbeat(
+                    worker_id=self.worker_id,
+                    current_job_id=active_job_id,
+                    metadata={
+                        "state": "RESTARTING",
+                        "current_phase": f"Worker bərpa olunur (kod={exit_code}, gözləmə={backoff:.0f}s)",
+                        "last_crash_at": datetime.now(UTC).isoformat(),
+                        "last_crash_exit_code": int(exit_code),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to record crash telemetry heartbeat: %s", exc)
+
         return backoff
 
     def _record_emergency_alert(self, message: str) -> None:
