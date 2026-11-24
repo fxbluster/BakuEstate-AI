@@ -268,9 +268,11 @@ export function CopilotProvider({ children }: { children: React.ReactNode }) {
     }
 
     setStageCards((prev) => {
-      // Deduplication by targetEntityId or id
+      // Deduplication: match by exact id or by same cardType AND same targetEntityId
       const existingIndex = prev.findIndex(
-        (c) => c.targetEntityId === targetEntityId || c.id === resolvedId
+        (c) =>
+          c.id === resolvedId ||
+          (c.cardType === cardInput.cardType && c.targetEntityId === targetEntityId)
       );
 
       if (existingIndex >= 0) {
@@ -287,9 +289,8 @@ export function CopilotProvider({ children }: { children: React.ReactNode }) {
         return updated;
       }
 
-      // FIFO eviction: maximum 2 docked cards on wide screens (>= 1440px), 1 on compact (< 1440px)
-      const isWide = typeof window !== "undefined" ? window.innerWidth >= 1440 : true;
-      const maxDocked = isWide ? 2 : 1;
+      // Maximum 5 cards in the stage tab deck
+      const maxStageCards = 5;
 
       const newCard: StageCardInstance = {
         id: resolvedId,
@@ -303,8 +304,8 @@ export function CopilotProvider({ children }: { children: React.ReactNode }) {
       };
 
       let nextCards = [...prev, newCard];
-      if (nextCards.length > maxDocked) {
-        nextCards = nextCards.slice(nextCards.length - maxDocked);
+      if (nextCards.length > maxStageCards) {
+        nextCards = nextCards.slice(nextCards.length - maxStageCards);
       }
       setActiveStageCardId(newCard.id);
       return nextCards;

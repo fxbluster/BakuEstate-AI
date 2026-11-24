@@ -265,8 +265,14 @@ export function ChatMessageItem({
     openStageCard({
       cardType,
       targetEntityId: targetId,
-      listingId: cardType === "VIDEO_INSPECTION" ? targetId : undefined,
-      binaId: cardType === "VIDEO_INSPECTION" ? targetId : undefined,
+      listingId:
+        cardType === "VIDEO_INSPECTION" || cardType === "ANALYTICS_TELEMETRY"
+          ? targetId
+          : undefined,
+      binaId:
+        cardType === "VIDEO_INSPECTION" || cardType === "ANALYTICS_TELEMETRY"
+          ? targetId
+          : undefined,
       publicationId: cardType === "ANALYTICS_TELEMETRY" ? targetId : undefined,
       leadId: cardType === "CRM_NEGOTIATION" ? targetId : undefined,
     });

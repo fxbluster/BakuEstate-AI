@@ -172,6 +172,55 @@ describe("LeftCanvasStage Integration Tests", () => {
     });
   });
 
+  it("allows opening ANALYTICS_TELEMETRY when VIDEO_INSPECTION exists for the same entity", async () => {
+    let copilotApi: ReturnType<typeof useCopilot> | undefined;
+
+    render(
+      <CopilotProvider>
+        <TestStageRig
+          onMount={(copilot) => {
+            copilotApi = copilot;
+            // 1. Open Video card for listing 6588858
+            copilot.openStageCard({
+              cardType: "VIDEO_INSPECTION",
+              targetEntityId: "6588858",
+              listingId: "6588858",
+              payload: {
+                cardType: "VIDEO_INSPECTION",
+                listingId: "6588858",
+                title: "İnşaatçılar 3 otaqlı",
+                isRendered: true,
+              },
+            });
+            // 2. Open Analytics card for the same listing 6588858
+            copilot.openStageCard({
+              cardType: "ANALYTICS_TELEMETRY",
+              targetEntityId: "6588858",
+              listingId: "6588858",
+              payload: {
+                cardType: "ANALYTICS_TELEMETRY",
+                listingId: "6588858",
+                title: "Elan #6588858 Multichannel Performansı",
+              },
+            });
+          }}
+        />
+      </CopilotProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("left-canvas-stage")).not.toBeNull();
+    });
+
+    // Both tabs must be visible simultaneously
+    expect(screen.getByText("Video #6588858")).not.toBeNull();
+    expect(screen.getByText("Telemetriya #6588858")).not.toBeNull();
+    expect(screen.getByText("2")).not.toBeNull();
+
+    // Active card must switch to the newly opened Analytics card
+    expect(screen.getAllByText("Sosial Telemetriya & ER%").length).toBeGreaterThan(0);
+  });
+
   it("dismisses cards with (X) button and unmounts stage when empty", async () => {
     let copilotApi: ReturnType<typeof useCopilot> | undefined;
 
