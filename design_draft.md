@@ -1,336 +1,249 @@
-# BakuEstate Video Pipeline Audio & Montage Elevation: Native ElevenLabs Dual-Voice Engine & Cinematic Video Compositor V2
+# Floating Draggable Window Cards & Truthful Telemetry Architecture
 
-*   **Author:** Elvin Ismailov (fxbluster)
+*   **Author:** fxbluster
 *   **Status:** Draft
-*   **Date:** 2026-11-23
+*   **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-BakuEstate-AI operates an autonomous video production and real estate intelligence pipeline that converts Bina.az property listings into vertical 9:16 promotional reels for social distribution across Instagram, TikTok, and Telegram CRM.
+This design refactors BakuEstate-AI's stage card presentation from a rigid, full-height docked left sidebar into an **Autonomous Floating Window Card System**. Instead of locking cards into an artificial full-viewport pane with static preset width buttons (`560px`, `860px`), cards float independently across the canvas. Operators can drag cards anywhere across the screen by their header, freely resize them from corners/edges, stack them with automatic z-index elevation on click, and dismiss them cleanly.
 
-Following recent worker and video pipeline updates, quality regression occurred across six newly generated property videos (#6343052, #6304638, #5867067, #6567513, #6560444, #6589921). Two critical flaws degraded output:
-1. **Unnatural Foreign Voice Narration**: Listings routed to affordable channels or female voice profiles used an English ElevenLabs voice ID (`EXAVITQu4vr4xnSDxMaL` / Sarah), producing jarring, accent-broken Azerbaijani speech instead of native speech.
-2. **Degraded Video Montage Composition**: Recent changes to FFmpeg filtergraphs, badge timings, watermark overlay positioning, and kinetic subtitle safe zones cluttered the visual hierarchy, causing visual collisions with listing metadata cards and awkward scene pacing compared to the original 17 benchmark videos.
-
-This design document establishes the architecture to elevate voice narration and video compositing:
-- Migrating fully to an authenticated, verified dual-voice ElevenLabs engine using native Azerbaijani voices:
-  - **Arif (Male Narrator)**: `ZQJv3hwvRAIC7fvWZ1Qr` (the benchmark voice from the original 17 videos)
-  - **Ayan (Female Narrator)**: `DZaip8UahF0Qri1FxU8M` (new native Azerbaijani female voice)
-- Eliminating all foreign or robotic voice IDs across configurations and routing layers.
-- Leveraging the available **33,030,627 ElevenLabs character quota** with production stability and expressiveness parameters.
-- Overhauling the FFmpeg compositing pipeline to restore and refine clean visual layering, safe-zone typography, natural scene pacing, and balanced audio ducking.
-- Executing an automated re-render of the six degraded videos.
+Additionally, this design addresses the specific visual and runtime defects identified in live operations:
+1. Re-engineers `VideoPipelineCard` geometry into a content-hugged, compact layout that eliminates excessive vertical whitespace and dead zones.
+2. Sanitizes runtime error parsing so API errors never surface as `[object Object]`.
+3. Eliminates all synthetic demo metrics (e.g. fabricated 22,400 views, fake Nov 10–23 sparklines) in `AnalyticsTelemetryCard`, replacing them with an authentic pre-publish dossier and gating historical curves strictly behind verified Supabase snapshots.
+4. Resolves badge overlap collisions on listing card headers in `ListingsClient.tsx`.
+5. Enhances `PreflightModal.tsx` to allow operator confirmation with verified database prices when external portal scraping is blocked by datacenter IP filters.
 
 --------------------------------------------------------------------------------
 
 ## The Problem
 
-1. **Foreign English Voice Allocation in Azerbaijani Content**:
-   Inspection of `config/settings.py` and `src/worker/account_router.py` reveals that `ELEVENLABS_VOICE_BANU` defaulted to `EXAVITQu4vr4xnSDxMaL` (Sarah, an English ElevenLabs voice). When listings routed to affordable channels (`@baku.serfeli.evler`) or female profiles, ElevenLabs Multilingual V2 synthesized Azerbaijani scripts using an English vocal base. This produced an unnatural, heavily accented narration unacceptable for local property marketing.
-
-2. **Visual Hierarchy Clutter and Filtergraph Regression**:
-   Recent modifications in `src/media/ffmpeg_compositor.py` altered subtitle positioning (`MarginV=580`), reduced hero badge duration to under 2.5 seconds, introduced an opaque brand watermark overlay (`x=714, y=86`) that collided with header price cards, and applied aggressive subtitle scaling (`font_size=64`, `margin_v_cta=660`) that produced visual jumping on call-to-action transitions. The resulting reels felt cluttered and disjointed compared to the clean visual balance of earlier versions.
-
-3. **Inconsistent Audio Ducking & Volume Balancing**:
-   Background lounge beats and sound effects frequently overwhelmed voice narration or ducked abruptly, reducing speech intelligibility on mobile device speakers.
-
-4. **Staged Video Quality Inconsistency**:
-   Six active listings (#6343052, #6304638, #5867067, #6567513, #6560444, #6589921) currently host degraded render versions in Supabase Storage and CRM views, misrepresenting system capabilities to operators and brokers.
+1. **Rigid Docked Sidebar vs. Floating Cards**: The current `LeftCanvasStage` mounts as a fixed, 100% viewport-height vertical column on the left side of the screen. This forces cards into an unnatural stretched layout with massive empty black space beneath the content, prevents free placement across the dashboard, and creates visual collisions with underlying dashboard elements.
+2. **Artificial Sizing vs. Drag-to-Resize**: Previous preset buttons (`560px`, `860px`) fail to provide authentic window management. Operators expect standard desktop-grade floating cards that can be dragged freely and resized smoothly via edge/corner handles.
+3. **Card Layout & Empty Space**: In `VideoPipelineCard`, the 9:16 video player is isolated next to a sparse specs column that stretches to fill the viewport, resulting in awkward vertical dead zones between specs and action buttons.
+4. **`[object Object]` Rendering Defect**: When the video render queue API or client fetch encounters an object-shaped error or non-Error exception, string coercion evaluates to `"[object Object]"` instead of extracting `.message`, `.error`, or JSON-serializing the payload.
+5. **Synthetic Demo Telemetry**: `AnalyticsTelemetryCard` renders fabricated historical dates (e.g. November 10–23) and synthetic view counts (22,400) even when an elan has never been published to social media. This obscures real operational status and misleads the operator.
+6. **Card Header Badge Collision**: On listing cards in `ListingsClient.tsx`, 5 badges (`#id`, `@handle`, archetype, `Kupça`, and `v3 • Hazır`) are crammed into a single top row, causing `v3 • Hazır` to visually collide with and overlap adjacent badges on standard desktop resolutions.
+7. **Preflight Scrape Blocking**: When `bina.az` blocks direct HTTP requests from cloud serverless functions (Vercel IP geoblock), `PreflightModal.tsx` displays a blocking error modal with no fallback path, preventing the operator from proceeding even though verified property data exists in the database.
 
 --------------------------------------------------------------------------------
 
 ## Goals
 
-*   **Goal 1 (Native Dual-Voice Engine)**: Standardize all ElevenLabs speech synthesis strictly on two verified native Azerbaijani voice IDs:
-    *   Male Narrator (Arif): `ZQJv3hwvRAIC7fvWZ1Qr`
-    *   Female Narrator (Ayan): `DZaip8UahF0Qri1FxU8M`
-*   **Goal 2 (Zero Foreign Voice Leakage)**: Purge `EXAVITQu4vr4xnSDxMaL` and any other unverified foreign voice IDs from settings, router heuristics, and fallback chains.
-*   **Goal 3 (Cinematic Montage Overhaul)**: Refactor `src/media/ffmpeg_compositor.py` and `src/media/motion_engine.py` to restore:
-    *   Clean 3-tier visual hierarchy: top glassmorphic luxury card, unobstructed central room walkthrough, and bottom verified safe-zone call-to-action.
-    *   Subtitles locked to mobile social safe zones without card collisions or erratic vertical jumping.
-    *   Harmonious watermark integration that never obscures property specifications or pricing.
-    *   Smooth Ken Burns motion transitions with generous hero scene display (min 3.2s).
-*   **Goal 4 (Acoustic Clarity & Ducking)**: Calibrate FFmpeg sidechain compression so background music sits at an ambient -18dB during narration and cleanly swells only during intro/outro pauses.
-*   **Goal 5 (Automated Re-render of Degraded Batch)**: Queue and re-render the six target listings (#6343052, #6304638, #5867067, #6567513, #6560444, #6589921), committing upgraded v2/v3 renders to Supabase Storage and updating CRM metadata.
+*   **Floating Window Architecture**: Independent cards float over the dashboard with draggable header bars, freely resizable corner/edge handles, and active z-index management.
+*   **Content-Hugged Geometry**: Cards size tightly to their actual content without stretching to 100% viewport height, eliminating all dead space.
+*   **Compact & Balanced Video Card**: A cohesive, well-proportioned layout where the 9:16 player, listing specs, audio model details, and Telegram dispatch button form a single compact floating window.
+*   **Robust Error Telemetry**: Safe stringification of all error objects to prevent `[object Object]` from ever displaying in the UI.
+*   **Truthful Telemetry**: Complete elimination of simulated curves for unpublished listings. Clear "Yayından Qabaq / Sosial Dərc Gözləyir" status showing real listing economics, Yasamal/Nasimi normatives, and CRM lead interest, transitioning to historical curves only when verified publication snapshots exist in Supabase.
+*   **Collision-Free Badges**: Clean badge layout on listing cards with zero overlapping.
+*   **Frictionless Pre-Flight Fallback**: Allow operator-confirmed fallback to database price when external bina.az scraping is blocked by datacenter IP filters.
+*   **Multi-Card Stacking**: Multiple cards (Video, Telemetry, WhatsApp CRM) can be open simultaneously at distinct screen positions without forced side-by-side splitting or mutual eviction.
 
 --------------------------------------------------------------------------------
 
 ## Non-Goals
 
-*   **Non-Goal 1**: Replacing the underlying FFmpeg compositing engine with cloud-based GPU render SaaS (e.g. Creatomate or Shotstack). Local hardware-accelerated FFmpeg provides zero-marginal-cost rendering.
-*   **Non-Goal 2**: Introducing AI avatar or face generation (e.g. HeyGen or D-ID). The platform focuses strictly on authentic architectural photography with voiceover narration.
-*   **Non-Goal 3**: Altering Next.js CRM frontend architecture or database schema. Existing `render_versions` and `pipeline_jobs` tables fully support versioned re-renders.
-
---------------------------------------------------------------------------------
-
-## Open Questions
-
-*   **Question 1**: How should the system assign voices across property types?
-    *   Option A: Fixed persona assignment (e.g. Luxury = Arif male, Affordable/Budget = Ayan female).
-    *   Option B: Configurable per-channel routing with manual override in CRM Left-Canvas Stage.
-*   **Question 2**: For re-rendering the six listings, should the system overwrite `v1` in-place or generate `v2` records in `render_versions` to maintain historical audit trails?
+*   Replacing the right-hand side `AI İcraçı Qərargahı` drawer (the chat console remains docked on the right).
+*   Adding heavyweight external desktop windowing dependencies that increase bundle size.
+*   Fabricating placeholder engagement data when third-party social APIs have not yet recorded views.
 
 --------------------------------------------------------------------------------
 
 ## Critical User Journeys (CUJs)
 
-### CUJ 1: Autonomous Ingestion & High-Fidelity Reel Synthesis
+### CUJ 1: Operator Opens & Positions Multiple Independent Floating Cards
 
-*   **Given**: A newly scraped property listing in Baku (e.g. 3-room renovated apartment in Yasamal).
-*   **When**: `local_worker.py` picks up the `RENDER_INITIAL` job.
-*   **Then**:
-    1. System selects appropriate native voice (Arif `ZQJv3hwvRAIC7fvWZ1Qr` or Ayan `DZaip8UahF0Qri1FxU8M`).
-    2. ElevenLabs synthesizes studio-grade Azerbaijani audio using `eleven_multilingual_v2` with frame-accurate word timestamps.
-    3. Compositor builds 9:16 vertical video with smooth motion, safe-zone kinetic subtitles, and balanced background audio ducking.
-    4. Render completes and uploads to Supabase Storage; listing badge in web CRM reflects `DRAFT_READY` with pristine audio and visual quality.
+*   **Given**: The operator is on `/listings` with the AI Cockpit open on the right.
+*   **When**: The operator clicks `[🎬 Videoya Bax]` for Elan #6588858 and subsequently clicks `[📊 Analitikaya Bax]` for the same elan.
+*   **Then**: 
+    1. A floating Video window opens at an initial offset (`x: 48px, y: 72px`).
+    2. A floating Telemetry window opens slightly offset (`x: 88px, y: 112px`).
+    3. Both cards float freely above the listing grid; neither card occupies 100% screen height.
+    4. The operator clicks and drags either card's header bar to place it anywhere on screen.
+    5. Clicking a card brings it to the top (`z-index: 60`).
 
-### CUJ 2: 1-Click Rerender with Voice Switch from Web CRM
+### CUJ 2: Freeform Corner Drag-to-Resize on Video Window
 
-*   **Given**: An operator views a listing card in the web CRM Left-Canvas Stage.
-*   **When**: The operator selects "Ayan (Qadın)" or "Arif (Kişi)" from the voice dropdown and clicks `[ 🔄 Yenidən Montaj Et ]`.
-*   **Then**:
-    1. Serverless gateway enqueues `RERENDER` job with `voice_id` payload.
-    2. Worker renders new version with requested voice and updated montage.
-    3. New video appears in CRM video player without page reload.
+*   **Given**: A floating Video window is open with initial size `580px × 510px`.
+*   **When**: The operator hovers over the bottom-right corner resize handle and drags outward to expand.
+*   **Then**: The window expands smoothly; the 9:16 player scales proportionally up to `340px × 604px`, and the specs column expands without jitter or dead space.
 
+### CUJ 3: Truthful Pre-Publish Telemetry Inspection
+
+*   **Given**: Elan #6588858 has been rendered (`v4`) but has not yet been published to Instagram or TikTok.
+*   **When**: The operator opens the Telemetry window for Elan #6588858.
+*   **Then**: 
+    1. The window displays an explicit badge: `Sosial Yayım Gözləyir (Dərc Edilməyib)`.
+    2. Zero fake views or fabricated past dates are shown.
+    3. The card displays verified property fundamentals: real price (`226,000 AZN`), normalized m² rate (`2,379 AZN/m²`), Yasamal market benchmark (`2,200 - 2,800 AZN/m²`), targeted social account (`@baku.serfeli.evler`), and CRM lead count.
+    4. An action button `[ 🚀 Teleqrama Göndər və Dərc Et ]` enables immediate transition into publication.
+
+### CUJ 4: Preflight Scrape Fallback Handling
+
+*   **Given**: The operator clicks `Yoxla və Göndər` on Elan #6560444, and bina.az blocks direct Vercel datacenter HTTP requests.
+*   **When**: Preflight check returns `SCRAPE_ERROR` with `can_fallback_to_db: true`.
+*   **Then**: 
+    1. The modal does not dead-end in a generic error box.
+    2. It presents an actionable prompt: `Bina.az portalı bulud IP-sini blokladı. Bazadakı təsdiqlənmiş qiymətlə (138,000 ₼) davam etmək istəyirsiniz?`.
+    3. The operator clicks `[ Bazadakı Qiymətlə Göndər ]` to proceed directly to Telegram dispatch.
 
 --------------------------------------------------------------------------------
 
 ## Technical Plan (Architecture)
 
-### 1. High-Level Media Pipeline & Dual-Voice Flow
+### 1. Window Host Architecture (`FloatingCardStage` & `FloatingCardWindow`)
 
-```mermaid
-flowchart TD
-    subgraph Ingestion ["Listing Metadata & Archetype"]
-        L["Property Listing (bina_id, photos, price, location)"] --> AR["src/worker/account_router.py"]
-    end
+Instead of rendering a fixed left sidebar column, `LeftCanvasStage` is replaced by `FloatingCardStage`, which renders a lightweight viewport container with `pointer-events-none` that hosts independent `FloatingCardWindow` elements with `pointer-events-auto`.
 
-    subgraph VoiceRouting ["Native Dual-Voice Decision"]
-        AR -->|Elite / Luxury (>=250k AZN) or General| V_MALE["Arif (ZQJv3hwvRAIC7fvWZ1Qr)"]
-        AR -->|Suburban / Affordable (<=120k AZN) or TikTok| V_FEMALE["Ayan (DZaip8UahF0Qri1FxU8M)"]
-        CRM_VOICE["CRM Manual Voice Override"] -.->|Explicit voice_id| TTS_S["src/media/tts_service.py"]
-        V_MALE --> TTS_S
-        V_FEMALE --> TTS_S
-    end
-
-    subgraph ElevenLabsEngine ["ElevenLabs SOTA Synthesis (33M Quota)"]
-        TTS_S --> EL["src/media/elevenlabs_tts.py"]
-        EL -->|model: eleven_multilingual_v2\nstability: 0.50, similarity: 0.85| EL_API["ElevenLabs /with-timestamps API"]
-        EL_API --> AUDIO["voice_{id}_v{n}.mp3 (44.1kHz 128kbps)"]
-        EL_API --> SRT["subs_{id}_v{n}.srt (Word-Level Karaoke Timestamps)"]
-    end
-
-    subgraph CompositorV2 ["Cinematic Video Compositor V2 (FFmpeg)"]
-        PHOTOS["Downloaded High-Res Photos"] --> ME["src/media/motion_engine.py (Ken Burns Pan/Zoom)"]
-        ME --> RAW_VIDEO["walkthrough_raw.mp4 (1080x1920 30fps)"]
-        RAW_VIDEO --> COMP["src/media/ffmpeg_compositor.py"]
-        AUDIO --> COMP
-        SRT -->|ASS Safe-Zone Filter\nMarginV=500, font 52px| COMP
-        MUSIC["assets/music/{niche_track}.mp3"] -->|Sidechain Ducking (-18dB)\nLowpass 3500Hz| COMP
-        HDR["Top Glassmorphic Luxury Card (y=70, h=250)"] --> COMP
-        CTA["Bottom Glassmorphic Contact Card (y=1680, h=130)"] --> COMP
-        WM["Repositioned Subtle Watermark (x=830, y=26)"] --> COMP
-    end
-
-    subgraph Output ["Cloud Storage & CRM Dispatch"]
-        COMP --> OUT_MP4["Supabase Storage: videos/{bina_id}/v{n}.mp4"]
-        OUT_MP4 --> DB_VERSIONS["render_versions (status: COMPLETED)"]
-        DB_VERSIONS --> CRM_VIEW["Web CRM Dashboard / Video Player"]
-    end
+```text
++------------------------------------------------------------------------------------+
+|  Navbar / Header                                                                   |
++------------------------------------------------------------------------------------+
+|                                                 |                                  |
+|   +-----------------------+                     |                                  |
+|   | Floating Video Window | (Draggable Header)  |                                  |
+|   | [Video]  [Specs + CTA]| (Corner Resizable)  |   AI ICRAÇI QƏRARGHI (Docked)    |
+|   +-----------------------+                     |                                  |
+|                                                 |   - Chat Stream                  |
+|          +----------------------------+         |   - Executive Council            |
+|          | Floating Telemetry Window  |         |   - Action Buttons               |
+|          | [Real Specs] [Pre-Publish] |         |                                  |
+|          +----------------------------+         |                                  |
+|                                                 |                                  |
+|   (Underlying /listings grid fully visible)     |                                  |
++------------------------------------------------------------------------------------+
 ```
 
----
+### 2. Standalone Pointer Draggable & Resizable Primitive (`useFloatingWindow`)
 
-### 2. Subsystem Specifications
+To avoid bloating bundle size or introducing flaky third-party libraries, we implement a battle-tested, high-performance HTML5 Pointer hook (`useFloatingWindow`):
 
-#### Subsystem A: Native Dual-Voice Engine (`config/settings.py`, `src/media/elevenlabs_tts.py`, `src/worker/account_router.py`)
+*   **Dragging**:
+    - Pointer listener on the header grab handle (`cursor-grab` / `active:cursor-grabbing`).
+    - Uses `onPointerDown` with `element.setPointerCapture(e.pointerId)`.
+    - Coordinates update in state: `pos = { x: clamp(x, 10, windowWidth - width - 10), y: clamp(y, 10, windowHeight - height - 10) }`.
+    - Rendered via GPU-accelerated `transform: translate3d(${x}px, ${y}px, 0)`.
+*   **Resizing**:
+    - Dedicated resize handle on the bottom-right corner (`cursor-se-resize`) plus bottom/right edges.
+    - Updates `size = { width: clamp(w, minW, maxW), height: clamp(h, minH, maxH) }`.
+*   **Z-Index Focus**:
+    - An active window elevation counter: clicking any window increments a shared `topZIndex` and assigns it to that window.
 
-1. **Voice Configuration Standard**:
-   - `ELEVENLABS_VOICE_ARIF`: Strictly `ZQJv3hwvRAIC7fvWZ1Qr` (Male Narrator).
-   - `ELEVENLABS_VOICE_AYAN`: Strictly `DZaip8UahF0Qri1FxU8M` (Female Narrator).
-   - Deprecate and completely purge `EXAVITQu4vr4xnSDxMaL` (Sarah - English) from all files.
-   - Default fallback voice: `ELEVENLABS_VOICE_ARIF`.
+### 3. VideoPipelineCard Content-Hugged Geometry & Error Sanitization
 
-2. **Synthesis Parameter Tuning (ElevenLabs Multilingual V2)**:
-   - `stability`: `0.50` (lowered from 0.52 for more natural human vocal melody and cadence).
-   - `similarity_boost`: `0.85` (ensures strong vocal identity and eliminates flat robotic delivery).
-   - `style`: `0.20` (subtle stylistic expressiveness without distortion).
-   - `use_speaker_boost`: `True` (enhances low-end presence and warmth).
-   - Output format: `mp3_44100_128` (clean, broadcast-grade audio).
+*   Removes `h-full` and full-viewport vertical stretching.
+*   Container uses `w-full h-full flex flex-row gap-3 p-3.5` with initial dimensions `580px × 510px` and minimum `520px × 460px`.
+*   **Left Column (Video)**:
+    - 9:16 Aspect ratio container: `aspect-[9/16] h-full max-h-[460px] w-auto rounded-xl`.
+    - Responsive play/pause overlay, duration badge, audio waveform indicator.
+*   **Right Column (Specs & Action)**:
+    - Sits directly beside the player, exactly matching its vertical height.
+    - Stack: Price header -> Area / Rooms / Location grid -> ElevenLabs Arif (AZE) voice pill -> Target profile pill -> Full-width `[ 🚀 Teleqrama Göndər ]` button directly anchored at the bottom.
+    - Zero empty vertical dead zones.
+*   **Error Parsing Fix**:
+    - In `VideoPipelineCard.tsx` and `/api/pipeline/queue-render/route.ts`:
+    ```ts
+    function extractErrorMessage(err: unknown): string {
+      if (err instanceof Error) return err.message;
+      if (typeof err === "string") return err;
+      if (err && typeof err === "object") {
+        const obj = err as Record<string, unknown>;
+        const candidate = obj.message || obj.error || obj.details;
+        if (typeof candidate === "string") return candidate;
+        if (candidate && typeof candidate === "object") return JSON.stringify(candidate);
+        return JSON.stringify(err);
+      }
+      return "Bilinməyən xəta baş verdi.";
+    }
+    ```
 
-3. **Deterministic Channel Routing**:
-   - `ACCOUNT_LUXURY` (`@bakuestate.premium`) & `ACCOUNT_GENERAL` (`@bakuestate.official`): Assigned to **Arif** (`ZQJv3hwvRAIC7fvWZ1Qr`).
-   - `ACCOUNT_AFFORDABLE` (`@baku.serfeli.evler`) & `ACCOUNT_TIKTOK` (`@baku_emlak_ai`): Assigned to **Ayan** (`DZaip8UahF0Qri1FxU8M`).
-   - Both male and female voices are native Azerbaijani speakers, eliminating any foreign accent.
+### 4. Truthful Telemetry Engine (`AnalyticsTelemetryCard`)
 
----
+*   Fetches live listing (`listings`), publications (`publications`), snapshots (`publication_telemetry_snapshots`), and leads (`buyer_leads`).
+*   **Dual Mode Rendering**:
+    - **Mode A (Unpublished / Pre-Flight)**:
+      - Renders an authentic pre-publish dossier:
+        - Real price (`226,000 AZN`) and normalized m² (`2,379 AZN/m²`).
+        - Yasamal liquidity corridor: `2,200 - 2,800 AZN/m²` (Status: `Optimal Bazar Normativi`).
+        - Active CRM Buyer Leads: count of active buyers in Yasamal / 3-room segment from `buyer_leads`.
+        - Target channel routing: `@baku.serfeli.evler` (Budget) or `@bakuestate.premium` (Luxury).
+      - Prompts operator to trigger publication: `[ 🚀 Teleqrama Göndər və Sosial Dərc Et ]`.
+      - **Strict rule**: NO fake views, NO fabricated past dates.
+    - **Mode B (Live Social Telemetry)**:
+      - Active when `publication_telemetry_snapshots` rows exist for the listing's publications.
+      - Renders verified live views, likes, comments, and real snapshot curves.
 
-#### Subsystem B: Cinematic Video Compositor V2 (`src/media/ffmpeg_compositor.py` & `src/media/motion_engine.py`)
+### 5. Listing Card Badge Collision Resolution (`ListingsClient.tsx`)
 
-1. **1080x1920 Vertical Visual Hierarchy**:
-   - **Top Luxury Header Card** (`x=50, y=70, w=980, h=250`):
-     - Background: `0x0F172A@0.88` (deep slate glass).
-     - Border: `0x10B981@0.40` (emerald 2px accent).
-     - Location: `font_size=36`, `y=115`, color `#E2E8F0`.
-     - Price Badge: `font_size=48`, `y=175`, color `#10B981` (emerald gold highlight), bold.
-     - Specs line: `font_size=30`, `y=230`, color `#CBD5E1`.
-   - **Watermark Repositioning**:
-     - Previous placement (`x=714, y=86`) overlapped the price text inside the header card.
-     - New placement: Shifted to top edge above card (`x=840, y=24`) or top-left corner (`x=60, y=24`) with `scale=160:36` and subtle alpha (`0.75`), completely clearing listing card borders.
-   - **Subtitles (ASS Safe Zone)**:
-     - Baseline: `y=1380px` (`MarginV=500` in 1080x1920 coordinate space).
-     - Subtitles remain strictly within `y in [1280, 1460]` px, leaving `y > 1650px` clear for the CTA contact card and TikTok/Reels UI buttons.
-     - Font: `Segoe UI Bold`, `font_size=52`, primary color TikTok viral yellow (`&H0000FFFF`), outline black (`3.5px`), shadow (`1.5px`), zero opaque bounding box.
-     - Timing: Word-level chunks (2-3 words per chunk) synchronized with ElevenLabs character timestamps. Subtitles do not jump vertically when CTA appears.
-   - **Bottom Contact / CTA Card** (`x=80, y=1680, w=920, h=130`):
-     - Appears at `total_duration - 5.5s` and stays until end.
-     - Line 1: `BİRBAŞA SAHİBİNDƏN • KOMİSSİYASIZ` (`fontsize=24`, amber `#F59E0B`).
-     - Line 2: `ƏLAQƏ / WHATSAPP: [NÖMRƏ]` (`fontsize=34`, white `#FFFFFF`).
+*   Restructure top image badge container:
+    - Row 1: Left `#bina_id` + `@handle` pill; Right: `v{render.version_num} • Hazır` (or `Video yoxdur`).
+    - Row 2 (if present): `Kupça` and Archetype badges rendered neatly on a second line with clean spacing, preventing overlap regardless of card width.
 
-2. **Acoustic Audio Ducking & Filtergraph Calibration**:
-   - Voice narration volume: `1.0` (unaltered, full dynamic range).
-   - Background music track:
-     - Pre-volume: `0.15` (ambient level).
-     - Sidechain compression: `sidechaincompress=threshold=0.06:ratio=6:attack=25:release=320`.
-     - Lowpass filter: `lowpass=f=3500` applied to background music during narration so high-hats and synthesizer frequencies do not clash with human sibilance and consonants.
-   - Sound effects (whoosh on scene transitions, chime on price reveal): Volume `0.30`, synchronized to visual transition timestamps.
+### 6. Preflight Scrape Fallback Handling (`PreflightModal.tsx`)
 
----
-
-#### Subsystem C: Batch Re-render Execution (`scripts/rerender_degraded_batch.py`)
-
-1. **Target Listings Scope**:
-   - `#6343052` (25,000 AZN, @baku.serfeli.evler) -> Re-render with Ayan female voice (`DZaip8UahF0Qri1FxU8M`).
-   - `#6304638` (209,000 AZN, @bakuestate.official) -> Re-render with Arif male voice (`ZQJv3hwvRAIC7fvWZ1Qr`).
-   - `#5867067` (812,900 AZN, @bakuestate.premium) -> Re-render with Arif male voice (`ZQJv3hwvRAIC7fvWZ1Qr`).
-   - `#6567513` (4,650,000 AZN, @bakuestate.premium) -> Re-render with Arif male voice (`ZQJv3hwvRAIC7fvWZ1Qr`).
-   - `#6560444` (138,000 AZN, @baku.serfeli.evler) -> Re-render with Ayan female voice (`DZaip8UahF0Qri1FxU8M`).
-   - `#6589921` (279,000 AZN, @bakuestate.premium) -> Re-render with Arif male voice (`ZQJv3hwvRAIC7fvWZ1Qr`).
-
-2. **Execution Flow**:
-   - The script iterates through the 6 listings, invokes `generate_tts_for_listing` with the designated native `voice_id` and ElevenLabs Multilingual V2, runs `VideoCompositor.compose_reel_video`, uploads the resulting MP4 and SRT to Supabase Storage, and updates `render_versions` with `status='COMPLETED'`.
-   - Bypasses daily auto-render throttle via manual trigger source (`WEB_UI`).
-
+*   When `data.can_fallback_to_db` is true:
+    - Display explanatory alert: `bina.az portalı bulud IP-sini blokladı. Bazadakı təsdiqlənmiş qiymətlə (${formatAzn(data.db_price)}) davam etmək istəyirsiniz?`
+    - Render a direct button: `[ 🛡️ Bazadakı Qiymətlə Göndər ]` allowing immediate progression to Telegram dispatch without false failures.
 
 --------------------------------------------------------------------------------
 
 ## Alternatives Considered
 
-### Alternative A: Edge-TTS Fallback for Affordable / Budget Listings
-
-*   **Pros**: Zero marginal token or API cost; no dependency on ElevenLabs network availability.
-*   **Cons**: Microsoft Edge-TTS voices (`az-AZ-BabekNeural`, `az-AZ-BanuNeural`) exhibit flat, robotic cadence, unnatural vowel elongation on numbers, and lack the emotional nuance and conversational breathing necessary for high-converting social media reels.
-*   **Reason for Rejection**: *Rejected by author*: With over 33,000,000 ElevenLabs characters available in the active account (capable of producing over 30,000 full-length video voiceovers), economizing on voice quality is technically and commercially unjustified. Native studio-grade ElevenLabs synthesis must be standard across all tiers.
-
-### Alternative B: Cloud-Based Headless Video Rendering (Creatomate / Remotion Cloud / Shotstack)
-
-*   **Pros**: Offloads video compositing from the local workstation; enables horizontal auto-scaling during large scrape bursts.
-*   **Cons**: Incurs recurring monthly SaaS subscription fees or per-render usage charges ($0.15–$0.40 per video); introduces latency transferring raw high-resolution listing photos across external APIs; requires complex third-party webhook handlers.
-*   **Reason for Rejection**: *Rejected by author*: The local Windows workstation provides dedicated hardware acceleration and zero marginal rendering cost. The tuned FFmpeg compositing pipeline renders a 35-second vertical reel in 8–12 seconds locally without external network dependencies.
-
-### Alternative C: Single Universal Voice (Arif Male Narrator Only)
-
-*   **Pros**: Simplifies routing logic and eliminates voice mapping configuration.
-*   **Cons**: Homogenizes video production across all channels. Market audience telemetry shows that fast-paced TikTok formats and affordable suburban family homes benefit from a warm, dynamic female voice (Ayan), whereas luxury penthouses and investment properties align with Arif's authoritative, grounded tone.
-*   **Reason for Rejection**: *Rejected by author*: Deploying a dual-voice strategy (Arif + Ayan) preserves channel identity, audience targeting, and A/B learning opportunities without adding operational overhead.
-
---------------------------------------------------------------------------------
-
-## Non-Functional Requirements
-
-### 1. Security & Secrets Management
-*   `ELEVENLABS_API_KEY` remains strictly confined to `C:\Users\HP\BakuEstate-AI\.env` and `web/.env.local`.
-*   Both environment files are explicitly tracked in `.gitignore` and must never appear in console logs, commit messages, or database records.
-
-### 2. Performance & Latency Budgets
-*   **TTS Synthesis Latency**: Under 3.5 seconds per 45-word Azerbaijani script via ElevenLabs with-timestamps REST API endpoint (with 15.0s network timeout safety cushion).
-*   **Video Compositing Speed**: Under 15 seconds per 1080x1920 30fps reel using local FFmpeg multicore execution.
-*   **Total End-to-End Re-render Time**: Under 25 seconds per listing from trigger to Supabase Storage upload.
-
-### 3. Rollout & Rollback
-*   **Rollout**: Immediate local configuration update in `config/settings.py` and `account_router.py`, followed by execution of `scripts/rerender_degraded_batch.py` to upgrade the six degraded listings.
-*   **Rollback**: If ElevenLabs experiences an upstream API outage, the pipeline retains the existing Edge-TTS fallback circuit breaker (`synthesize_speech_async`) without crashing the worker.
-
+1.  **Fixed Docked Multi-Column Sidebar (`LeftCanvasStage` with flex-wrap)**:
+    - *Mechanism*: Keep cards inside a pinned left container that splits into multiple columns side-by-side as cards are opened.
+    - *Why Rejected*: Rejected by author. Pinned sidebars steal substantial screen real estate from the listings grid, force rigid 100% viewport stretching, and create massive vertical empty voids inside content-bounded cards like `VideoPipelineCard`.
+2.  **Third-Party Window Manager Library (e.g. `react-rnd` or `golden-layout`)**:
+    - *Mechanism*: Import an external React windowing/docking library.
+    - *Why Rejected*: Rejected by author. Adds 40–100 KB of third-party bundle weight, introduces React 19/Next.js 16 SSR compatibility issues, and adds unnecessary complexity when HTML5 Pointer Events (`setPointerCapture`) handle dragging and resizing in under 120 lines of vanilla code.
+3.  **Fabricated Static Curves for Unpublished Listings**:
+    - *Mechanism*: Generate a synthetic 14-day curve starting from listing creation date to simulate projected trajectory.
+    - *Why Rejected*: Rejected by author. Fabricating metrics for elans with zero social publication is dishonest and confuses operators into believing videos are already live on Instagram/TikTok.
 
 --------------------------------------------------------------------------------
 
 ## Detailed Implementation Plan
 
-### Target Files to Create/Modify
+### 1. `web/components/hub/stage/useFloatingWindow.ts` (NEW)
+*   **Rationale**: Zero-dependency custom hook providing pointer-captured dragging, multi-handle resizing, screen boundary clamping, and z-index elevation.
+*   **Key Responsibilities**:
+    - Track `position: { x, y }` and `size: { width, height }`.
+    - Provide `handlePointerDown(e, "drag" | "resize-se" | "resize-e" | "resize-s")`.
+    - Manage active z-index stacking.
 
-#### 1. `config/settings.py` (Modify)
-*   **Type / Scope**: Global Application & Environment Configuration.
-*   **Proposed Changes**:
-    *   Define `ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr")`.
-    *   Define `ELEVENLABS_VOICE_AYAN = os.getenv("ELEVENLABS_VOICE_AYAN", "DZaip8UahF0Qri1FxU8M")`.
-    *   Set `ELEVENLABS_VOICE_BANU = ELEVENLABS_VOICE_AYAN` for backward compatibility.
-    *   Set `ELEVENLABS_VOICE_ID = ELEVENLABS_VOICE_ARIF`.
-    *   Remove all references and fallback occurrences of the English voice ID `EXAVITQu4vr4xnSDxMaL`.
+### 2. `web/components/hub/stage/FloatingCardWindow.tsx` (NEW)
+*   **Rationale**: Reusable desktop-grade floating window shell that wraps any stage card (`VideoPipelineCard`, `AnalyticsTelemetryCard`, etc.).
+*   **Key Responsibilities**:
+    - Floating chrome with drag handle header, title, badges, minimize/maximize/close buttons.
+    - Corner resize handle (`bottom-right`) and edge resize handles.
+    - Content container that hugs wrapped children without viewport stretching.
 
-#### 2. `src/worker/account_router.py` (Modify)
-*   **Type / Scope**: Multi-Account Channel Routing Engine.
-*   **Proposed Changes**:
-    *   Import `ELEVENLABS_VOICE_ARIF` and `ELEVENLABS_VOICE_AYAN` from `config.settings`.
-    *   Update `route_listing_to_channel`:
-        *   Affordable (`ACCOUNT_AFFORDABLE` / `@baku.serfeli.evler`) -> `voice_id: ELEVENLABS_VOICE_AYAN` (`DZaip8UahF0Qri1FxU8M`), `voice_speed: 1.0`.
-        *   TikTok (`ACCOUNT_TIKTOK` / `@baku_emlak_ai`) -> `voice_id: ELEVENLABS_VOICE_AYAN` (`DZaip8UahF0Qri1FxU8M`), `voice_speed: 1.15`.
-        *   Luxury (`ACCOUNT_LUXURY` / `@bakuestate.premium`) -> `voice_id: ELEVENLABS_VOICE_ARIF` (`ZQJv3hwvRAIC7fvWZ1Qr`), `voice_speed: 1.0`.
-        *   General (`ACCOUNT_GENERAL` / `@bakuestate.official`) -> `voice_id: ELEVENLABS_VOICE_ARIF` (`ZQJv3hwvRAIC7fvWZ1Qr`), `voice_speed: 1.0`.
+### 3. `web/components/hub/stage/FloatingCardStage.tsx` (NEW)
+*   **Rationale**: Replaces `LeftCanvasStage.tsx`. Mounts an un-obscured floating card viewport that renders all active cards in `stageCards` as independent floating windows.
 
-#### 3. `src/media/elevenlabs_tts.py` (Modify)
-*   **Type / Scope**: ElevenLabs Studio Voice Synthesis Service.
-*   **Proposed Changes**:
-    *   Update `ELEVENLABS_VOICE_ALIASES`:
-        *   `"arif"`, `"male"`, `"eleven_male"` -> `ELEVENLABS_VOICE_ARIF` (`ZQJv3hwvRAIC7fvWZ1Qr`).
-        *   `"ayan"`, `"female"`, `"banu"`, `"eleven_female"` -> `ELEVENLABS_VOICE_AYAN` (`DZaip8UahF0Qri1FxU8M`).
-    *   Tune default voice synthesis parameters:
-        *   `stability: 0.50`, `similarity_boost: 0.85`, `style: 0.20`, `use_speaker_boost: True`.
+### 4. `web/components/hub/stage/VideoPipelineCard.tsx` (MODIFIED)
+*   **Rationale**:
+    - Eliminate `h-full` stretching and vertical dead zones.
+    - Refactor 9:16 player and specs column into a compact, unified horizontal card.
+    - Fix error extraction to eliminate `[object Object]` bug.
 
-#### 4. `src/media/tts_service.py` (Modify)
-*   **Type / Scope**: Unified TTS Service & Edge-TTS Fallback.
-*   **Proposed Changes**:
-    *   Update `_resolve_tts_routing`:
-        *   Resolve `eleven_female` and `ayan` to `DZaip8UahF0Qri1FxU8M`.
-        *   Resolve `eleven_male` and `arif` to `ZQJv3hwvRAIC7fvWZ1Qr`.
-    *   Ensure fallback logic detects `DZaip8UahF0Qri1FxU8M` and correctly routes to Edge-TTS `az-AZ-BanuNeural` only under hard network failure.
+### 5. `web/components/hub/stage/AnalyticsTelemetryCard.tsx` (MODIFIED)
+*   **Rationale**:
+    - Remove all synthetic demo dates (Nov 10–23) and fake 22,400 view counts.
+    - Implement Mode A (truthful pre-publish dossier with real price, m² rate, market corridor, and CRM buyer demand) and Mode B (authentic live telemetry when snapshots exist).
 
-#### 5. `src/media/ffmpeg_compositor.py` (Modify)
-*   **Type / Scope**: FFmpeg Video Compositing & Filtergraph Engine.
-*   **Proposed Changes**:
-    *   **Watermark Relocation**: Move brand watermark from `x=714, y=86` to top safe margin `x=840, y=24` (or embedded cleanly without card intersection).
-    *   **Subtitle Safe Zone Stabilization**: Set ASS `MarginV=500` (`baseline y=1380px`), `font_size=52`, Segoe UI Bold, TikTok yellow font (`&H0000FFFF`), black outline `3.5px`, soft shadow `1.5px`. Remove aggressive `margin_v_cta=660` jumping.
-    *   **Scene Pacing**: Maintain initial hero scene for minimum 3.2 seconds.
-    *   **Audio Ducking**: Configure `sidechaincompress=threshold=0.06:ratio=6:attack=25:release=320` and `lowpass=f=3500` on background track during narration.
+### 6. `web/components/hub/AgentHubDrawer.tsx` (MODIFIED)
+*   **Rationale**: Replace imported `LeftCanvasStage` with `FloatingCardStage`.
 
-#### 6. `scripts/rerender_degraded_batch.py` (Create)
-*   **Type / Scope**: Batch Pipeline Execution Utility.
-*   **Proposed Changes**:
-    *   Accepts target IDs: `['6343052', '6304638', '5867067', '6567513', '6560444', '6589921']`.
-    *   Fetches current listing data, determines correct native voice ID, invokes `generate_tts_for_listing` and `compose_reel_video`.
-    *   Uploads new video version (`v2` or `v3`) to Supabase Storage and records `COMPLETED` entry in `render_versions`.
-    *   Updates `listings.video_url` and `listings.pipeline_status = 'DRAFT_READY'`.
+### 7. `web/components/ListingsClient.tsx` (MODIFIED)
+*   **Rationale**: Fix card header badge collision so `v3 • Hazır` never overlaps adjacent badges.
 
-#### 7. `tests/test_tts.py` & `tests/test_account_router.py` (Modify)
-*   **Type / Scope**: Automated Python Test Suites.
-*   **Proposed Changes**:
-    *   Verify voice resolution for Arif and Ayan aliases.
-    *   Assert `EXAVITQu4vr4xnSDxMaL` is completely absent.
-    *   Assert account router assigns `DZaip8UahF0Qri1FxU8M` to Affordable/TikTok channels and `ZQJv3hwvRAIC7fvWZ1Qr` to Luxury/General channels.
+### 8. `web/components/PreflightModal.tsx` (MODIFIED)
+*   **Rationale**: Handle `can_fallback_to_db: true` to provide a seamless "Bazadakı Qiymətlə Göndər" fallback path when bina.az IP blocks cloud scraping.
 
----
+### 9. `web/app/api/pipeline/queue-render/route.ts` (MODIFIED)
+*   **Rationale**: Sanitize error serialization so PostgrestError and runtime objects are always returned as readable strings.
 
-### Verification Plan
-
-*   **Unit Tests**:
-    *   `pytest tests/test_tts.py tests/test_account_router.py -v` (Must pass 100%).
-*   **Static Code Analysis**:
-    *   Search codebase for `EXAVITQu4vr4xnSDxMaL` (Must return 0 occurrences).
-*   **Audio Synthesis Verification**:
-    *   Synthesize a test sentence with both `ZQJv3hwvRAIC7fvWZ1Qr` and `DZaip8UahF0Qri1FxU8M`; verify HTTP 200 from ElevenLabs with valid MP3 and SRT.
-*   **Compositor Filtergraph Verification**:
-    *   Execute dry-run render; verify no filtergraph syntax errors and verify output dimensions are 1080x1920.
-*   **Batch Re-render Execution**:
-    *   Run `python scripts/rerender_degraded_batch.py`; verify all 6 listings produce new valid videos in Supabase Storage with updated CRM badges.
+--------------------------------------------------------------------------------

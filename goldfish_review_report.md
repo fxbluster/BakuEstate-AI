@@ -1,110 +1,106 @@
 # Goldfish Annotated Review Report
 
-**Target:** `docs/designs/native_dual_voice_and_cinematic_compositor_v2.md` (`Lines 1-337`)  
-**Status:** resolved (9 fixes accepted and applied)
-
-## Prioritized Findings & AI Suggestions
-
-### 1. Non-Existent Method Call `VideoCompositor.compose_reel_video` [`egm-design`, `egm-implementation-readiness`, `egm-codebase-details`] - Severity: Blocker
-*   **Affected Scope:** [Lines 212–215](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L212-L215) & [Line 309](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L309)
-*   **Discrepancy Description:** The design states `scripts/rerender_degraded_batch.py` calls `VideoCompositor.compose_reel_video`. `VideoCompositor` has no such method; the production method is `build_cinematic_video()`.
-*   **Rationale:** Runtime `AttributeError` halts the re-render script immediately upon execution.
-*   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Standardize the batch re-render script to call `BakuEstatePipeline.process_listing_video_and_dispatch()` (which uses `build_cinematic_video` internally and handles storage uploads and versioning).
-*   ***Proposed Edit:***
-    *   Location: Subsystem C (Lines 212–215) and Target File 6 (Lines 305–312).
-    *   Change: Replace manual compositing calls with `BakuEstatePipeline.process_listing_video_and_dispatch(listing, voice_id=voice_id, trigger_reason="MANUAL_RERENDER", skip_telegram_dispatch=True)`.
+**Target:** `docs/designs/floating_window_cards_and_truthful_telemetry.md` (Lines 1–249)  
+**Round:** 1  
+**Status:** Resolved (All 10 Fixes Applied)  
+**Accepted Fixes:** 10 | **Contested:** 0 | **Escalated:** 0 | **Declined:** 0  
 
 ---
 
-### 2. Missing Subsystem Files in Implementation Plan (`glass_badge.py`, `kinetic_subtitles.py`, `motion_engine.py`) [`egm-design`, `egm-implementation-readiness`, `egm-codebase-details`] - Severity: Blocker
-*   **Affected Scope:** [Lines 257–320](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L257-L320)
-*   **Discrepancy Description:** The Detailed Implementation Plan only lists `ffmpeg_compositor.py`. However, production cinematic video delegates subtitle styling/jumping to `kinetic_subtitles.py`, badges and watermark to `glass_badge.py`, and scene pacing to `motion_engine.py`.
-*   **Rationale:** An engineer editing only `ffmpeg_compositor.py` leaves production kinetic subtitles (`font_size=64`, jumping `margin_v_cta=660`) and badge dimensions untouched.
+## Prioritized Findings & AI Categorization
+
+### 1. [Stage Window Host Coupling & Viewport Clipping] [`egm-design`, `egm-codebase-details`, `egm-implementation-readiness`] - Severity: 🔴 Blocker
+*   **Affected Scope:** Lines 97–118, 223–225, 237–238 (`Technical Plan §1` & `Detailed Implementation Plan §6`)
+*   **Discrepancy Description:** In `AgentHubDrawer.tsx`, the root container sets `${isOpen ? "visible opacity-100" : "invisible opacity-0"}`. Mounting `FloatingCardStage` inside `AgentHubDrawer` means closing the right-hand AI chat drawer instantly hides all floating cards. Furthermore, the stage container has `flex-1 min-w-0 h-full overflow-hidden`, which strictly clips any card dragged towards the center or right of the screen at the 620px drawer boundary.
+*   **Rationale:** Floating cards must be free to roam the entire screen and remain open even when the AI chat drawer is collapsed.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Add `src/media/kinetic_subtitles.py`, `src/media/glass_badge.py`, and `src/media/motion_engine.py` to the target files enumeration with concrete change descriptions.
-*   ***Proposed Edit:***
-    *   Location: Target Files to Modify (after line 304).
-    *   Change: Add entries for `src/media/kinetic_subtitles.py` (`margin_v=540`, disable `margin_v_cta` vertical jumping, `font_size=52`), `src/media/glass_badge.py` (`create_logo_watermark` scale 180x40, hero badge timing), and `src/media/motion_engine.py`.
+*   ***Justification:** Decouple `FloatingCardStage` from `AgentHubDrawer.tsx`. Mount it at the root dashboard level in `web/components/AppShell.tsx` as a full-viewport portal (`fixed inset-0 pointer-events-none z-40 overflow-hidden`), subscribing to `stageCards` from `useCopilot()` independently of drawer `isOpen`.
+*   ***Proposed Edit:*** Update Section 5.1 and Section 7.3 & 7.6 to mount `FloatingCardStage` in `AppShell.tsx` rather than inside `AgentHubDrawer.tsx`.
 
 ---
 
-### 3. Non-Existent Test Path `tests/test_account_router.py` & Test Assertion Breakage [`egm-implementation-readiness`, `egm-codebase-details`] - Severity: Blocker
-*   **Affected Scope:** [Lines 313–319](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L313-L319) & [Line 325](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L325)
-*   **Discrepancy Description:** `tests/test_account_router.py` does not exist (router tests live in `tests/test_tts.py:450-520`). Furthermore, `tests/test_tts.py:282-285` hardcodes assertions for old stability=0.52, similarity=0.82, style=0.28, which will fail when defaults are updated.
-*   **Rationale:** Running the test command will fail with file not found, and unit tests will fail on updated ElevenLabs parameters.
+### 2. [Preflight Fallback State Categorization & Existing Button] [`egm-codebase-details`, `egm-design`, `egm-implementation-readiness`] - Severity: 🔴 Blocker
+*   **Scope:** Lines 30, 84–91, 185–190, 243–245 (`Problem §7`, `CUJ 4`, `Plan §6 & §8`)
+*   **Discrepancy Description:** The design asserts that `PreflightModal.tsx` has no fallback path. In reality, `PreflightModal.tsx` already has a baseline button `🛡️ Baza Qiyməti ilə Göndər ({formatAzn(price)})`, and `/api/listings/[bina_id]/preflight` already supports `bypass_live_check: true`. The real runtime defect is that on HTTP 502 with `reason: "SCRAPE_ERROR"`, `PreflightModal.tsx` enters `else: setStatusState("ERROR")`, displaying a red fatal error box (`Pre-Flight Xətası`) that obscures the fallback path. Additionally, `PreflightResponseData` lacks `can_fallback_to_db` and `db_price` types.
+*   **Rationale:** Inaccurate assertions about existing code lead to redundant rewrites and fail to fix the root UX categorization bug.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Target `tests/test_tts.py` directly, update router test assertions for Arif/Ayan, and update `test_elevenlabs_speed_parameter_serialized` to assert 0.50/0.85/0.20.
-*   ***Proposed Edit:***
-    *   Location: Target File 7 and Verification Plan.
-    *   Change: Set target to `tests/test_tts.py (Modify)` and verification command to `pytest tests/test_tts.py -v`.
+*   ***Justification:** Acknowledge existing backend support; update `PreflightResponseData` type definition; promote `reason: "SCRAPE_ERROR"` into a dedicated amber `SCRAPE_FALLBACK_PROMPT` state with clear confirmation text and active `[ 🛡️ Bazadakı Qiymətlə Göndər ]` action.
+*   ***Proposed Edit:*** Refine Section 2.7, Section 5.6, and Section 7.8 with the exact `PreflightResponseData` interface and amber state handling.
 
 ---
 
-### 4. Watermark Geometric Clipping at Canvas Border (`840 + 330 = 1170px > 1080px`) [`egm-design`, `egm-implementation-readiness`, `egm-codebase-details`] - Severity: Major
-*   **Affected Scope:** [Lines 179–181](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L179-L181) & [Line 300](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L300)
-*   **Discrepancy Description:** `create_logo_watermark` produces an image of `330x74` px. Placing it at `x=840` overflows the 1080px canvas by 90 pixels, cutting off the watermark.
-*   **Rationale:** Visual defect on all rendered videos.
+### 3. [Missing `Verification Plan` and Structural File Grouping] [`egm-structural`, `egm-implementation-readiness`] - Severity: 🔴 Blocker
+*   **Scope:** Lines 207–249 (`## Detailed Implementation Plan`)
+*   **Discrepancy Description:** The design completely omits the mandatory `### Verification Plan` subsection (violating EGM standards) and lists files directly as H3s without the standard `### Target Files to Create/Modify` container or automated Vitest test suites.
+*   **Rationale:** Without an explicit verification plan (build, lint, Vitest unit tests, manual checks), implementation lacks objective completion gates.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Scale watermark to compact pill dimensions (`180x40` px) in `glass_badge.py` or scale in FFmpeg filtergraph, and place at `x=860, y=24` (yielding `860 + 180 = 1040 < 1080px`, a clean 40px margin).
-*   ***Proposed Edit:***
-    *   Location: Subsystem B.1 (Line 181) and Target File 5.
-    *   Change: Specify watermark dimensions `180x40` and fixed position `x=860, y=24`.
+*   ***Justification:** Introduce `### Target Files to Create/Modify` with H4 file entries, add 3 dedicated Vitest test files (`useFloatingWindow.test.ts`, `FloatingCardStage.test.tsx`, `extractErrorMessage.test.ts`), and append `### Verification Plan`.
+*   ***Proposed Edit:*** Restructure Section 7 to include `### Target Files to Create/Modify`, 3 test files, and `### Verification Plan`.
 
 ---
 
-### 5. Audio Filtergraph Distortion & Muffling in Mix Chain [`egm-design`] - Severity: Major
-*   **Affected Scope:** [Lines 192–199](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L192-L199)
-*   **Discrepancy Description:** Summing voice (1.0), ducked music (0.15–0.25), and SFX (0.35) in `amix` without a limiter peaks up to +3.5 dBFS causing digital clipping. Static `lowpass=f=3500` on background track permanently muffles music during speech pauses.
-*   **Rationale:** Degrades audio fidelity on mobile devices.
+### 4. [Double Header Bar Collision in Stage Cards] [`egm-codebase-details`, `egm-implementation-readiness`] - Severity: 🟡 Major
+*   **Scope:** Lines 216–236 (`FloatingCardWindow.tsx`, `VideoPipelineCard.tsx`, `AnalyticsTelemetryCard.tsx`)
+*   **Discrepancy Description:** `FloatingCardWindow.tsx` provides an outer draggable chrome with header, title, badges, and controls. However, existing cards (`VideoPipelineCard`, `AnalyticsTelemetryCard`, `CrmNegotiationCard`) already render their own built-in header bars. Wrapping them produces two stacked headers consuming ~100px of vertical space.
+*   **Rationale:** Wastes card space and duplicates buttons.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Add peak limiter `alimiter=limit=0.95:attack=5:release=50` to the mixed audio output and replace static lowpass with gentle high-shelf attenuation or calibrate ducking sidechain parameters cleanly.
-*   ***Proposed Edit:***
-    *   Location: Subsystem B.2 (Lines 193–199).
-    *   Change: Append `alimiter=limit=0.95:attack=5:release=50` to audio mix chain and set ducking sidechain `threshold=0.06:ratio=4:attack=25:release=300`.
+*   ***Justification:** `FloatingCardWindow` becomes the single owner of window chrome. Stage cards strip their internal headers or accept a `hideHeader?: boolean` prop.
+*   ***Proposed Edit:*** Specify in Section 7.2, 7.4, 7.5 that internal header bars are removed from stage cards when wrapped in `FloatingCardWindow`.
 
 ---
 
-### 6. Fallback Chain Leaking OpenAI English & Mismapping Ayan to Male [`egm-design`, `egm-codebase-details`] - Severity: Major
-*   **Affected Scope:** [Lines 272–279](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L272-L279) & [Lines 289–296](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L289-L296)
+### 5. [Adaptive Geometry for Unrendered Cards & Viewport Resize Clamping] [`egm-design`] - Severity: 🟡 Major
+*   **Scope:** Lines 120–145 (`Technical Plan §2 & §3`)
 *   **Discrepancy Description:**
-    1. `account_router.py:26` still has `EXAVITQu4vr4xnSDxMaL` in `except ImportError`.
-    2. `tts_service.py:607` has `eleven_voice_id = voice_id or "EXAVITQu4vr4xnSDxMaL"`.
-    3. `tts_service.py:766` does not map `DZaip8UahF0Qri1FxU8M` or `"ayan"` to `az-AZ-BanuNeural` (falling back to male Babek).
-    4. `tts_service.py:732` falls back to OpenAI TTS (`tts-1`) on ElevenLabs error, which outputs English.
-*   **Rationale:** Violates "Zero Foreign Voice Leakage" requirement.
+    1. Locking `VideoPipelineCard` to a 2-column horizontal layout based on a 9:16 portrait video player breaks when `isRendered === false`, where 16:9 landscape photo carousels are rendered.
+    2. `useFloatingWindow` only clamps on drag; resizing the browser window leaves cards stranded off-screen. Fixed 520px min-width breaks mobile (<768px).
+*   **Rationale:** Cards must adapt between unrendered (photo gallery) and rendered (9:16 player) states, and must remain accessible on window resize and mobile viewports.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Purge `EXAVITQu4vr4xnSDxMaL` completely from all files, add `DZaip8UahF0Qri1FxU8M` and `ayan` to `az-AZ-BanuNeural` check, and bypass OpenAI TTS fallback directly to Edge-TTS.
-*   ***Proposed Edit:***
-    *   Location: Subsystem A & Target Files 2 & 4.
-    *   Change: Update fallback mappings in `account_router.py` and `tts_service.py`.
+*   ***Justification:** Add adaptive layout branching in `VideoPipelineCard` (horizontal for rendered 9:16; vertical stacked for unrendered 16:9 gallery); add debounced window resize listener and mobile bottom-sheet fallback (<768px).
+*   ***Proposed Edit:*** Update Section 5.2 and Section 5.3 with adaptive geometry and resize listeners.
 
 ---
 
-### 7. Subtitle Baseline and ASS Coordinate Math [`egm-design`, `egm-codebase-details`] - Severity: Major
-*   **Affected Scope:** [Lines 183–187](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L183-L187)
-*   **Discrepancy Description:** In ASS (height 1920), baseline `y=1380px` requires `MarginV = 1920 - 1380 = 540`, whereas the doc said `MarginV=500` (which is `y=1420`). Also, the CTA badge in `glass_badge.py` is at `y=1380`. Subtitles and CTA badge must not overlap.
+### 6. [Hardcoded Regional Normatives & Unfiltered CRM Leads in Telemetry] [`egm-design`, `egm-implementation-readiness`] - Severity: 🟡 Major
+*   **Scope:** Lines 163–178 (`Technical Plan §4: Truthful Telemetry Engine`)
+*   **Discrepancy Description:** Hardcoding Yasamal liquidity corridors (2,200–2,800 AZN/m²) for all listings misrepresents properties in Səbail, Bilgəh, or Masazır. Querying `buyer_leads` with `limit(100)` and no filter fabricates local interest.
+*   **Rationale:** Truthful telemetry must not display false valuation benchmarks or arbitrary lead counts.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Correct ASS math: baseline `y=1340px` with `MarginV=580` or `MarginV=540`, and ensure CTA badge sits at `y=1480-1600` or subtitles safe-shift is cleanly coordinated without erratic jumping.
-*   ***Proposed Edit:***
-    *   Location: Subsystem B.1.
-    *   Change: Set `MarginV=540` (`y=1380px`), set CTA badge `y=1540`, enforce agency phone `AGENCY_WHATSAPP_PHONE` on CTA card.
+*   ***Justification:** Define a district normative dictionary (`DISTRICT_BENCHMARKS`) with dynamic lookup by listing district, and parameterize `buyer_leads` query by district/rooms.
+*   ***Proposed Edit:*** Update Section 5.4 and Section 7.5 to include `DISTRICT_BENCHMARKS` and filtered lead counts.
 
 ---
 
-### 8. Formal Resolution of Open Questions [`egm-design`, `egm-implementation-readiness`] - Severity: Nit
-*   **Affected Scope:** [Lines 68–74](file:///c:/Users/HP/BakuEstate-AI/docs/designs/native_dual_voice_and_cinematic_compositor_v2.md#L68-L74)
-*   **Discrepancy Description:** Open Questions 1 & 2 are listed with multiple options in an Approved spec.
+### 7. [JSX Restructuring for Listing Card Header Badges] [`egm-codebase-details`, `egm-implementation-readiness`] - Severity: 🟡 Major
+*   **Scope:** Lines 179–184, 240–242 (`ListingsClient.tsx`)
+*   **Discrepancy Description:** Simply splitting badges into two rows without changing the parent wrapper to `flex flex-col gap-1.5` will cause Row 2 to align beside the video version badge, breaking card geometry on the `h-44` image.
+*   **Rationale:** Badges will collide or obscure the property thumbnail without explicit container styling.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Justification:** Record definitive resolutions: Question 1 -> Option B (Deterministic per-channel routing in `account_router.py` with Arif/Ayan); Question 2 -> Incremental versioning (`v2`/`v3`) via `get_next_render_version_num()`.
-*   ***Proposed Edit:***
-    *   Location: Open Questions (Lines 68–74).
-    *   Change: Convert to "Resolved Design Decisions".
+*   ***Justification:** Provide exact JSX container structure: `flex flex-col gap-1.5 pointer-events-none z-10`, with Row 1 (`flex items-center justify-between`) and conditional Row 2 (`flex items-center gap-1.5`).
+*   ***Proposed Edit:*** Update Section 5.5 and Section 7.7 with the exact JSX hierarchy.
 
 ---
 
-### 9. Duplicate Return in `src/media/tts_service.py` [`egm-codebase-details`] - Severity: Nit
-*   **Affected Scope:** `src/media/tts_service.py` Lines 471-473
-*   **Discrepancy Description:** `return " ".join(parts)` duplicated consecutively.
+### 8. [Standardized Alternatives Formatting & EGM Template Schema] [`egm-structural`] - Severity: 🟡 Major
+*   **Scope:** Lines 193–205 (`## Alternatives Considered`)
+*   **Discrepancy Description:** Alternatives are formatted as an inline numbered list rather than standard H3 headers (`### Alternative 1: ...`), omitting explicit `* **Pros**:` and `* **Cons**:`.
+*   **Rationale:** Standard EGM design docs require structured pros/cons analysis.
 *   ***AI Suggestion:*** `PROPOSE FIX`
-*   ***Proposed Edit:*** Remove line 473.
+*   ***Justification:** Convert alternatives into H3 subsections with explicit Pros, Cons, and Author Rejection rationale.
+*   ***Proposed Edit:*** Update Section 6 to follow standard H3, Pros, Cons, and Reason for Rejection.
+
+---
+
+### 9. [Diagnostic Details Concatenation in `extractErrorMessage`] [`egm-codebase-details`, `egm-design`] - Severity: 🟢 Nit
+*   **Scope:** Lines 149–160 (`extractErrorMessage`)
+*   **Discrepancy Description:** Evaluates `obj.message` first. In Supabase/Postgrest errors, `error.message` is generic, while diagnostic detail is in `error.details` and remediation is in `error.hint`.
+*   ***AI Suggestion:*** `PROPOSE FIX`
+*   ***Proposed Edit:*** Move `extractErrorMessage` to shared `web/lib/errors.ts` and concatenate `details` and `hint` when present.
+
+---
+
+### 10. [CUJ 1 Entry Points & Missing CUJs 5 & 6] [`egm-codebase-details`, `egm-structural`] - Severity: 🟢 Nit
+*   **Scope:** Lines 55–92 (`Critical User Journeys`)
+*   **Discrepancy Description:** CUJ 1 refers to `[🎬 Videoya Bax]` and `[📊 Analitikaya Bax]` buttons on listing cards, which are currently only in AI chat messages. Also, goals 4 (error telemetry) and 6 (badge collision) lack explicit CUJs.
+*   ***AI Suggestion:*** `PROPOSE FIX`
+*   ***Proposed Edit:*** Add quick action buttons to listing cards or clarify chat entry points, and add CUJ 5 (Sanitized Error Display) and CUJ 6 (Card Header Badges).
