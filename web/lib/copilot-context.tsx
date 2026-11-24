@@ -47,6 +47,15 @@ export interface AnalyticsStagePayload {
   publicationId?: string;
   listingId?: string;
   title?: string;
+  specs?: {
+    bina_id?: string;
+    price_azn?: number;
+    rooms?: number;
+    area_m2?: number;
+    location?: string;
+    niche_badge?: string;
+    building_type?: string;
+  };
   viewsTrajectory?: { date: string; views: number }[];
   engagementRate?: number;
   nicheMedianEr?: number;

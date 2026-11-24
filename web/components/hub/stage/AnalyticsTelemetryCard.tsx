@@ -60,15 +60,6 @@ interface LiveSnapshot {
   captured_at: string;
 }
 
-interface LivePublication {
-  id: string;
-  listing_id: string;
-  channel: string;
-  status: string;
-  post_url?: string;
-  published_at?: string;
-}
-
 export function AnalyticsTelemetryCard({
   card,
   isMaximized = false,

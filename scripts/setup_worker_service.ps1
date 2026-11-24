@@ -118,7 +118,7 @@ if ($Start) {
         Write-Host "Task '$TaskName' started successfully." -ForegroundColor Green
     } elseif (Test-Path $StartupBat) {
         Write-Host "Starting Worker via Startup script: $StartupBat..." -ForegroundColor Green
-        Start-Process "cmd.exe" -ArgumentList "/c `"$StartupBat`"" -WindowStyle Hidden
+        Start-Process "cmd.exe" -ArgumentList "/c ""`"$StartupBat`"""" -WindowStyle Hidden
         Write-Host "Worker daemon started." -ForegroundColor Green
     } else {
         Write-Host "Cannot start: Task '$TaskName' is not registered. Run with -Register first." -ForegroundColor Yellow
