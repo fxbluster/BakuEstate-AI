@@ -21,6 +21,30 @@ import {
 } from "lucide-react";
 import type { StageCardInstance, VideoStagePayload } from "@/lib/copilot-context";
 import { useCopilot } from "@/lib/copilot-context";
+import { createClient } from "@/lib/supabase/client";
+
+interface LiveListingData {
+  id?: string;
+  bina_id?: string | number;
+  title?: string;
+  price?: number;
+  price_azn_normalized?: number;
+  rooms?: number;
+  area?: number;
+  location?: string;
+  address?: string;
+  archetype?: string;
+  photo_urls?: string[];
+}
+
+interface LiveRenderData {
+  id?: string;
+  listing_id?: string;
+  version_num?: number;
+  status?: string;
+  video_cdn_url?: string | null;
+  duration_seconds?: number | null;
+}
 
 export interface VideoPipelineCardProps {
   card: StageCardInstance;
@@ -43,26 +67,116 @@ export function VideoPipelineCard({
   // Derive specs and defaults
   const listingId = payload.listingId || card.targetEntityId || "6572383";
   const binaId = payload.binaId || payload.specs?.bina_id || listingId;
-  const isRendered = payload.isRendered ?? Boolean(payload.videoCdnUrl);
-  const videoCdnUrl = payload.videoCdnUrl || (isRendered ? "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" : null);
 
-  const title = payload.title || "Səbail r., Badamdar qəs., 4 otaqlı premium mənzil";
-  const priceAzn = payload.priceAzn ?? payload.specs?.price_azn ?? 385000;
-  const rooms = payload.rooms ?? payload.specs?.rooms ?? 4;
-  const areaM2 = payload.areaM2 ?? payload.specs?.area_m2 ?? 185;
-  const location = payload.location ?? payload.specs?.location ?? "Bakı şəhəri, Səbail rayonu";
-  const nicheBadge = payload.nicheBadge ?? payload.specs?.niche_badge ?? "Lüks Portfel";
-  const targetAccount = payload.targetAccount || "@bakuestate.premium";
+  // Live Supabase sync for actual listing specs & rendered videos
+  const [liveListing, setLiveListing] = useState<LiveListingData | null>(null);
+  const [liveRender, setLiveRender] = useState<LiveRenderData | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadData() {
+      const idToSearch = binaId || listingId;
+      if (!idToSearch || idToSearch === "6572383") return;
+      try {
+        const supabase = createClient();
+        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const isUuid = UUID_REGEX.test(idToSearch);
+
+        let query = supabase.from("listings").select("*");
+        if (isUuid) {
+          query = query.eq("id", idToSearch);
+        } else {
+          query = query.eq("bina_id", String(idToSearch));
+        }
+
+        const { data: listing } = await query.maybeSingle();
+        if (!isMounted) return;
+
+        if (listing) {
+          setLiveListing(listing);
+          const { data: renders } = await supabase
+            .from("render_versions")
+            .select("*")
+            .eq("listing_id", listing.id)
+            .order("version_num", { ascending: false });
+
+          if (isMounted && renders && renders.length > 0) {
+            const completed = renders.find((r) => r.status === "COMPLETED" && r.video_cdn_url);
+            setLiveRender(completed || renders[0]);
+          }
+        }
+      } catch (err) {
+        console.warn("[VideoPipelineCard] live data fetch notice:", err);
+      }
+    }
+    loadData();
+    return () => {
+      isMounted = false;
+    };
+  }, [binaId, listingId]);
+
+  const isRendered =
+    liveRender?.status === "COMPLETED" && liveRender?.video_cdn_url
+      ? true
+      : payload.isRendered ?? Boolean(payload.videoCdnUrl);
+
+  const videoCdnUrl =
+    liveRender?.status === "COMPLETED" && liveRender?.video_cdn_url
+      ? liveRender.video_cdn_url
+      : payload.videoCdnUrl || (isRendered ? "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" : null);
+
+  const title =
+    liveListing?.title ||
+    payload.title ||
+    (binaId && binaId !== "6572383" ? `Elan #${binaId}` : "Səbail r., Badamdar qəs., 4 otaqlı premium mənzil");
+
+  const priceAzn =
+    liveListing?.price_azn_normalized ||
+    liveListing?.price ||
+    payload.priceAzn ||
+    payload.specs?.price_azn ||
+    385000;
+
+  const rooms =
+    liveListing?.rooms ||
+    payload.rooms ||
+    payload.specs?.rooms ||
+    4;
+
+  const areaM2 =
+    liveListing?.area ||
+    payload.areaM2 ||
+    payload.specs?.area_m2 ||
+    185;
+
+  const location =
+    liveListing?.location ||
+    liveListing?.address ||
+    payload.location ||
+    payload.specs?.location ||
+    "Bakı şəhəri, Səbail rayonu";
+
+  const nicheBadge =
+    liveListing?.archetype === "budget"
+      ? "Sərfəli / Büdcə"
+      : payload.nicheBadge || payload.specs?.niche_badge || "Lüks Portfel";
+
+  const targetAccount =
+    payload.targetAccount ||
+    (liveListing?.archetype === "budget" ? "@baku.serfeli.evler" : "@bakuestate.premium");
 
   // Gallery state for unrendered cards
-  const mockPhotos = payload.photos && payload.photos.length > 0
-    ? payload.photos
-    : [
-        "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1080&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1080&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1080&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1600566753376-12c8ab7fb75b?w=1080&auto=format&fit=crop&q=80",
-      ];
+  const displayPhotos =
+    liveListing?.photo_urls && liveListing.photo_urls.length > 0
+      ? liveListing.photo_urls
+      : payload.photos && payload.photos.length > 0
+        ? payload.photos
+        : [
+            "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1080&auto=format&fit=crop&q=80",
+            "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1080&auto=format&fit=crop&q=80",
+            "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1080&auto=format&fit=crop&q=80",
+            "https://images.unsplash.com/photo-1600566753376-12c8ab7fb75b?w=1080&auto=format&fit=crop&q=80",
+          ];
   const [activePhotoIdx, setActivePhotoIdx] = useState(0);
 
   // Video playback state
@@ -112,8 +226,8 @@ export function VideoPipelineCard({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          listing_id: listingId,
-          render_version_id: payload.renderVersionId,
+          listing_id: liveListing?.id || listingId,
+          render_version_id: liveRender?.id || payload.renderVersionId,
           target_account: targetAccount,
           custom_caption: payload.caption,
         }),
@@ -219,6 +333,11 @@ export function VideoPipelineCard({
               <span className="text-xs font-semibold text-slate-200 truncate">
                 Bina #{binaId}
               </span>
+              {liveRender && (
+                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  v{liveRender.version_num} • {liveRender.status === "COMPLETED" ? "Hazır" : liveRender.status}
+                </span>
+              )}
               <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
                 {nicheBadge}
               </span>
@@ -429,18 +548,18 @@ export function VideoPipelineCard({
             {/* Photo Carousel / Preview */}
             <div className="relative aspect-video rounded-xl overflow-hidden bg-black/60 border border-slate-800">
               <img
-                src={mockPhotos[activePhotoIdx]}
+                src={displayPhotos[activePhotoIdx]}
                 alt={`Bina ${binaId} foto ${activePhotoIdx + 1}`}
                 className="w-full h-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
               {/* Prev/Next buttons */}
-              {mockPhotos.length > 1 && (
+              {displayPhotos.length > 1 && (
                 <>
                   <button
                     onClick={() =>
-                      setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : mockPhotos.length - 1))
+                      setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : displayPhotos.length - 1))
                     }
                     className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
                   >
@@ -448,7 +567,7 @@ export function VideoPipelineCard({
                   </button>
                   <button
                     onClick={() =>
-                      setActivePhotoIdx((prev) => (prev < mockPhotos.length - 1 ? prev + 1 : 0))
+                      setActivePhotoIdx((prev) => (prev < displayPhotos.length - 1 ? prev + 1 : 0))
                     }
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
                   >
@@ -459,13 +578,13 @@ export function VideoPipelineCard({
 
               {/* Counter Pill */}
               <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
-                {activePhotoIdx + 1} / {mockPhotos.length}
+                {activePhotoIdx + 1} / {displayPhotos.length}
               </div>
             </div>
 
             {/* Thumbnail Strip */}
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {mockPhotos.map((photo, i) => (
+              {displayPhotos.map((photo, i) => (
                 <button
                   key={i}
                   onClick={() => setActivePhotoIdx(i)}
