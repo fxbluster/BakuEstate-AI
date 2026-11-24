@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Film,
   TrendingUp,
@@ -9,6 +9,7 @@ import {
   Minimize2,
   X,
   Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useCopilot, type StageCardInstance } from "@/lib/copilot-context";
 import { VideoPipelineCard } from "./stage/VideoPipelineCard";
@@ -25,6 +26,8 @@ export function LeftCanvasStage() {
     closeStageCard,
     clearStageCards,
   } = useCopilot();
+
+  const [widthPreset, setWidthPreset] = useState<"compact" | "standard" | "wide">("standard");
 
   // Auto-pause cleanup effect: pause all media streams when stage unmounts or active card switches
   useEffect(() => {
@@ -126,10 +129,20 @@ export function LeftCanvasStage() {
     }
   };
 
+  const maxWidthStyle =
+    stageViewMode === "maximized"
+      ? "100%"
+      : widthPreset === "compact"
+      ? "560px"
+      : widthPreset === "standard"
+      ? "860px"
+      : "1240px";
+
   return (
     <div
       data-testid="left-canvas-stage"
-      className="pointer-events-auto h-full flex flex-col p-3 sm:p-4 md:p-6 overflow-hidden max-w-[1280px] w-full mx-auto"
+      className="pointer-events-auto h-full flex flex-col p-3 sm:p-4 md:p-6 overflow-hidden w-full mx-auto bg-obsidian-950/85 backdrop-blur-xl border-r border-slate-800/80 shadow-2xl transition-all duration-300"
+      style={{ maxWidth: maxWidthStyle }}
     >
       {/* Stage Header / Switcher Bar */}
       <div className="flex items-center justify-between gap-3 mb-3 shrink-0">
@@ -180,8 +193,52 @@ export function LeftCanvasStage() {
           })}
         </div>
 
-        {/* Global Controls */}
+        {/* Global Controls & Width Sizing Presets */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Width Adjuster Pill ("boyunu ayarlamaq / genişləndirmək") */}
+          <div className="hidden sm:flex items-center gap-1 bg-obsidian-900/90 border border-slate-800 rounded-lg p-0.5 text-[10px]">
+            <span className="px-1.5 text-slate-500 flex items-center gap-1">
+              <SlidersHorizontal className="w-3 h-3 text-gold-400" />
+              <span className="hidden xl:inline">Ölçü:</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setWidthPreset("compact")}
+              className={`px-2 py-0.5 rounded transition ${
+                widthPreset === "compact"
+                  ? "bg-slate-700 text-gold-300 font-semibold shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Kompakt en (560px)"
+            >
+              560px
+            </button>
+            <button
+              type="button"
+              onClick={() => setWidthPreset("standard")}
+              className={`px-2 py-0.5 rounded transition ${
+                widthPreset === "standard"
+                  ? "bg-slate-700 text-gold-300 font-semibold shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Standart en (860px)"
+            >
+              860px
+            </button>
+            <button
+              type="button"
+              onClick={() => setWidthPreset("wide")}
+              className={`px-2 py-0.5 rounded transition ${
+                widthPreset === "wide"
+                  ? "bg-slate-700 text-gold-300 font-semibold shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Geniş en (1240px)"
+            >
+              Geniş
+            </button>
+          </div>
+
           <button
             onClick={() => setStageViewMode(stageViewMode === "maximized" ? "docked" : "maximized")}
             title={stageViewMode === "maximized" ? "Standart Rejim" : "Tam Ekrana Böyüt"}
@@ -217,11 +274,20 @@ export function LeftCanvasStage() {
           <div className="h-full w-full">
             {renderCard(activeCard, true)}
           </div>
+        ) : stageCards.length === 1 ? (
+          /* Single Card: Occupies the full stage width cleanly */
+          <div className="h-full w-full min-h-0">
+            {renderCard(stageCards[0], false)}
+          </div>
         ) : (
-          /* Standard Responsive Mode */
+          /* Multi-Card Layout: Dual-column on wide screens, tabbed active card otherwise */
           <>
-            {/* Viewport >= 1440px: Dual-card Horizontal Split (or single card if only 1) */}
-            <div className="hidden 2xl:grid 2xl:grid-cols-2 gap-4 h-full">
+            {/* Viewport >= 1440px or wide preset: Dual-card Horizontal Split */}
+            <div
+              className={`hidden ${
+                widthPreset === "compact" ? "" : "2xl:grid 2xl:grid-cols-2"
+              } gap-4 h-full`}
+            >
               {stageCards.slice(0, 2).map((card) => (
                 <div key={card.id} className="h-full min-h-0">
                   {renderCard(card, false)}
@@ -229,25 +295,13 @@ export function LeftCanvasStage() {
               ))}
             </div>
 
-            {/* Viewport 1024px to 1439px: Single-Card Focus with Tab Selector */}
-            <div className="hidden lg:block 2xl:hidden h-full">
+            {/* Viewport < 1440px or Compact preset: Single-Card Focus with Tab Selector */}
+            <div className={`h-full ${widthPreset === "compact" ? "block" : "2xl:hidden"}`}>
               {activeCard && (
                 <div className="h-full min-h-0">
                   {renderCard(activeCard, false)}
                 </div>
               )}
-            </div>
-
-            {/* Viewport < 1024px: Horizontal Swipeable Deck / Mobile Focus */}
-            <div className="block lg:hidden h-full overflow-x-auto snap-x snap-mandatory flex gap-4 pb-2">
-              {stageCards.map((card) => (
-                <div
-                  key={card.id}
-                  className="snap-center shrink-0 w-full sm:w-[500px] h-full min-h-0"
-                >
-                  {renderCard(card, false)}
-                </div>
-              ))}
             </div>
           </>
         )}

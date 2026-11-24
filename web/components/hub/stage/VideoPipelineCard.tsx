@@ -389,8 +389,12 @@ export function VideoPipelineCard({
         {isRendered ? (
           /* Rendered State: 1080x1920 MP4 Player & Distribution */
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
-            {/* 9:16 Video Player Container */}
-            <div className="relative flex items-center justify-center bg-black/80 rounded-xl overflow-hidden border border-slate-800 group aspect-[9/16] max-h-[460px] mx-auto w-full max-w-[260px]">
+            {/* 9:16 Video Player Container (responsive scaling with isMaximized) */}
+            <div
+              className={`relative flex items-center justify-center bg-black/80 rounded-xl overflow-hidden border border-slate-800 group aspect-[9/16] ${
+                isMaximized ? "max-h-[640px] max-w-[360px]" : "max-h-[460px] max-w-[260px]"
+              } mx-auto w-full transition-all duration-300 shadow-xl`}
+            >
               {videoCdnUrl ? (
                 <video
                   ref={videoRef}
