@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Sparkles,
   ShieldAlert,
@@ -22,7 +22,6 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { CockpitCard } from "@/lib/types";
 import { formatRelativeAz } from "@/lib/format";
-import { computeTriagedRadar } from "@/lib/copilot-core";
 import { invokeCopilot, StrategistCockpitResult } from "@/lib/ai-client";
 import { useCopilot } from "@/lib/copilot-context";
 
@@ -40,7 +39,21 @@ interface RawTopCard {
   strategic_rationale?: string | null;
 }
 
-export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean }) {
+function normalizeCockpitCard(c: CockpitCard): CockpitCard {
+  return {
+    ...c,
+    priority: String(c.priority ?? "NORMAL").toUpperCase(),
+    status: String(c.status ?? "PENDING").toUpperCase(),
+  };
+}
+
+export function CockpitCardHUD({
+  hideWhenEmpty = false,
+  agencyId,
+}: {
+  hideWhenEmpty?: boolean;
+  agencyId?: string | null;
+}) {
   const [cards, setCards] = useState<CockpitCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -49,9 +62,7 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
   const [isCollapsed, setIsCollapsed] = useState(false);
   const { openAgentHub } = useCopilot();
 
-  const isMountedRef = useRef(false);
-
-  // Fetch PENDING cards from DB
+  // Fetch PENDING cards from DB (clean uppercase status/priority contract)
   const fetchCards = useCallback(async () => {
     try {
       const supabase = createClient();
@@ -64,8 +75,8 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
 
       if (error) {
         console.debug("Cockpit cards fetch notice:", error.message);
-      } else if (data && data.length > 0) {
-        setCards(data as CockpitCard[]);
+      } else if (Array.isArray(data)) {
+        setCards((data as CockpitCard[]).map(normalizeCockpitCard));
       }
     } catch (err) {
       console.debug("Cockpit cards exception:", err);
@@ -74,19 +85,8 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
     }
   }, []);
 
-  // Tier 1: Background AI elevation to /api/ai/copilot ('strategist_cockpit')
-  const runStrategistElevation = useCallback(async (force: boolean = false) => {
-    if (typeof window === "undefined") return;
-
-    const lastGenStr = localStorage.getItem("last_cockpit_generated_at");
-    const now = Date.now();
-    const isStale =
-      !lastGenStr || now - new Date(lastGenStr).getTime() > 120 * 60 * 1000;
-
-    if (!force && !isStale) {
-      return;
-    }
-
+  // Explicit user-triggered AI elevation to /api/ai/copilot ('strategist_cockpit') — zero auto localStorage triggers
+  const runStrategistElevation = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const res = await invokeCopilot<StrategistCockpitResult>({
@@ -94,13 +94,14 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
         limit: 10,
       });
 
-      if (res.ok && res.data?.top_cards && Array.isArray(res.data.top_cards)) {
+      if (res?.ok && res.data?.top_cards && Array.isArray(res.data.top_cards)) {
         const supabase = createClient();
         const cardsToInsert = res.data.top_cards.map((c: RawTopCard) => ({
+          ...(agencyId ? { agency_id: agencyId } : {}),
           lead_id: c.lead_id || null,
           listing_id: c.listing_id || null,
           channel: c.channel || "CRM",
-          priority: (c.priority || "HIGH").toUpperCase(),
+          priority: String(c.priority || "HIGH").toUpperCase(),
           headline: c.headline || "Günün Fürsət Kartı",
           draft_text: c.draft_text || null,
           reason: c.reason || c.strategic_rationale || "Strategist AI tərəfindən seçildi",
@@ -117,91 +118,40 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
             .select();
 
           if (!insertErr && inserted) {
+            const normalizedInserted = (inserted as CockpitCard[]).map(normalizeCockpitCard);
             setCards((prev) => {
-              const newIds = new Set(inserted.map((item: { id: string }) => item.id));
+              const newIds = new Set(normalizedInserted.map((item) => item.id));
               const existingFiltered = prev.filter((item) => !newIds.has(item.id));
-              return [...(inserted as CockpitCard[]), ...existingFiltered];
+              return [...normalizedInserted, ...existingFiltered];
             });
           }
         }
-
-        localStorage.setItem("last_cockpit_generated_at", new Date().toISOString());
       }
     } catch (err) {
       console.warn("Strategist cockpit elevation notice:", err);
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [agencyId]);
 
-  // Tier 0: On mount, read `bakuestate_cached_leads_v1` from localStorage and display deterministic cards via computeTriagedRadar()
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const cachedRaw = localStorage.getItem("bakuestate_cached_leads_v1");
-        if (cachedRaw) {
-          const cachedLeads = JSON.parse(cachedRaw);
-          if (Array.isArray(cachedLeads) && cachedLeads.length > 0) {
-            const radarItems = computeTriagedRadar(cachedLeads);
-            const initialDeterministicCards: CockpitCard[] = radarItems.map(
-              (item, idx) => ({
-                id: item.id || `radar-cached-${idx}`,
-                lead_id: item.lead_id || item.id || null,
-                listing_id: item.listing_id || null,
-                channel: item.channel || "CRM",
-                priority:
-                  item.priority ||
-                  (item.radar_score >= 100
-                    ? "URGENT"
-                    : item.radar_score >= 75
-                      ? "HIGH"
-                      : "NORMAL"),
-                headline: item.headline || `Top Fürsət: ${item.client_name || "Müştəri"}`,
-                draft_text: item.draft_text || `Salam! BakuEstate-dən əlaqə saxlayırıq.`,
-                reason: item.reason || "0ms Yerli Radar Heuristikası",
-                sentinel_warning: item.sentinel_warning || null,
-                status: "PENDING",
-                created_at: item.created_at || new Date().toISOString(),
-                target_uri: item.target_uri || null,
-                strategic_rationale:
-                  item.strategic_rationale ||
-                  "Yerli keş əsasında dərhal generasiya olunan radar kartı",
-              })
-            );
-            setCards(initialDeterministicCards);
-            setLoading(false);
-          }
-        }
-      } catch (e) {
-        console.debug("Tier 0 cache read notice:", e);
-      }
-    }
-
-    // Load fresh cards from DB
     fetchCards();
-
-    // Trigger Tier 1 elevation if stale (>120m)
-    if (!isMountedRef.current) {
-      isMountedRef.current = true;
-      runStrategistElevation(false);
-    }
 
     // Subscribe to Realtime updates on cockpit_cards with 500ms trailing debounce
     let debounceTimer: NodeJS.Timeout | null = null;
     try {
       const supabase = createClient();
+      const changeFilter = agencyId
+        ? { event: "*" as const, schema: "public", table: "cockpit_cards", filter: `agency_id=eq.${agencyId}` }
+        : { event: "*" as const, schema: "public", table: "cockpit_cards" };
       const channel = supabase
         .channel("cockpit_cards_realtime_hud")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "cockpit_cards" },
-          () => {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-              fetchCards();
-            }, 500);
-          }
-        )
+        .on("postgres_changes", changeFilter, () => {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            fetchCards();
+          }, 500);
+        })
         .subscribe();
 
       return () => {
@@ -211,11 +161,11 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
     } catch (e) {
       console.debug("Realtime subscription fallback:", e);
     }
-  }, [fetchCards, runStrategistElevation]);
+  }, [fetchCards, agencyId]);
 
   async function handleMarkStatus(
     cardId: string,
-    nextStatus: "EXECUTED" | "DISMISSED"
+    nextStatus: "EXECUTED" | "DISMISSED" | "SNOOZED"
   ) {
     setProcessingId(cardId);
     try {
@@ -227,9 +177,9 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
 
       if (error) {
         console.error("Cockpit update error:", error);
+        return;
       }
 
-      // Optimistically remove card from local state
       setCards((prev) => prev.filter((c) => c.id !== cardId));
     } catch (err) {
       console.error("Failed to update card status:", err);
@@ -248,9 +198,9 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
     }
   }
 
-  // Priority badge helper
-  function renderPriorityBadge(priority: string) {
-    const p = (priority || "NORMAL").toUpperCase();
+  // Priority badge helper (safe against any non-string value)
+  function renderPriorityBadge(priority: unknown) {
+    const p = String(priority ?? "NORMAL").toUpperCase();
     if (p === "URGENT" || p === "HIGH") {
       return (
         <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/50 bg-rose-950/80 px-2 py-0.5 text-[10px] font-bold text-rose-300">
@@ -307,7 +257,7 @@ export function CockpitCardHUD({ hideWhenEmpty = false }: { hideWhenEmpty?: bool
           <button
             type="button"
             disabled={isRefreshing}
-            onClick={() => runStrategistElevation(true)}
+            onClick={() => runStrategistElevation()}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gold-500/30 bg-gold-500/10 px-2.5 py-1 text-xs font-semibold text-gold-300 hover:bg-gold-500/20 active:scale-95 transition disabled:opacity-50"
             title="AI Cockpit Kartlarını Yenidən Qiymətləndir"
           >

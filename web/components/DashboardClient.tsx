@@ -91,15 +91,19 @@ export function DashboardClient({
 
     try {
       if (action === "done") {
-        const { error } = await supabase
-          .from("follow_up_tasks")
-          .update({
-            status: "DONE",
-            completed_at: new Date().toISOString(),
-          })
-          .eq("id", task.id);
+        const { data, error } = await supabase.rpc(
+          "update_follow_up_task_atomic",
+          {
+            p_task_id: task.id,
+            p_status: "DONE",
+            p_due_at: null,
+          }
+        );
 
         if (error) throw error;
+        if (data && typeof data === "object" && "ok" in data && data.ok === false) {
+          throw new Error((data as { error?: string }).error || "Tapşırıq yenilənə bilmədi.");
+        }
         setTasks((prev) => prev.filter((item) => item.id !== task.id));
         setFeedback({ type: "ok", text: "Tapşırıq tamamlandı kimi qeyd edildi." });
       } else {
@@ -108,23 +112,18 @@ export function DashboardClient({
             ? getPlusHoursIso(3)
             : getTomorrowMorningBakuIso();
 
-        const { error } = await supabase
-          .from("follow_up_tasks")
-          .update({
-            status: "SNOOZED",
-            due_at: nextDue,
-            snooze_count: (task.snooze_count ?? 0) + 1,
-            reminder_sent_at: null,
-          })
-          .eq("id", task.id);
+        const { data, error } = await supabase.rpc(
+          "update_follow_up_task_atomic",
+          {
+            p_task_id: task.id,
+            p_status: "SNOOZED",
+            p_due_at: nextDue,
+          }
+        );
 
         if (error) throw error;
-
-        if (task.lead_id) {
-          await supabase
-            .from("buyer_leads")
-            .update({ next_followup_at: nextDue })
-            .eq("id", task.lead_id);
+        if (data && typeof data === "object" && "ok" in data && data.ok === false) {
+          throw new Error((data as { error?: string }).error || "Tapşırıq təxirə salına bilmədi.");
         }
 
         setTasks((prev) =>
@@ -171,116 +170,39 @@ export function DashboardClient({
     const supabase = createClient();
 
     try {
-      if (decision === "confirm") {
-        const { error: upErr } = await supabase
-          .from("listings")
-          .update({
-            duplicate_resolution: "CONFIRMED_DUPLICATE",
-            editorial_status: "ARCHIVED",
-            pipeline_status: "SKIPPED_DUPLICATE",
-          })
-          .eq("id", pair.candidate.id);
-        if (upErr) throw upErr;
-
-        await supabase.from("listing_events").insert({
-          listing_id: pair.candidate.id,
-          event_type: "STATUS_CHANGED",
-          old_value_json: { duplicate_resolution: "PENDING_REVIEW" },
-          new_value_json: {
-            duplicate_resolution: "CONFIRMED_DUPLICATE",
-            editorial_status: "ARCHIVED",
-          },
-          actor: "web_user",
-        });
-
-        await supabase
-          .from("follow_up_tasks")
-          .update({
-            status: "DONE",
-            completed_at: new Date().toISOString(),
-            outcome_note: "Təkrar elan təsdiqləndi və arxivləndi",
-          })
-          .eq("listing_id", pair.candidate.id)
-          .eq("entity_type", "DUPLICATE_REVIEW")
-          .in("status", ["OPEN", "SNOOZED"]);
-
-        setDuplicates((prev) =>
-          prev.filter((d) => d.candidate.id !== pair.candidate.id)
+      const { data, error } = await supabase.rpc(
+        "resolve_duplicate_listing_atomic",
+        {
+          p_listing_id: pair.candidate.id,
+          p_decision: decision === "confirm" ? "CONFIRM" : "SEPARATE",
+        }
+      );
+      if (error) throw error;
+      if (data && typeof data === "object" && "ok" in data && data.ok === false) {
+        throw new Error(
+          (data as { error?: string }).error || "Təkrar qərar xətası"
         );
-        setTasks((prev) =>
-          prev.filter(
-            (t) =>
-              !(
-                t.listing_id === pair.candidate.id &&
-                t.entity_type === "DUPLICATE_REVIEW"
-              )
-          )
-        );
-        setFeedback({
-          type: "ok",
-          text: `#${pair.candidate.bina_id} təkrar elan kimi təsdiqləndi və arxivləndi.`,
-        });
-      } else {
-        const { error: upErr } = await supabase
-          .from("listings")
-          .update({
-            duplicate_resolution: "FALSE_POSITIVE",
-            duplicate_of_listing_id: null,
-            pipeline_status: "QUEUED",
-          })
-          .eq("id", pair.candidate.id);
-        if (upErr) throw upErr;
-
-        const idempotencyKey = `web_separate_render:${pair.candidate.bina_id}:${Date.now()}`;
-        const { error: jobErr } = await supabase.from("pipeline_jobs").insert({
-          idempotency_key: idempotencyKey,
-          job_type: "RENDER_INITIAL",
-          listing_id: pair.candidate.id,
-          trigger_source: "WEB_UI",
-          params_json: { reason: "duplicate_false_positive" },
-          status: "QUEUED",
-        });
-        if (jobErr) throw jobErr;
-
-        await supabase.from("listing_events").insert({
-          listing_id: pair.candidate.id,
-          event_type: "STATUS_CHANGED",
-          old_value_json: { duplicate_resolution: "PENDING_REVIEW" },
-          new_value_json: {
-            duplicate_resolution: "FALSE_POSITIVE",
-            pipeline_status: "QUEUED",
-          },
-          actor: "web_user",
-        });
-
-        await supabase
-          .from("follow_up_tasks")
-          .update({
-            status: "DONE",
-            completed_at: new Date().toISOString(),
-            outcome_note: "Ayrı mənzil kimi saxlanıldı və render növbəsinə düşdü",
-          })
-          .eq("listing_id", pair.candidate.id)
-          .eq("entity_type", "DUPLICATE_REVIEW")
-          .in("status", ["OPEN", "SNOOZED"]);
-
-        setDuplicates((prev) =>
-          prev.filter((d) => d.candidate.id !== pair.candidate.id)
-        );
-        setTasks((prev) =>
-          prev.filter(
-            (t) =>
-              !(
-                t.listing_id === pair.candidate.id &&
-                t.entity_type === "DUPLICATE_REVIEW"
-              )
-          )
-        );
-        setFeedback({
-          type: "ok",
-          text: `#${pair.candidate.bina_id} ayrı mənzil kimi saxlanıldı və video render növbəsinə əlavə edildi.`,
-        });
       }
+
+      setDuplicates((prev) =>
+        prev.filter((d) => d.candidate.id !== pair.candidate.id)
+      );
+      setTasks((prev) =>
+        prev.filter(
+          (t) =>
+            !(
+              t.listing_id === pair.candidate.id &&
+              t.entity_type === "DUPLICATE_REVIEW"
+            )
+        )
+      );
+      setFeedback({
+        type: "ok",
+        text:
+          decision === "confirm"
+            ? `#${pair.candidate.bina_id} təkrar elan kimi təsdiqləndi və arxivləndi.`
+            : `#${pair.candidate.bina_id} ayrı mənzil kimi saxlanıldı və video render növbəsinə əlavə edildi.`,
+      });
     } catch (err) {
       setFeedback({
         type: "err",

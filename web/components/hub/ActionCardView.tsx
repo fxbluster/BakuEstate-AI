@@ -14,6 +14,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import type { ActionCardPayload } from "@/lib/ai-client";
+import { invokeCopilot } from "@/lib/ai-client";
 import { buildWhatsAppUrl } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 
@@ -111,29 +112,23 @@ export function ActionCardView({ card, onActionComplete }: ActionCardViewProps) 
     }
   };
 
-  // 3. SAVE_INSIGHT Handler
+  // 3. SAVE_INSIGHT Handler (routed via /api/ai/copilot to avoid client RLS / schema drift)
   const handleSaveInsight = async () => {
     if (card.type !== "SAVE_INSIGHT") return;
     setStatus("EXECUTING");
     setErrorMessage(null);
 
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      const { error } = await supabase.from("agent_learned_insights").insert({
-        operator_id: user?.id,
+      const res = await invokeCopilot({
+        action: "save_insight",
         agent_id: card.agent_id,
         domain: card.domain,
         insight_text: card.insight_text,
         confidence_score: card.confidence_score,
-        source_reference: "Executive Agent Hub UI",
       });
 
-      if (error) {
-        throw new Error(error.message);
+      if (!res.ok) {
+        throw new Error(res.error || "Episodik yaddaşa yazılarkən xəta baş verdi.");
       }
 
       setStatus("EXECUTED");

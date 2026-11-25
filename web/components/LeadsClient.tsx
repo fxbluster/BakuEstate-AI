@@ -211,35 +211,45 @@ export function LeadsClient({
       const socialHandle = contactTrim && isHandle ? contactTrim : null;
       const followupIso = bakuLocalInputToIso(nextFollowupLocal);
 
-      const { data: createdLead, error: leadErr } = await supabase
-        .from("buyer_leads")
-        .insert({
-          client_name: clientName.trim(),
-          phone_normalized: phoneNormalized,
-          social_handle: socialHandle,
-          source_channel: sourceChannel,
-          stage: initialStage,
-          budget_max_azn: budgetMax.trim() ? Number(budgetMax) : null,
-          expected_commission_azn: expectedComm.trim()
+      const { data: rpcResult, error: rpcErr } = await supabase.rpc(
+        "create_buyer_lead_atomic",
+        {
+          p_client_name: clientName.trim(),
+          p_phone_normalized: phoneNormalized,
+          p_social_handle: socialHandle,
+          p_source_channel: sourceChannel,
+          p_stage: initialStage,
+          p_budget_max_azn: budgetMax.trim() ? Number(budgetMax) : null,
+          p_expected_commission_azn: expectedComm.trim()
             ? Number(expectedComm)
             : null,
-          notes: notes.trim() || null,
-          next_followup_at: followupIso,
-        })
-        .select("*")
-        .single();
+          p_notes: notes.trim() || null,
+          p_next_followup_at: followupIso,
+          p_listing_id: linkedListingId || null,
+          p_relation: "INQUIRED",
+          p_task_title: followupIso
+            ? `Müştəri follow-up: ${clientName.trim()} (${LEAD_STAGE_META[initialStage].label})`
+            : null,
+          p_task_priority:
+            initialStage === "VIEWING_SCHEDULED" || initialStage === "DEPOSIT"
+              ? "HIGH"
+              : "NORMAL",
+        }
+      );
 
-      if (leadErr) throw leadErr;
+      if (rpcErr) throw rpcErr;
+
+      const createdLead =
+        rpcResult && typeof rpcResult === "object" && "lead" in rpcResult
+          ? (rpcResult as { lead: BuyerLeadWithListings }).lead
+          : (rpcResult as BuyerLeadWithListings | null);
+
+      if (!createdLead) {
+        throw new Error("Müştəri yaradılarkən cavab alınmadı.");
+      }
 
       let linkedJoin: LeadListingJoin[] = [];
-      if (linkedListingId && createdLead) {
-        const { error: linkErr } = await supabase.from("lead_listings").insert({
-          lead_id: createdLead.id,
-          listing_id: linkedListingId,
-          relation: "INQUIRED",
-        });
-        if (linkErr) throw linkErr;
-
+      if (linkedListingId) {
         const opt = listingOptions.find((o) => o.id === linkedListingId);
         if (opt) {
           linkedJoin = [
@@ -268,21 +278,6 @@ export function LeadsClient({
             },
           ];
         }
-      }
-
-      if (followupIso && createdLead) {
-        await supabase.from("follow_up_tasks").insert({
-          entity_type: "BUYER_LEAD",
-          lead_id: createdLead.id,
-          listing_id: linkedListingId || null,
-          title: `Müştəri follow-up: ${clientName.trim()} (${LEAD_STAGE_META[initialStage].label})`,
-          due_at: followupIso,
-          priority:
-            initialStage === "VIEWING_SCHEDULED" || initialStage === "DEPOSIT"
-              ? "HIGH"
-              : "NORMAL",
-          status: "OPEN",
-        });
       }
 
       const fullLead: BuyerLeadWithListings = {
