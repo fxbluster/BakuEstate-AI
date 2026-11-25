@@ -179,6 +179,9 @@ def decompose_conversations_to_messages(
 
         raw_messages = c.get("messages") or []
         c["messages"] = []
+        # Strip legacy shared-DB columns absent in clean v2 schema
+        for extra_col in ("owner_id", "pinned_lead_id"):
+            c.pop(extra_col, None)
         conv_rows.append(c)
 
         if not isinstance(raw_messages, list):
@@ -246,9 +249,28 @@ def enrich_tenant_rows(
                 item["operator_id"] = mapped
 
         if table == "ai_copilot_runs":
-            item.setdefault("status", "COMPLETED")
-            item.setdefault("audio_seconds", 0)
-            item.setdefault("reserved_usd", 0)
+            raw_status = str(item.get("status") or "COMPLETED").strip().upper()
+            if raw_status == "RESERVED":
+                raw_status = "PENDING"
+            if raw_status not in ("PENDING", "COMPLETED", "FAILED"):
+                raw_status = "COMPLETED"
+            clean_run: Dict[str, Any] = {
+                "id": item.get("id"),
+                "agency_id": item.get("agency_id"),
+                "operator_id": item.get("operator_id"),
+                "action": item.get("action") or item.get("use_case") or "copilot",
+                "model": item.get("model") or "gemini-3.8-flash",
+                "status": raw_status,
+                "prompt_tokens": int(item.get("prompt_tokens") or item.get("input_tokens") or 0),
+                "completion_tokens": int(item.get("completion_tokens") or item.get("output_tokens") or 0),
+                "audio_seconds": item.get("audio_seconds") or 0,
+                "reserved_usd": item.get("reserved_usd") if item.get("reserved_usd") is not None else (item.get("reserved_cost_usd") or 0),
+                "cost_usd": item.get("cost_usd") if item.get("cost_usd") is not None else (item.get("actual_cost_usd") or 0),
+                "latency_ms": int(item.get("latency_ms") or 0),
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                "created_at": item.get("created_at"),
+            }
+            item = clean_run
 
         if table == "buyer_leads" and default_operator_id and not item.get("assigned_agent_id"):
             item["assigned_agent_id"] = default_operator_id
