@@ -3,6 +3,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { FloatingCardWindow } from "@/components/hub/stage/FloatingCardWindow";
 
+declare module "vitest" {
+  interface Assertion {
+    toBeInTheDocument(): void;
+  }
+}
+
 // Provide toBeInTheDocument matcher if not registered by default
 expect.extend({
   toBeInTheDocument(received) {

@@ -36,6 +36,8 @@ function mockListing(
     contact_name: "Əli",
     owner_phone_raw: "0501234567",
     owner_phone_normalized: "+994501234567",
+    photo_urls: [],
+    description: null,
     archetype: "budget",
     source_availability: "ACTIVE",
     first_seen_at: "2026-11-20T10:00:00Z",
