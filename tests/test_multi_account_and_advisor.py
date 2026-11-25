@@ -797,7 +797,7 @@ Nərimanovda 3 otaqlı kupçalı mənzil.
         - get_default_operator_uid() returns None when unconfigured (no hardcoded UUID)
         - priority normalization maps 'HIGH' -> 'HIGH', 'URGENT' -> 'URGENT', 'NORMAL' -> 'NORMAL'
         """
-        repo = SupabaseRepo()
+        repo = SupabaseRepo(enabled=False)
         with patch.dict("os.environ", {}, clear=True):
             resolved_default = repo.get_default_operator_uid()
         self.assertIsNone(resolved_default)
