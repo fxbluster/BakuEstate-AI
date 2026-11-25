@@ -1,7 +1,7 @@
 # BakuEstate-AI v2: İzolyasiya Olunmuş Multi-Agent Arxitekturası, Təhlükəsizlik Sərtləşdirməsi və Bulud Media Miqyaslanması
 
 *   **Author:** fxbluster
-*   **Status:** Proposed
+*   **Status:** Accepted
 *   **Date:** 2026-11-25
 
 --------------------------------------------------------------------------------
