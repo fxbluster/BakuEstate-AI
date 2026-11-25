@@ -718,6 +718,23 @@ describe("v2 Phase 1 P0 UI Components", () => {
         })
       );
     });
+
+    // Also verify ok: false JSONB error from create_buyer_lead_atomic surfaces error banner & does not add false lead
+    mockRpc.mockResolvedValueOnce({
+      data: { ok: false, status_code: 403, error: "FORBIDDEN_ROLE_OR_INACTIVE" },
+      error: null,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /10-San Müştəri Əlavə Et/i }));
+    fireEvent.change(screen.getByPlaceholderText("Elvin Məmmədov"), {
+      target: { value: "Blocked Lead" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Müştərini Yarat/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/FORBIDDEN_ROLE_OR_INACTIVE/)).not.toBeNull();
+    });
+    expect(screen.queryByText("Blocked Lead")).toBeNull();
   });
 
   it("CopilotDrawer queries buyer_leads with phone_normalized only (never phone_raw)", async () => {

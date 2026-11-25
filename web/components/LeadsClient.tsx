@@ -239,12 +239,23 @@ export function LeadsClient({
 
       if (rpcErr) throw rpcErr;
 
+      if (
+        rpcResult &&
+        typeof rpcResult === "object" &&
+        "ok" in rpcResult &&
+        (rpcResult as { ok?: boolean }).ok === false
+      ) {
+        throw new Error(
+          (rpcResult as { error?: string }).error || "Müştəri yaradıla bilmədi."
+        );
+      }
+
       const createdLead =
         rpcResult && typeof rpcResult === "object" && "lead" in rpcResult
           ? (rpcResult as { lead: BuyerLeadWithListings }).lead
           : (rpcResult as BuyerLeadWithListings | null);
 
-      if (!createdLead) {
+      if (!createdLead || !createdLead.id) {
         throw new Error("Müştəri yaradılarkən cavab alınmadı.");
       }
 
