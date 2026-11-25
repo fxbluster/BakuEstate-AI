@@ -13,9 +13,14 @@ if sys.platform == "win32":
         pass
 
 import ctypes
-import winsound
 import logging
+import os
 from typing import Optional
+
+try:
+    import winsound  # type: ignore[import-not-found]
+except ImportError:
+    winsound = None  # Linux / macOS / Railway container environments
 
 logger = logging.getLogger("account_switcher_dialog")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -40,11 +45,20 @@ def prompt_account_switch(
     Returns True if user clicks OK (switched and continue).
     Returns False if user clicks Cancel (pause/stop).
     """
-    # 1. Play alert chime sound
-    try:
-        winsound.MessageBeep(winsound.MB_ICONASTERISK)
-    except Exception:
-        pass
+    # 1. Play alert chime sound (Windows desktop only)
+    if winsound is not None:
+        try:
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
+    if sys.platform != "win32" or os.getenv("WORKER_MODE", "").strip().lower() == "railway":
+        logger.warning(
+            "Headless/non-Windows container (%s) cannot show desktop Google switch dialog #%s.",
+            sys.platform,
+            account_number,
+        )
+        return False
 
     title = "🔔 BakuEstate AI - Google Pro Hesab Dəyişdirici"
     message = (
