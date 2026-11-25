@@ -6,6 +6,8 @@ Detects upstream rate limits and CAPTCHA challenges to trigger circuit breakers.
 """
 
 from typing import Dict, Any, List, Optional, Callable
+import hashlib
+import os
 import re
 import json
 import random
@@ -15,6 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config.settings import (
+    SOCIAL_API_MODE,
     SOCIAL_SCRAPER_TIMEOUT_SECONDS,
     INSTAGRAM_REEL_PATTERN,
     TIKTOK_VIDEO_PATTERN,
@@ -71,9 +74,28 @@ def parse_metric_count(val: Any) -> int:
         return int(m.group(0)) if m else 0
 
 
+def build_deterministic_comment_id(
+    platform: str,
+    code: str,
+    author_handle: str,
+    clean_text: str,
+) -> str:
+    """
+    Computes a deterministic SHA-256 comment identifier independent of DOM list position:
+    sha256(f"{platform}:{code}:{author_handle}:{clean_text[:120]}").hexdigest()[:32].
+    """
+    norm_platform = str(platform or "INSTAGRAM").strip().upper()
+    norm_code = str(code or "unknown").strip()
+    norm_handle = str(author_handle or "").strip().lstrip("@")
+    norm_text = re.sub(r"\s+", " ", str(clean_text or "").strip())
+    payload = f"{norm_platform}:{norm_code}:{norm_handle}:{norm_text[:120]}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
 class SocialTelemetryObserver:
     """
     Observer for unauthenticated, public social media telemetry collection.
+    Restricted exclusively to SOCIAL_API_MODE=TELEGRAM_FALLBACK (<= 45 day transition).
     Supports Instagram Reels and TikTok videos.
     """
 
@@ -111,10 +133,22 @@ class SocialTelemetryObserver:
         timeout: int = SOCIAL_SCRAPER_TIMEOUT_SECONDS,
         provider: Optional[str] = None,
         custom_fetcher: Optional[Callable[[str, Dict[str, str]], requests.Response]] = None,
+        social_api_mode: Optional[str] = None,
     ):
         self.timeout = timeout
         self.provider = provider or "public_http"
         self._custom_fetcher = custom_fetcher
+        self.social_api_mode = (
+            (social_api_mode if social_api_mode is not None else os.getenv("SOCIAL_API_MODE") or SOCIAL_API_MODE or "TELEGRAM_FALLBACK")
+            .strip()
+            .upper()
+        )
+
+    def _assert_fallback_mode(self) -> None:
+        if self.social_api_mode != "TELEGRAM_FALLBACK":
+            raise SocialScrapeException(
+                f"SocialTelemetryObserver is restricted to SOCIAL_API_MODE=TELEGRAM_FALLBACK (current={self.social_api_mode})"
+            )
 
     def _get_random_headers(self, referer: Optional[str] = None) -> Dict[str, str]:
         """Generates realistic rotating browser headers for public inspection."""
@@ -171,9 +205,14 @@ class SocialTelemetryObserver:
                     url=response.url,
                 )
 
-    def _http_get(self, url: str, headers: Optional[Dict[str, str]] = None) -> requests.Response:
+    def _http_get(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        referer: Optional[str] = None,
+    ) -> requests.Response:
         """Executes GET request with rotating headers and rate-limit guardrails."""
-        req_headers = headers or self._get_random_headers()
+        req_headers = headers or self._get_random_headers(referer=referer)
         try:
             if self._custom_fetcher:
                 response = self._custom_fetcher(url, req_headers)
@@ -196,9 +235,10 @@ class SocialTelemetryObserver:
 
     def fetch_telemetry(self, post_url: str) -> Dict[str, Any]:
         """
-        Main entry point. Identifies platform from URL, inspects publicly,
-        and returns normalized telemetry payload.
+        Main entry point. Identifies platform from URL, inspects publicly
+        (only in TELEGRAM_FALLBACK mode), and returns normalized telemetry payload.
         """
+        self._assert_fallback_mode()
         if not post_url or not isinstance(post_url, str):
             raise ValueError("A valid post_url string is required")
 
@@ -267,16 +307,18 @@ class SocialTelemetryObserver:
                 comment_nodes = soup.find_all("li", class_=re.compile(r"Comment|Caption"))
                 for idx, node in enumerate(comment_nodes):
                     author_el = node.find("a", class_=re.compile(r"Username|author"))
-                    handle = author_el.get_text(strip=True) if author_el else f"user_{idx+1}"
+                    handle = author_el.get_text(strip=True) if author_el else "anonymous"
                     # Remove handle from comment text if duplicated
                     full_text = node.get_text(" ", strip=True)
                     clean_text = full_text
                     if author_el and full_text.startswith(handle):
                         clean_text = full_text[len(handle):].strip()
+                    clean_text = re.sub(r"\s+", " ", clean_text).strip()
+                    clean_handle = handle.lstrip("@").strip()
                     if clean_text:
                         comments.append({
-                            "comment_id": f"ig_c_{code}_{idx+1}",
-                            "author_handle": handle.lstrip("@"),
+                            "comment_id": build_deterministic_comment_id("INSTAGRAM", code, clean_handle, clean_text),
+                            "author_handle": clean_handle,
                             "comment_text": clean_text,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "like_count": 0,
@@ -333,6 +375,7 @@ class SocialTelemetryObserver:
             views_count = likes_count  # Conservative floor
 
         return {
+            "platform": "INSTAGRAM",
             "views_count": views_count,
             "likes_count": likes_count,
             "comments_count": max(comments_count, len(comments)),
@@ -413,6 +456,7 @@ class SocialTelemetryObserver:
             logger.debug(f"TikTok direct page fetch failed: {e}")
 
         return {
+            "platform": "TIKTOK",
             "views_count": views_count,
             "likes_count": likes_count,
             "comments_count": max(comments_count, len(comments)),

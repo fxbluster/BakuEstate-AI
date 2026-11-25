@@ -46,6 +46,7 @@ from config.settings import (
     SCHEDULE_LIMIT,
     SCHEDULE_PAGES,
     SCHEDULE_TIMES,
+    SOCIAL_API_MODE,
     SOCIAL_CIRCUIT_BREAKER_HOURS,
     SOCIAL_POLL_BUDGET_MAX,
     SOCIAL_SCRAPER_TIMEOUT_SECONDS,
@@ -101,6 +102,7 @@ ALL_JOB_TYPES = frozenset({
     "PREFLIGHT_CHECK",
     "SYNC_SOCIAL_METRICS",
     "TELEGRAM_DISPATCH",
+    "PUBLISH_SOCIAL",
 })
 
 SCHEDULE_OFFSETS_HOURS: List[int] = [4, 12, 24, 36, 48, 60, 72, 96, 120, 144, 168]
@@ -177,7 +179,7 @@ def _default_max_runtime_for_job_type(job_type: str) -> float:
     clean_type = str(job_type or "").strip().upper()
     if clean_type in RENDER_JOB_TYPES:
         return DEFAULT_RENDER_MAX_RUNTIME_SECONDS
-    if clean_type == "SYNC_SOCIAL_METRICS":
+    if clean_type in ("SYNC_SOCIAL_METRICS", "PUBLISH_SOCIAL"):
         return DEFAULT_SOCIAL_MAX_RUNTIME_SECONDS
     if clean_type == "TELEGRAM_DISPATCH":
         return DEFAULT_TELEGRAM_MAX_RUNTIME_SECONDS
@@ -269,6 +271,7 @@ JOB_PHASE_LABELS: Dict[str, str] = {
     "PREFLIGHT_CHECK": "Yayınöncəsi qiymət yoxlaması aparılır",
     "SYNC_SOCIAL_METRICS": "Sosial media statistikası yığılır",
     "TELEGRAM_DISPATCH": "Video Telegram-a göndərilir",
+    "PUBLISH_SOCIAL": "Rəsmi sosial şəbəkə paylaşımı icra olunur",
 }
 
 
@@ -692,7 +695,21 @@ class BakuLocalWorker:
             enqueue_render_jobs=enqueue_renders,
             check_existing_for_changes=check_existing,
         )
-        return {"job_type": "SCRAPE_NEW", "ingested_count": len(ingested)}
+
+        matched_leads_count = 0
+        for row in ingested or []:
+            if not isinstance(row, dict):
+                continue
+            listing_uuid = str(row.get("id") or "").strip()
+            availability = str(row.get("source_availability") or "ACTIVE").strip().upper()
+            if listing_uuid and availability == "ACTIVE":
+                matched_leads_count += self._match_listing_to_leads(listing_uuid)
+
+        return {
+            "job_type": "SCRAPE_NEW",
+            "ingested_count": len(ingested),
+            "matched_leads_count": matched_leads_count,
+        }
 
     def _check_auto_render_guardrails(
         self,
@@ -939,10 +956,11 @@ class BakuLocalWorker:
             return guardrail_skip
 
         # Multi-Account Niche Routing
-        route_info = route_listing_to_channel(listing)
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        niche_rules = (agency_settings or {}).get("niche_rules_json") if isinstance(agency_settings, dict) else None
+        route_info = route_listing_to_channel(listing, niche_rules=niche_rules)
         voice_engine = params.get("voice_engine") or route_info.get("voice_engine")
         voice_id = params.get("voice_id") or route_info.get("voice_id")
-        agency_settings = self._resolve_agency_settings_for_render(listing, params)
         cancel_check_cb = self._build_cancel_check_cb(job)
 
         listing_id = str(listing.get("id") or "").strip()
@@ -1004,6 +1022,8 @@ class BakuLocalWorker:
             return guardrail_skip
 
         # Multi-Account Niche Routing (incorporating price drop info)
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        niche_rules = (agency_settings or {}).get("niche_rules_json") if isinstance(agency_settings, dict) else None
         routing_listing = dict(listing)
         if "price_drop_info" in params and "price_drop_info" not in routing_listing:
             routing_listing["price_drop_info"] = params["price_drop_info"]
@@ -1012,10 +1032,9 @@ class BakuLocalWorker:
                 params["price_drop_info"].get("drop_pct")
                 or params["price_drop_info"].get("price_drop_pct")
             )
-        route_info = route_listing_to_channel(routing_listing)
+        route_info = route_listing_to_channel(routing_listing, niche_rules=niche_rules)
         voice_engine = params.get("voice_engine") or route_info.get("voice_engine")
         voice_id = params.get("voice_id") or route_info.get("voice_id")
-        agency_settings = self._resolve_agency_settings_for_render(listing, params)
         cancel_check_cb = self._build_cancel_check_cb(job)
 
         listing_id = str(listing.get("id") or "").strip()
@@ -1067,6 +1086,8 @@ class BakuLocalWorker:
         listing = self._resolve_listing_for_job(job)
         params = job.get("params_json") or {}
 
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        niche_rules = (agency_settings or {}).get("niche_rules_json") if isinstance(agency_settings, dict) else None
         routing_listing = dict(listing)
         if "price_drop_info" in params and "price_drop_info" not in routing_listing:
             routing_listing["price_drop_info"] = params["price_drop_info"]
@@ -1075,7 +1096,7 @@ class BakuLocalWorker:
                 params["price_drop_info"].get("drop_pct")
                 or params["price_drop_info"].get("price_drop_pct")
             )
-        route_info = route_listing_to_channel(routing_listing)
+        route_info = route_listing_to_channel(routing_listing, niche_rules=niche_rules)
 
         voice_engine = params.get("voice_engine")
         voice_id = params.get("voice_id")
@@ -1103,7 +1124,6 @@ class BakuLocalWorker:
         # Support both telegram-webhook (`telegram_message_id`) and direct (`update_telegram_message_id`)
         update_msg_id = params.get("update_telegram_message_id") or params.get("telegram_message_id")
         tg_chat_id = params.get("telegram_chat_id") or params.get("chat_id")
-        agency_settings = self._resolve_agency_settings_for_render(listing, params)
         cancel_check_cb = self._build_cancel_check_cb(job)
 
         res = self.pipeline.process_listing_video_and_dispatch(
@@ -1566,13 +1586,156 @@ class BakuLocalWorker:
             "price_dropped": price_dropped,
         }
 
+    def _is_real_repo_http(self) -> bool:
+        return (
+            self.repo is not None
+            and isinstance(getattr(self.repo, "supabase_url", None), str)
+            and bool(self.repo.supabase_url)
+            and isinstance(getattr(self.repo, "supabase_key", None), str)
+            and bool(self.repo.supabase_key)
+            and getattr(self.repo, "session", None) is not None
+        )
+
+    def _resolve_social_api_mode(
+        self,
+        agency_id: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Resolves `OFFICIAL` vs `TELEGRAM_FALLBACK` from `agency_settings.social_api_mode`,
+        job `params_json`, or `SOCIAL_API_MODE` env setting (defaults to `TELEGRAM_FALLBACK`).
+        """
+        if isinstance(params, dict) and params.get("social_api_mode"):
+            mode = str(params["social_api_mode"]).strip().upper()
+            if mode in ("OFFICIAL", "TELEGRAM_FALLBACK"):
+                return mode
+        clean_agency = str(agency_id or "").strip()
+        if clean_agency and hasattr(self.repo, "get_agency_settings"):
+            try:
+                settings_row = self.repo.get_agency_settings(clean_agency)
+                if isinstance(settings_row, dict) and settings_row.get("social_api_mode"):
+                    mode = str(settings_row["social_api_mode"]).strip().upper()
+                    if mode in ("OFFICIAL", "TELEGRAM_FALLBACK"):
+                        return mode
+            except Exception as exc:
+                logger.warning("Could not resolve agency social_api_mode for %s: %s", clean_agency, exc)
+        env_mode = (os.getenv("SOCIAL_API_MODE") or SOCIAL_API_MODE or "TELEGRAM_FALLBACK").strip().upper()
+        return env_mode if env_mode in ("OFFICIAL", "TELEGRAM_FALLBACK") else "TELEGRAM_FALLBACK"
+
+    def _call_repo_rpc(self, fn_name: str, payload: Dict[str, Any]) -> Any:
+        if not self._is_real_repo_http():
+            return None
+        resp = self.repo.session.post(
+            self.repo._rpc_url(fn_name),
+            headers=self.repo._headers(),
+            json=payload,
+            timeout=getattr(self.repo, "timeout", 20),
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("%s RPC failed (%s): %s", fn_name, resp.status_code, str(getattr(resp, "text", ""))[:240])
+        return None
+
+    def _match_listing_to_leads(self, listing_id: str) -> int:
+        """Invokes `public.match_listing_to_leads(p_listing_id)` SQL RPC safely."""
+        clean_id = str(listing_id or "").strip()
+        if not clean_id:
+            return 0
+        try:
+            if self._is_real_repo_http():
+                res = self._call_repo_rpc("match_listing_to_leads", {"p_listing_id": clean_id})
+                return int(res) if isinstance(res, (int, float)) and not isinstance(res, bool) else 0
+            if hasattr(self.repo, "match_listing_to_leads"):
+                raw = self.repo.match_listing_to_leads(clean_id)
+                return int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else 0
+        except Exception as exc:
+            logger.warning("match_listing_to_leads failed for listing %s: %s", clean_id, exc)
+        return 0
+
+    def _upsert_social_comment_dedup(
+        self,
+        *,
+        agency_id: Optional[str],
+        publication_id: str,
+        platform_comment_id: str,
+        author_handle: str,
+        comment_text: str,
+        like_count: int,
+        is_intent_lead: bool,
+        intent_category: Optional[str],
+        intent_confidence: Optional[float],
+        suggested_reply: Optional[str],
+        buyer_lead_id: Optional[str] = None,
+    ) -> Tuple[Optional[str], bool]:
+        """
+        Persists a social comment via `upsert_social_comment_returning_is_new` RPC
+        and returns `(comment_id, is_new)` so repeat comment polls never trigger
+        duplicate buyer leads or Telegram alerts.
+        """
+        rpc_payload: Dict[str, Any] = {
+            "p_agency_id": str(agency_id).strip() if agency_id else None,
+            "p_publication_id": str(publication_id).strip(),
+            "p_platform_comment_id": str(platform_comment_id).strip(),
+            "p_author_handle": str(author_handle).strip(),
+            "p_comment_text": str(comment_text or ""),
+            "p_like_count": max(0, int(like_count)),
+            "p_is_intent_lead": bool(is_intent_lead),
+            "p_intent_category": intent_category,
+            "p_intent_confidence": float(intent_confidence) if intent_confidence is not None else None,
+            "p_suggested_reply": suggested_reply,
+            "p_buyer_lead_id": str(buyer_lead_id).strip() if buyer_lead_id else None,
+        }
+        if self._is_real_repo_http():
+            data = self._call_repo_rpc("upsert_social_comment_returning_is_new", rpc_payload)
+            row = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else None)
+            if isinstance(row, dict) and "is_new" in row:
+                return (str(row.get("comment_id") or "") or None, bool(row.get("is_new")))
+        elif hasattr(self.repo, "upsert_social_comment_returning_is_new"):
+            raw = self.repo.upsert_social_comment_returning_is_new(**rpc_payload)
+            row = raw[0] if isinstance(raw, list) and raw else raw
+            if isinstance(row, dict) and "is_new" in row:
+                return (str(row.get("comment_id") or "") or None, bool(row.get("is_new")))
+            if isinstance(row, tuple) and len(row) == 2 and isinstance(row[1], bool):
+                return (row[0], row[1])
+            if isinstance(row, bool):
+                return (None, row)
+
+        # Fallback for unmocked legacy tests
+        self.repo.upsert_social_comment(
+            publication_id=publication_id,
+            platform_comment_id=platform_comment_id,
+            author_handle=author_handle,
+            comment_text=comment_text,
+            is_intent_lead=is_intent_lead,
+            intent_category=intent_category,
+            suggested_reply=suggested_reply,
+            buyer_lead_id=buyer_lead_id,
+            like_count=like_count,
+            intent_confidence=intent_confidence,
+        )
+        return (None, True)
+
+    def _link_buyer_lead_to_comment(self, comment_id: Optional[str], buyer_lead_id: Optional[str]) -> None:
+        if not comment_id or not buyer_lead_id or not self._is_real_repo_http():
+            return
+        try:
+            self.repo.session.patch(
+                self.repo._rest_url("social_comments"),
+                headers=self.repo._headers(prefer="return=minimal"),
+                params={"id": f"eq.{comment_id}"},
+                json={"buyer_lead_id": buyer_lead_id},
+                timeout=getattr(self.repo, "timeout", 20),
+            )
+        except Exception as exc:
+            logger.warning("Failed linking buyer_lead_id %s to social_comment %s: %s", buyer_lead_id, comment_id, exc)
+
     def _handle_sync_social_metrics(self, job: Dict[str, Any]) -> Dict[str, Any]:
         """
         Executes SYNC_SOCIAL_METRICS pipeline job:
         - Concurrent portal liveness and price check for listing['bina_id'].
-        - Decoupled public telemetry scraping via SocialTelemetryObserver.
-        - Two-tier zero-token regex + Gemini comment classification.
-        - Direct lead conversion in buyer_leads and Telegram card dispatch.
+        - Branches on `SOCIAL_API_MODE` (`OFFICIAL` Meta/TikTok API vs `TELEGRAM_FALLBACK` observer).
+        - Deduplicates comments via `upsert_social_comment_returning_is_new` before creating leads/alerts.
+        - Triggers `match_listing_to_leads` when an ACTIVE listing has a price drop.
         - 4-phase decay calculation and circuit breaker management.
         """
         params = job.get("params_json") or {}
@@ -1590,16 +1753,18 @@ class BakuLocalWorker:
         if not post_url:
             post_url = str(pub.get("post_url") or "").strip()
 
-        if not post_url:
-            logger.warning("Publication %s has no post_url; aborting sync.", pub_id)
-            return {"status": "SKIPPED", "reason": "MISSING_POST_URL"}
-
         current_poll_count = int(pub.get("poll_count") or 0)
         published_at_dt = _parse_utc_iso(pub.get("published_at")) or _utc_now()
 
         # Step 1.5: Concurrent portal liveness and price check for listing['bina_id']
         listing_id = pub.get("listing_id")
         listing = self.repo.get_listing_by_id(str(listing_id)) if listing_id else None
+        agency_id = str(pub.get("agency_id") or (listing.get("agency_id") if isinstance(listing, dict) else "") or "").strip() or None
+        social_api_mode = self._resolve_social_api_mode(agency_id, params=params)
+
+        if social_api_mode != "OFFICIAL" and not post_url:
+            logger.warning("Publication %s has no post_url; aborting sync.", pub_id)
+            return {"status": "SKIPPED", "reason": "MISSING_POST_URL"}
 
         if listing and listing.get("bina_id"):
             bina_id = str(listing.get("bina_id")).strip()
@@ -1626,17 +1791,23 @@ class BakuLocalWorker:
                 )
                 listing["price"] = new_price_val
                 listing["price_azn_normalized"] = new_price_val
+                self._match_listing_to_leads(str(listing["id"]))
                 old_fmt = int(old_p) if (old_p is not None and old_p.is_integer()) else old_p
                 new_fmt = int(new_price_val) if new_price_val.is_integer() else new_price_val
                 alert_msg = f"📉 Diqqət: #{bina_id} nömrəli elanın qiyməti endi ({old_fmt} -> {new_fmt} AZN). Paylaşılmış videonun rəylərində endirimi qeyd edin və ya yeni video hazırlayaq."
                 self._send_operator_alert(alert_msg)
 
-        # Step 2: Fetch metrics via SocialTelemetryObserver
+        # Step 2: Fetch metrics via Official API or TELEGRAM_FALLBACK observer
         from src.social.observer import SocialTelemetryObserver, RateLimitException
-        observer = SocialTelemetryObserver()
 
         try:
-            telemetry = observer.fetch_telemetry(post_url)
+            if social_api_mode == "OFFICIAL":
+                from src.social.official_clients import OfficialSocialPublisher
+                official_client = OfficialSocialPublisher(repo=self.repo)
+                telemetry = official_client.fetch_telemetry(pub)
+            else:
+                observer = SocialTelemetryObserver(social_api_mode=social_api_mode)
+                telemetry = observer.fetch_telemetry(post_url)
             self._consecutive_social_rate_limits = 0
         except RateLimitException as rle:
             self._consecutive_social_rate_limits += 1
@@ -1683,7 +1854,7 @@ class BakuLocalWorker:
         )
         next_poll_iso = next_poll_at_dt.isoformat() if next_poll_at_dt else None
 
-        # Step 4: Process comments through IntentClassifier
+        # Step 4: Process comments through IntentClassifier + upsert_social_comment_returning_is_new dedup
         from src.social.intent_classifier import IntentClassifier
         classifier = IntentClassifier()
 
@@ -1702,7 +1873,27 @@ class BakuLocalWorker:
                 continue
 
             decision = classifier.classify(comment_text, listing_context=listing)
-            buyer_lead_id = None
+            comment_uuid, is_new = self._upsert_social_comment_dedup(
+                agency_id=agency_id,
+                publication_id=pub_id,
+                platform_comment_id=p_comm_id,
+                author_handle=author_handle,
+                comment_text=comment_text,
+                like_count=like_count,
+                is_intent_lead=decision.is_intent_lead,
+                intent_category=decision.intent_category,
+                intent_confidence=decision.intent_confidence,
+                suggested_reply=decision.suggested_reply,
+                buyer_lead_id=None,
+            )
+
+            if not is_new:
+                logger.debug(
+                    "Skipping duplicate comment %s on publication %s (is_new=False).",
+                    p_comm_id,
+                    pub_id,
+                )
+                continue
 
             if decision.is_intent_lead:
                 lead_row = self.repo.create_social_buyer_lead(
@@ -1711,11 +1902,12 @@ class BakuLocalWorker:
                     suggested_reply=decision.suggested_reply,
                     platform=telemetry.get("platform", "INSTAGRAM"),
                 )
-                if lead_row and lead_row.get("id"):
-                    buyer_lead_id = str(lead_row["id"])
+                buyer_lead_id = str(lead_row["id"]) if (lead_row and lead_row.get("id")) else None
+                if buyer_lead_id:
                     leads_captured += 1
+                    self._link_buyer_lead_to_comment(comment_uuid, buyer_lead_id)
 
-                # Send Telegram notification card
+                # Send Telegram notification card only for brand-new comments
                 self._notify_social_inbound_lead(
                     listing=listing,
                     author_handle=author_handle,
@@ -1724,20 +1916,6 @@ class BakuLocalWorker:
                     suggested_reply=decision.suggested_reply,
                     platform=telemetry.get("platform", "INSTAGRAM"),
                 )
-
-            # Idempotently upsert comment record
-            self.repo.upsert_social_comment(
-                publication_id=pub_id,
-                platform_comment_id=p_comm_id,
-                author_handle=author_handle,
-                comment_text=comment_text,
-                is_intent_lead=decision.is_intent_lead,
-                intent_category=decision.intent_category,
-                suggested_reply=decision.suggested_reply,
-                buyer_lead_id=buyer_lead_id,
-                like_count=like_count,
-                intent_confidence=decision.intent_confidence,
-            )
 
         # Step 5: Update publication telemetry
         self.repo.update_publication_telemetry(
@@ -1861,6 +2039,74 @@ class BakuLocalWorker:
             "public_message_id": res.get("public_message_id"),
         }
 
+    def _handle_publish_social(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Executes PUBLISH_SOCIAL pipeline job, branching on `SOCIAL_API_MODE`:
+        - OFFICIAL: publishes via Meta Graph Reels Container API or TikTok PULL_FROM_URL
+          using Vault-stored OAuth tokens (`OfficialSocialPublisher`).
+        - TELEGRAM_FALLBACK: routes cleanly to `_handle_telegram_dispatch` during the
+          <= 45-day transition window.
+        """
+        params = job.get("params_json") or {}
+        pub_id = str(params.get("publication_id") or job.get("publication_id") or "").strip()
+        pub = self.repo.get_publication_by_id(pub_id) if pub_id and hasattr(self.repo, "get_publication_by_id") else None
+        if not isinstance(pub, dict):
+            pub = None
+
+        listing_id = str(
+            job.get("listing_id")
+            or params.get("listing_id")
+            or (pub.get("listing_id") if pub else "")
+            or ""
+        ).strip()
+        listing = (
+            self.repo.get_listing_by_id(listing_id)
+            if listing_id and hasattr(self.repo, "get_listing_by_id")
+            else None
+        )
+        agency_id = str(
+            (pub.get("agency_id") if pub else "")
+            or (listing.get("agency_id") if isinstance(listing, dict) else "")
+            or params.get("agency_id")
+            or ""
+        ).strip() or None
+
+        mode = self._resolve_social_api_mode(agency_id, params=params)
+        if mode != "OFFICIAL":
+            tg_res = self._handle_telegram_dispatch(job)
+            return {
+                **tg_res,
+                "job_type": "PUBLISH_SOCIAL",
+                "mode": "TELEGRAM_FALLBACK",
+            }
+
+        if not pub:
+            raise ValueError(f"PUBLISH_SOCIAL job {job.get('id')} missing valid publication")
+
+        rv_id = str(params.get("render_version_id") or pub.get("render_version_id") or "").strip()
+        render_version = (
+            self.repo.get_render_version_by_id(rv_id)
+            if rv_id and hasattr(self.repo, "get_render_version_by_id")
+            else None
+        )
+        if not render_version and listing_id and hasattr(self.repo, "get_latest_render_version"):
+            render_version = self.repo.get_latest_render_version(listing_id)
+
+        from src.social.official_clients import OfficialSocialPublisher
+        publisher = OfficialSocialPublisher(repo=self.repo)
+        res = publisher.publish_publication(
+            publication=pub,
+            render_version=render_version if isinstance(render_version, dict) else None,
+            video_url=params.get("video_url"),
+            caption=params.get("custom_caption") or params.get("caption"),
+        )
+        return {
+            "job_type": "PUBLISH_SOCIAL",
+            "mode": "OFFICIAL",
+            "publication_id": pub_id,
+            **res,
+        }
+
     # ------------------------------------------------------------------
     # Single Job Execution with Background Lease Heartbeat
     # ------------------------------------------------------------------
@@ -1934,6 +2180,7 @@ class BakuLocalWorker:
                 "PREFLIGHT_CHECK": self._handle_preflight_check,
                 "SYNC_SOCIAL_METRICS": self._handle_sync_social_metrics,
                 "TELEGRAM_DISPATCH": self._handle_telegram_dispatch,
+                "PUBLISH_SOCIAL": self._handle_publish_social,
             }
             handler = handlers.get(job_type)
             if handler is None:

@@ -337,6 +337,12 @@ WORKER_ID = (os.getenv("WORKER_ID") or socket.gethostname() or "win-local-worker
 WORKER_MODE = os.getenv("WORKER_MODE", "local").strip()
 BINA_PROXY_URL = os.getenv("BINA_PROXY_URL", "").strip()
 SOCIAL_API_MODE = os.getenv("SOCIAL_API_MODE", "TELEGRAM_FALLBACK").strip().upper()
+META_APP_ID = os.getenv("META_APP_ID", "").strip()
+META_APP_SECRET = os.getenv("META_APP_SECRET", "").strip()
+META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "").strip()
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v21.0").strip() or "v21.0"
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "").strip()
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "").strip()
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "").strip()
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "").strip()
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
@@ -358,7 +364,9 @@ NOTION_DATA_SOURCE_ID = os.getenv("NOTION_DATA_SOURCE_ID", "41a7b510-0e72-8179-9
 NOTION_ENABLED = os.getenv("NOTION_ENABLED", "false").lower() in ("1", "true", "yes")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 
-# Keenable Real-Time Baku Real Estate Market Averages (AZN / m², Oct-Nov 2026)
+# DEPRECATED (fallback-only): Prefer live `public.district_price_medians` view in Supabase.
+# Retained solely as emergency offline fallback for Keenable/Baku market averages (AZN / m²).
+BAKU_DISTRICT_MEDIAN_M2_DEPRECATED = True
 BAKU_DISTRICT_MEDIAN_M2 = {
     "nərimanov": 3293,
     "nerimanov": 3293,
