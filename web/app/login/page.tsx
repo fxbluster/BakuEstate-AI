@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Lock, Mail, ShieldCheck, Sparkles, AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -15,8 +15,95 @@ function LoginForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const supabase = createClient();
+
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash || "";
+      if (hash.includes("type=recovery") || searchParams.get("type") === "recovery") {
+        setRecoveryMode(true);
+      }
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        setError(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [searchParams]);
+
+  async function handleForgotPassword() {
+    setError(null);
+    setInfo(null);
+    if (!email.trim()) {
+      setError("Şifrə sıfırlamaq üçün əvvəlcə email ünvanınızı daxil edin.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const redirectTo =
+        typeof window !== "undefined" ? `${window.location.origin}/login` : undefined;
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        email.trim(),
+        redirectTo ? { redirectTo } : undefined
+      );
+      if (resetError) {
+        setError(`Sıfırlama xətası: ${resetError.message}`);
+        return;
+      }
+      setInfo("Şifrə yeniləmə linki e-poçt ünvanınıza göndərildi.");
+    } catch {
+      setError("Serverlə əlaqə zamanı xəta baş verdi. Yenidən cəhd edin.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUpdatePassword(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+    if (newPassword.length < 8) {
+      setError("Yeni şifrə ən azı 8 simvol olmalıdır.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { error: updateErr } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      if (updateErr) {
+        setError(`Şifrə yenilənmədi: ${updateErr.message}`);
+        return;
+      }
+      if (typeof window !== "undefined" && window.location.hash) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      setRecoveryMode(false);
+      setNewPassword("");
+      setInfo("Şifrə uğurla yeniləndi! İndi sistemə daxil ola bilərsiniz.");
+    } catch {
+      setError("Serverlə əlaqə zamanı xəta baş verdi.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -109,65 +196,127 @@ function LoginForm() {
             </div>
           )}
 
+          {info && (
+            <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              {info}
+            </div>
+          )}
+
           {error && (
             <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
               {error}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label
-                htmlFor="email"
-                className="block text-xs font-medium uppercase tracking-wider text-slate-400"
-              >
-                Operator Email
-              </label>
-              <div className="relative">
-                <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="operator@bakuestate.az"
-                  className="exec-input pl-10"
-                />
+          {recoveryMode ? (
+            <form onSubmit={handleUpdatePassword} className="space-y-4">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="new-password"
+                  className="block text-xs font-medium uppercase tracking-wider text-slate-400"
+                >
+                  Yeni Şifrə (min. 8 simvol)
+                </label>
+                <div className="relative">
+                  <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    id="new-password"
+                    type="password"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="exec-input pl-10"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-1.5">
-              <label
-                htmlFor="password"
-                className="block text-xs font-medium uppercase tracking-wider text-slate-400"
+              <button
+                type="submit"
+                disabled={loading}
+                className="exec-btn-primary w-full py-3 mt-2"
               >
-                Şifrə
-              </label>
-              <div className="relative">
-                <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="exec-input pl-10"
-                />
-              </div>
-            </div>
+                {loading ? "Yenilənir..." : "Yeni Şifrəni Təsdiqlə"}
+              </button>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="exec-btn-primary w-full py-3 mt-2"
-            >
-              {loading ? "Daxil olunur..." : "Sistemə Daxil Ol"}
-            </button>
-          </form>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecoveryMode(false);
+                  setError(null);
+                }}
+                className="w-full text-center text-xs text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                Giriş formasına qayıt
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="email"
+                  className="block text-xs font-medium uppercase tracking-wider text-slate-400"
+                >
+                  Operator Email
+                </label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    id="email"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="operator@bakuestate.az"
+                    className="exec-input pl-10"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="password"
+                    className="block text-xs font-medium uppercase tracking-wider text-slate-400"
+                  >
+                    Şifrə
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={loading}
+                    className="text-xs text-gold-400 hover:text-gold-300 transition-colors"
+                  >
+                    Şifrəni unutdum?
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    id="password"
+                    type="password"
+                    required
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="exec-input pl-10"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="exec-btn-primary w-full py-3 mt-2"
+              >
+                {loading ? "Daxil olunur..." : "Sistemə Daxil Ol"}
+              </button>
+            </form>
+          )}
 
           <div className="flex items-center justify-center gap-2 border-t border-slate-800/80 pt-4 text-xs text-slate-500">
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
