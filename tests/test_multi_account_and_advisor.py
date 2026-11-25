@@ -793,21 +793,21 @@ Nərimanovda 3 otaqlı kupçalı mənzil.
     # -------------------------------------------------------------------------
     def test_cockpit_card_schema_and_mcp_tools(self):
         """
-        Asserts decoupled operator UID resolution, UUID validation, and priority mapping:
-        - owner_id defaults safely to system operator UUID when omitted
-        - priority normalization maps 'HIGH' -> 80, 'URGENT' -> 95, 'NORMAL' -> 50
+        Asserts fail-closed operator UID resolution, UUID validation, and uppercase v2 priority mapping:
+        - get_default_operator_uid() returns None when unconfigured (no hardcoded UUID)
+        - priority normalization maps 'HIGH' -> 'HIGH', 'URGENT' -> 'URGENT', 'NORMAL' -> 'NORMAL'
         """
         repo = SupabaseRepo()
-        resolved_default = repo.get_default_operator_uid()
-        self.assertTrue(len(resolved_default) > 0)
-        self.assertTrue(_is_valid_uuid(resolved_default))
+        with patch.dict("os.environ", {}, clear=True):
+            resolved_default = repo.get_default_operator_uid()
+        self.assertIsNone(resolved_default)
 
-        # Priority normalization asserts
-        self.assertEqual(_normalize_card_priority("HIGH"), 80)
-        self.assertEqual(_normalize_card_priority("URGENT"), 95)
-        self.assertEqual(_normalize_card_priority("NORMAL"), 50)
-        self.assertEqual(_normalize_card_priority("LOW"), 30)
-        self.assertEqual(_normalize_card_priority(75), 75)
+        # Priority normalization asserts (v2 uppercase enum)
+        self.assertEqual(_normalize_card_priority("HIGH"), "HIGH")
+        self.assertEqual(_normalize_card_priority("URGENT"), "URGENT")
+        self.assertEqual(_normalize_card_priority("NORMAL"), "NORMAL")
+        self.assertEqual(_normalize_card_priority("LOW"), "LOW")
+        self.assertEqual(_normalize_card_priority(75), "HIGH")
 
     # -------------------------------------------------------------------------
     # 5. test_supabase_repo_cockpit_and_timeline
@@ -886,15 +886,16 @@ Nərimanovda 3 otaqlı kupçalı mənzil.
         self.assertIn("cockpit_cards", call_args_card[0][0])
         card_json = call_args_card[1]["json"]
         self.assertEqual(card_json[0]["headline"], "💎 Lüks Penthouse Maraqlısı")
-        self.assertEqual(card_json[0]["channel"], "whatsapp")
-        self.assertEqual(card_json[0]["priority"], 80)
+        self.assertEqual(card_json[0]["channel"], "WHATSAPP")
+        self.assertEqual(card_json[0]["priority"], "HIGH")
+        self.assertEqual(card_json[0]["status"], "PENDING")
 
         # C. get_pending_cockpit_cards
         mock_resp_pending = MagicMock()
         mock_resp_pending.status_code = 200
         mock_resp_pending.json.return_value = [
-            {"id": "card-1", "headline": "Card 1", "status": "pending"},
-            {"id": "card-2", "headline": "Card 2", "status": "pending"},
+            {"id": "card-1", "headline": "Card 1", "status": "PENDING"},
+            {"id": "card-2", "headline": "Card 2", "status": "PENDING"},
         ]
         mock_session.get.return_value = mock_resp_pending
 
@@ -910,16 +911,16 @@ Nərimanovda 3 otaqlı kupçalı mənzil.
         mock_resp_patch.status_code = 200
         mock_resp_patch.json.return_value = [{
             "id": test_card_uuid,
-            "status": "executed",
+            "status": "EXECUTED",
         }]
         mock_session.patch.return_value = mock_resp_patch
 
         updated_card = repo.update_cockpit_card_status(test_card_uuid, "EXECUTED")
         self.assertIsNotNone(updated_card)
-        self.assertEqual(updated_card["status"], "executed")
+        self.assertEqual(updated_card["status"], "EXECUTED")
         patch_args = mock_session.patch.call_args
         self.assertIn("cockpit_cards", patch_args[0][0])
-        self.assertEqual(patch_args[1]["json"]["status"], "executed")
+        self.assertEqual(patch_args[1]["json"]["status"], "EXECUTED")
 
         # E. create_or_update_publication with target_account_handle and channel_niche
         mock_resp_lookup = MagicMock()

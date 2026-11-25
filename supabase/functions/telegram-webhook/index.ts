@@ -130,6 +130,7 @@ interface InlineKeyboardMarkup {
 
 interface ListingRow {
   id: string;
+  agency_id?: string;
   bina_id: string;
   url: string;
   title: string | null;
@@ -254,22 +255,27 @@ function generatePublicCaption(listing: ListingRow): string {
     .trim();
 
   const propType = getPropertyType(listing);
+  const hasKupca = Boolean(listing.has_bill_of_sale);
+  const docTag = hasKupca ? "#kupcali" : "#dasinmazemlak";
   const hashtags =
     propType === "HƏYƏT EVİ"
-      ? ["#emlak", "#evler", "#heyetevleri", "#kupcali", "#baku"]
+      ? ["#emlak", "#evler", "#heyetevleri", docTag, "#baku"]
       : propType === "VİLLA"
-      ? ["#villa", "#luxuryrealestate", "#baku", "#emlak", "#kupcali"]
-      : ["#emlak", "#menzil", "#baku", "#kupcali", "#ipoteka"];
+      ? ["#villa", "#luxuryrealestate", "#baku", "#emlak", docTag]
+      : ["#emlak", "#menzil", "#baku", docTag, hasKupca ? "#ipoteka" : "#baki"];
 
   const areaNum = Number(listing.area ?? 0);
   const areaStr = areaNum > 0 ? `${Number.isInteger(areaNum) ? areaNum : areaNum.toFixed(1)} m²` : "";
   const floorStr = listing.floor ? ` | ${listing.floor}/${listing.floors ?? ""} mərtəbə` : "";
-  const kupcaBadge = listing.has_bill_of_sale
+  const kupcaBadge = hasKupca
     ? "✅ Dövlət Çıxarışı (Kupça) var - İpotekaya yararlıdır!"
-    : "Müqaviləli";
+    : "Müqaviləli / Sənəd dəqiqləşdirilir";
+  const headline = hasKupca
+    ? `🔥 <b>TƏCİLİ KUPÇALI ${propType} SATILIR!</b> 🔥`
+    : `🔥 <b>${propType} SATILIR!</b> 🔥`;
 
   return [
-    `🔥 <b>TƏCİLİ KUPÇALI ${propType} SATILIR!</b> 🔥`,
+    headline,
     "",
     `💰 <b>Qiymət:</b> ${formattedPrice} ${curr}`,
     `📍 <b>Ünvan:</b> ${escapeHtml(loc)}`,
@@ -414,12 +420,61 @@ async function tgApi(botToken: string, method: string, body: Record<string, unkn
   }
 }
 
+async function resolveAgencyIdForChat(
+  supabase: SupabaseClient,
+  chatId: string | number,
+): Promise<{ agencyId: string | null; matchedInDb: boolean }> {
+  const cleanChat = String(chatId ?? "").trim();
+  if (!cleanChat) return { agencyId: null, matchedInDb: false };
+
+  const { data: settingsRow } = await supabase
+    .from("agency_settings")
+    .select("agency_id")
+    .eq("telegram_chat_id", cleanChat)
+    .limit(1)
+    .maybeSingle();
+  if (settingsRow?.agency_id) {
+    return { agencyId: String(settingsRow.agency_id), matchedInDb: true };
+  }
+
+  const { data: memberRow } = await supabase
+    .from("agency_members")
+    .select("agency_id")
+    .eq("telegram_chat_id", cleanChat)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+  if (memberRow?.agency_id) {
+    return { agencyId: String(memberRow.agency_id), matchedInDb: true };
+  }
+
+  const envDefaultAgency = (Deno.env.get("DEFAULT_AGENCY_ID") ?? "").trim();
+  if (envDefaultAgency) {
+    return { agencyId: envDefaultAgency, matchedInDb: false };
+  }
+
+  const { data: fallbackAgency } = await supabase
+    .from("agencies")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return {
+    agencyId: fallbackAgency?.id ? String(fallbackAgency.id) : null,
+    matchedInDb: false,
+  };
+}
+
 async function findListingByIdOrBinaId(
   supabase: SupabaseClient,
   identifier: string,
+  agencyId?: string | null,
 ): Promise<ListingRow | null> {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
-  const query = supabase.from("listings").select("*");
+  let query = supabase.from("listings").select("*");
+  if (agencyId) {
+    query = query.eq("agency_id", agencyId);
+  }
   const { data, error } = isUuid
     ? await query.eq("id", identifier).maybeSingle()
     : await query.eq("bina_id", identifier).maybeSingle();
@@ -427,7 +482,22 @@ async function findListingByIdOrBinaId(
     console.error("findListingByIdOrBinaId error:", error.message);
     return null;
   }
-  return data as ListingRow | null;
+  if (!data) return null;
+
+  const row = data as ListingRow;
+  if (!row.owner_phone_normalized && !row.owner_phone_raw) {
+    const { data: contact } = await supabase
+      .from("listing_owner_contacts")
+      .select("owner_name, owner_phone_raw, owner_phone_normalized")
+      .eq("listing_id", row.id)
+      .maybeSingle();
+    if (contact) {
+      row.contact_name = row.contact_name ?? contact.owner_name ?? null;
+      row.owner_phone_raw = contact.owner_phone_raw ?? null;
+      row.owner_phone_normalized = contact.owner_phone_normalized ?? null;
+    }
+  }
+  return row;
 }
 
 function parseLeadCommand(rawArgs: string): {
@@ -568,6 +638,7 @@ async function handleLeadCommand(
   botToken: string,
   chatId: string | number,
   rawArgs: string,
+  agencyId: string | null,
 ): Promise<void> {
   if (!rawArgs.trim()) {
     await tgApi(botToken, "sendMessage", {
@@ -584,11 +655,20 @@ async function handleLeadCommand(
   }
 
   const parsed = parseLeadCommand(rawArgs);
-  const listing = parsed.binaId ? await findListingByIdOrBinaId(supabase, parsed.binaId) : null;
+  const listing = parsed.binaId ? await findListingByIdOrBinaId(supabase, parsed.binaId, agencyId) : null;
+  const resolvedAgencyId = listing?.agency_id ?? agencyId;
+  if (!resolvedAgencyId) {
+    await tgApi(botToken, "sendMessage", {
+      chat_id: chatId,
+      text: "❌ Agentlik (agency_id) müəyyən edilmədi.",
+    });
+    return;
+  }
 
   const { data: leadRow, error: leadErr } = await supabase
     .from("buyer_leads")
     .insert({
+      agency_id: resolvedAgencyId,
       client_name: parsed.clientName,
       phone_normalized: parsed.phoneNormalized,
       source_channel: "TELEGRAM",
@@ -610,6 +690,7 @@ async function handleLeadCommand(
   if (listing) {
     await supabase.from("lead_listings").upsert(
       {
+        agency_id: resolvedAgencyId,
         lead_id: leadRow.id,
         listing_id: listing.id,
         relation: "INQUIRED",
@@ -626,6 +707,7 @@ async function handleLeadCommand(
   const { data: taskRow } = await supabase
     .from("follow_up_tasks")
     .insert({
+      agency_id: resolvedAgencyId,
       entity_type: "BUYER_LEAD",
       lead_id: leadRow.id,
       listing_id: listing?.id ?? null,
@@ -663,15 +745,20 @@ async function handleTodayCommand(
   supabase: SupabaseClient,
   botToken: string,
   chatId: string | number,
+  agencyId: string | null,
 ): Promise<void> {
   const { endIso } = getBakuDayBounds();
-  const { data: tasks, error } = await supabase
+  let query = supabase
     .from("follow_up_tasks")
     .select("id, entity_type, title, due_at, priority, status")
     .in("status", ["OPEN", "SNOOZED"])
     .lte("due_at", endIso)
     .order("due_at", { ascending: true })
     .limit(20);
+  if (agencyId) {
+    query = query.eq("agency_id", agencyId);
+  }
+  const { data: tasks, error } = await query;
 
   if (error) {
     await tgApi(botToken, "sendMessage", {
@@ -888,6 +975,7 @@ export async function handlePublishedCommand(
   botToken: string,
   chatId: string | number,
   rawArgs: string,
+  agencyId: string | null = null,
 ): Promise<{ ok: boolean; binaId?: string; pubId?: string; error?: string }> {
   const tokens = rawArgs.trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
@@ -928,7 +1016,7 @@ export async function handlePublishedCommand(
 
   const channel = isInstagram ? "INSTAGRAM_REELS" : "TIKTOK";
 
-  const listing = await findListingByIdOrBinaId(supabase, binaId);
+  const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
   if (!listing) {
     await tgApi(botToken, "sendMessage", {
       chat_id: chatId,
@@ -937,6 +1025,7 @@ export async function handlePublishedCommand(
     });
     return { ok: false, error: "listing_not_found" };
   }
+  const resolvedAgencyId = listing.agency_id ?? agencyId;
 
   const nowIso = new Date().toISOString();
   // next_poll_at = NOW() + INTERVAL '4 hours'
@@ -957,6 +1046,7 @@ export async function handlePublishedCommand(
     const { data: updatedPub, error: pubErr } = await supabase
       .from("publications")
       .update({
+        ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
         status: "PUBLISHED",
         post_url: postUrl,
         channel: channel,
@@ -987,6 +1077,7 @@ export async function handlePublishedCommand(
     const { data: newPub, error: insertErr } = await supabase
       .from("publications")
       .insert({
+        ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
         listing_id: listing.id,
         render_version_id: latestRender?.id ?? null,
         channel: channel,
@@ -1017,6 +1108,7 @@ export async function handlePublishedCommand(
   }
 
   await supabase.from("listing_events").insert({
+    ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
     listing_id: listing.id,
     event_type: "STATUS_CHANGED",
     old_value_json: { editorial_status: listing.editorial_status },
@@ -1035,6 +1127,7 @@ export async function handlePublishedCommand(
   const { error: jobErr } = await supabase
     .from("pipeline_jobs")
     .insert({
+      ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
       idempotency_key: `sync_social:${pubId ?? listing.id}:${Date.now()}`,
       job_type: "SYNC_SOCIAL_METRICS",
       listing_id: listing.id,
@@ -1078,6 +1171,7 @@ async function handleCallbackQuery(
   chatId: string | number,
   // deno-lint-ignore no-explicit-any
   cb: Record<string, any>,
+  agencyId: string | null = null,
 ): Promise<Record<string, unknown>> {
   const cbId = String(cb.id ?? "");
   const data = String(cb.data ?? "");
@@ -1112,19 +1206,23 @@ async function handleCallbackQuery(
   // 0. Cockpit Card Actions
   if (action === "cockpit_act") {
     const cardId = rest;
-    const { data: updatedCard, error } = await supabase
+    let cardQuery = supabase
       .from("cockpit_cards")
       .update({ status: "EXECUTED" })
-      .eq("id", cardId)
-      .select("id, lead_id, listing_id, headline")
+      .eq("id", cardId);
+    if (agencyId) cardQuery = cardQuery.eq("agency_id", agencyId);
+    const { data: updatedCard, error } = await cardQuery
+      .select("id, agency_id, lead_id, listing_id, headline")
       .maybeSingle();
 
     if (error) {
       console.error(`Error updating cockpit card ${cardId}:`, error);
     }
 
+    const cardAgencyId = updatedCard?.agency_id ?? agencyId;
     try {
       await supabase.from("lead_timeline_events").insert({
+        ...(cardAgencyId ? { agency_id: cardAgencyId } : {}),
         lead_id: updatedCard?.lead_id ?? null,
         listing_id: updatedCard?.listing_id ?? null,
         actor: "OPERATOR",
@@ -1157,19 +1255,23 @@ async function handleCallbackQuery(
 
   if (action === "cockpit_dismiss") {
     const cardId = rest;
-    const { data: updatedCard, error } = await supabase
+    let cardQuery = supabase
       .from("cockpit_cards")
       .update({ status: "DISMISSED" })
-      .eq("id", cardId)
-      .select("id, lead_id, listing_id, headline")
+      .eq("id", cardId);
+    if (agencyId) cardQuery = cardQuery.eq("agency_id", agencyId);
+    const { data: updatedCard, error } = await cardQuery
+      .select("id, agency_id, lead_id, listing_id, headline")
       .maybeSingle();
 
     if (error) {
       console.error(`Error dismissing cockpit card ${cardId}:`, error);
     }
 
+    const cardAgencyId = updatedCard?.agency_id ?? agencyId;
     try {
       await supabase.from("lead_timeline_events").insert({
+        ...(cardAgencyId ? { agency_id: cardAgencyId } : {}),
         lead_id: updatedCard?.lead_id ?? null,
         listing_id: updatedCard?.listing_id ?? null,
         actor: "OPERATOR",
@@ -1203,10 +1305,12 @@ async function handleCallbackQuery(
   // 1. Task callbacks
   if (action === "task_done") {
     const taskId = rest;
-    const { error } = await supabase
+    let q = supabase
       .from("follow_up_tasks")
       .update({ status: "DONE", completed_at: new Date().toISOString() })
       .eq("id", taskId);
+    if (agencyId) q = q.eq("agency_id", agencyId);
+    const { error } = await q;
     if (error) {
       await tgApi(botToken, "answerCallbackQuery", { callback_query_id: cbId, text: `Xəta: ${error.message}`, show_alert: true });
       return { action, ok: false };
@@ -1224,13 +1328,14 @@ async function handleCallbackQuery(
 
   if (action === "task_snooze_3h") {
     const taskId = rest;
-    const { data: existing } = await supabase
+    let exQ = supabase
       .from("follow_up_tasks")
       .select("snooze_count")
-      .eq("id", taskId)
-      .maybeSingle();
+      .eq("id", taskId);
+    if (agencyId) exQ = exQ.eq("agency_id", agencyId);
+    const { data: existing } = await exQ.maybeSingle();
     const nextDue = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
-    await supabase
+    let updQ = supabase
       .from("follow_up_tasks")
       .update({
         status: "SNOOZED",
@@ -1239,6 +1344,8 @@ async function handleCallbackQuery(
         reminder_sent_at: null,
       })
       .eq("id", taskId);
+    if (agencyId) updQ = updQ.eq("agency_id", agencyId);
+    await updQ;
     await tgApi(botToken, "answerCallbackQuery", {
       callback_query_id: cbId,
       text: `⏰ +3 saat təxirə salındı (${formatBakuDateTime(nextDue)})`,
@@ -1260,13 +1367,14 @@ async function handleCallbackQuery(
 
   if (action === "task_tomorrow") {
     const taskId = rest;
-    const { data: existing } = await supabase
+    let exQ = supabase
       .from("follow_up_tasks")
       .select("snooze_count")
-      .eq("id", taskId)
-      .maybeSingle();
+      .eq("id", taskId);
+    if (agencyId) exQ = exQ.eq("agency_id", agencyId);
+    const { data: existing } = await exQ.maybeSingle();
     const { tomorrow0930Iso } = getBakuDayBounds();
-    await supabase
+    let updQ = supabase
       .from("follow_up_tasks")
       .update({
         status: "SNOOZED",
@@ -1275,6 +1383,8 @@ async function handleCallbackQuery(
         reminder_sent_at: null,
       })
       .eq("id", taskId);
+    if (agencyId) updQ = updQ.eq("agency_id", agencyId);
+    await updQ;
     await tgApi(botToken, "answerCallbackQuery", {
       callback_query_id: cbId,
       text: `📅 Sabaha keçirildi (${formatBakuDateTime(tomorrow0930Iso)})`,
@@ -1296,11 +1406,12 @@ async function handleCallbackQuery(
 
   // 2. Duplicate review callbacks
   if (action === "dup_confirm") {
-    const listing = await findListingByIdOrBinaId(supabase, rest);
+    const listing = await findListingByIdOrBinaId(supabase, rest, agencyId);
     if (!listing) {
       await tgApi(botToken, "answerCallbackQuery", { callback_query_id: cbId, text: "Elan tapılmadı", show_alert: true });
       return { action, ok: false };
     }
+    const resolvedAgencyId = listing.agency_id ?? agencyId;
     await supabase
       .from("listings")
       .update({
@@ -1320,6 +1431,7 @@ async function handleCallbackQuery(
       .eq("entity_type", "DUPLICATE_REVIEW")
       .in("status", ["OPEN", "SNOOZED"]);
     await supabase.from("listing_events").insert({
+      ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
       listing_id: listing.id,
       event_type: "STATUS_CHANGED",
       old_value_json: { duplicate_resolution: listing.duplicate_resolution, editorial_status: listing.editorial_status },
@@ -1338,11 +1450,12 @@ async function handleCallbackQuery(
   }
 
   if (action === "dup_separate") {
-    const listing = await findListingByIdOrBinaId(supabase, rest);
+    const listing = await findListingByIdOrBinaId(supabase, rest, agencyId);
     if (!listing) {
       await tgApi(botToken, "answerCallbackQuery", { callback_query_id: cbId, text: "Elan tapılmadı", show_alert: true });
       return { action, ok: false };
     }
+    const resolvedAgencyId = listing.agency_id ?? agencyId;
     await supabase
       .from("listings")
       .update({
@@ -1354,6 +1467,7 @@ async function handleCallbackQuery(
     const { data: jobRow } = await supabase
       .from("pipeline_jobs")
       .insert({
+        ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
         idempotency_key: `tg:dup_separate:${listing.bina_id}:${cbId}`,
         job_type: "RENDER_INITIAL",
         listing_id: listing.id,
@@ -1374,6 +1488,7 @@ async function handleCallbackQuery(
       .eq("entity_type", "DUPLICATE_REVIEW")
       .in("status", ["OPEN", "SNOOZED"]);
     await supabase.from("listing_events").insert({
+      ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
       listing_id: listing.id,
       event_type: "STATUS_CHANGED",
       old_value_json: { duplicate_resolution: listing.duplicate_resolution },
@@ -1398,7 +1513,7 @@ async function handleCallbackQuery(
   // 3. Listing editorial & analytics callbacks
   if (action === "keenable") {
     const binaId = rest;
-    const listing = await findListingByIdOrBinaId(supabase, binaId);
+    const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
     const alertText = listing
       ? computeKeenableStats(
           listing.location || "Bakı",
@@ -1416,7 +1531,7 @@ async function handleCallbackQuery(
 
   if (action === "publish" || action === "ask_puburl") {
     const binaId = rest;
-    const listing = await findListingByIdOrBinaId(supabase, binaId);
+    const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
 
     await tgApi(botToken, "answerCallbackQuery", {
       callback_query_id: cbId,
@@ -1462,13 +1577,15 @@ async function handleCallbackQuery(
 
   if (action === "archive") {
     const binaId = rest;
-    const listing = await findListingByIdOrBinaId(supabase, binaId);
+    const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
     if (listing) {
+      const resolvedAgencyId = listing.agency_id ?? agencyId;
       await supabase
         .from("listings")
         .update({ editorial_status: "ARCHIVED" })
         .eq("id", listing.id);
       await supabase.from("listing_events").insert({
+        ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
         listing_id: listing.id,
         event_type: "STATUS_CHANGED",
         old_value_json: { editorial_status: listing.editorial_status },
@@ -1518,7 +1635,7 @@ async function handleCallbackQuery(
 
   if (action === "mainmenu") {
     const binaId = rest;
-    const listing = await findListingByIdOrBinaId(supabase, binaId);
+    const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
     await tgApi(botToken, "answerCallbackQuery", { callback_query_id: cbId, text: "Əsas menyu" });
     if (messageId) {
       await tgApi(botToken, "editMessageReplyMarkup", {
@@ -1569,7 +1686,7 @@ async function handleCallbackQuery(
       paramsJson = { ...paramsJson, trigger_reason: "MANUAL_RERENDER" };
     }
 
-    const listing = await findListingByIdOrBinaId(supabase, binaId);
+    const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
     if (!listing) {
       await tgApi(botToken, "answerCallbackQuery", {
         callback_query_id: cbId,
@@ -1579,9 +1696,11 @@ async function handleCallbackQuery(
       return { action, binaId, ok: false };
     }
 
+    const resolvedAgencyId = listing.agency_id ?? agencyId;
     const { data: jobRow, error: jobErr } = await supabase
       .from("pipeline_jobs")
       .insert({
+        ...(resolvedAgencyId ? { agency_id: resolvedAgencyId } : {}),
         idempotency_key: `tg:${action}:${binaId}:${cbId}`,
         job_type: "RERENDER",
         listing_id: listing.id,
@@ -1652,12 +1771,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const allowedChatIds = new Set(
     allowedChatsRaw.split(",").map((s) => s.trim()).filter(Boolean),
   );
-  if (allowedChatIds.size === 0) {
-    return new Response(JSON.stringify({ error: "Forbidden: TELEGRAM_CHAT_ID not configured" }), {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
 
   const botToken = (Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "").trim();
   const supabaseUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim();
@@ -1680,7 +1793,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
-  // Extract and enforce authorized chat_id.
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // Extract and enforce authorized chat_id via agency_settings / agency_members or env allowlist.
   // Secret token is already verified above, so return 200 OK ("ignored") for
   // unauthorized chat_ids to prevent Telegram 24h webhook retry storms.
   const incomingChatId = String(
@@ -1691,16 +1808,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       update.payload?.chat_id ??
       "",
   );
-  if (!incomingChatId || !allowedChatIds.has(incomingChatId)) {
+  const { agencyId, matchedInDb } = await resolveAgencyIdForChat(supabase, incomingChatId);
+  if (!incomingChatId || (!matchedInDb && !allowedChatIds.has(incomingChatId))) {
     return new Response(JSON.stringify({ ok: true, ignored: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   }
-
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
 
   // Support inbound dispatch of social comment lead alert
   if (update.action === "dispatch_social_lead_alert" || update.type === "SOCIAL_COMMENT_ALERT") {
@@ -1713,7 +1827,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   if (update.callback_query) {
-    const result = await handleCallbackQuery(supabase, botToken, incomingChatId, update.callback_query);
+    const result = await handleCallbackQuery(supabase, botToken, incomingChatId, update.callback_query, agencyId);
     return new Response(JSON.stringify({ ok: true, result }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -1725,7 +1839,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     if (text.startsWith("/published")) {
       const args = text.replace(/^\/published(?:@\S+)?\s*/i, "");
-      const res = await handlePublishedCommand(supabase, botToken, incomingChatId, args);
+      const res = await handlePublishedCommand(supabase, botToken, incomingChatId, args, agencyId);
       return new Response(JSON.stringify({ ok: res.ok, command: "/published", result: res }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -1738,7 +1852,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const match = replyText.match(/(?:#|\/published\s+)(\d{4,})/i);
       if (match && (INSTAGRAM_REEL_REGEX.test(text) || TIKTOK_VIDEO_REGEX.test(text))) {
         const repliedBinaId = match[1];
-        const res = await handlePublishedCommand(supabase, botToken, incomingChatId, `${repliedBinaId} ${text}`);
+        const res = await handlePublishedCommand(supabase, botToken, incomingChatId, `${repliedBinaId} ${text}`, agencyId);
         return new Response(JSON.stringify({ ok: res.ok, command: "/published_reply", result: res }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -1748,14 +1862,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     if (text.startsWith("/lead")) {
       const args = text.replace(/^\/lead(?:@\S+)?\s*/i, "");
-      await handleLeadCommand(supabase, botToken, incomingChatId, args);
+      await handleLeadCommand(supabase, botToken, incomingChatId, args, agencyId);
       return new Response(JSON.stringify({ ok: true, command: "/lead" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
     if (text.startsWith("/today")) {
-      await handleTodayCommand(supabase, botToken, incomingChatId);
+      await handleTodayCommand(supabase, botToken, incomingChatId, agencyId);
       return new Response(JSON.stringify({ ok: true, command: "/today" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },

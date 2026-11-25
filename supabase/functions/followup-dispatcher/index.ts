@@ -17,6 +17,7 @@ const TELEGRAM_MAX_CHUNK_CHARS = 3800;
 
 interface TaskRecord {
   id: string;
+  agency_id: string;
   entity_type: "BUYER_LEAD" | "OWNER_OUTREACH" | "DUPLICATE_REVIEW";
   lead_id: string | null;
   listing_id: string | null;
@@ -181,12 +182,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const botToken = (Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "").trim();
-  const rawChatIds = (Deno.env.get("TELEGRAM_CHAT_ID") ?? "").trim();
-  const primaryChatId = rawChatIds.split(",").map((s) => s.trim()).filter(Boolean)[0] ?? "";
   const supabaseUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim();
   const serviceRoleKey = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
 
-  if (!botToken || !primaryChatId || !supabaseUrl || !serviceRoleKey) {
+  if (!botToken || !supabaseUrl || !serviceRoleKey) {
     return new Response(JSON.stringify({ error: "Missing required environment secrets" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
@@ -214,17 +213,34 @@ Deno.serve(async (req: Request): Promise<Response> => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // Resolve per-agency Telegram chat destinations to strictly prevent cross-agency PII leakage
+  const agencyChatMap = new Map<string, string>();
+  const { data: settingsRows, error: settingsErr } = await supabase
+    .from("agency_settings")
+    .select("agency_id, telegram_chat_id");
+  if (settingsErr) {
+    console.error("Failed to load agency_settings:", settingsErr.message);
+  } else {
+    for (const row of settingsRows ?? []) {
+      const aId = String(row.agency_id ?? "").trim();
+      const cId = String(row.telegram_chat_id ?? "").trim();
+      if (aId && cId) {
+        agencyChatMap.set(aId, cId);
+      }
+    }
+  }
+
   const nowIso = now.toISOString();
   let highSentCount = 0;
   let digestSentCount = 0;
 
   // ---------------------------------------------------------------------------
-  // 1. Immediate Pings for Due HIGH-Priority Tasks
+  // 1. Immediate Pings for Due HIGH-Priority Tasks (scoped per agency_id)
   // ---------------------------------------------------------------------------
   const { data: highTasks, error: highErr } = await supabase
     .from("follow_up_tasks")
     .select(
-      "id, entity_type, lead_id, listing_id, title, due_at, priority, status, reminder_sent_at, buyer_leads(client_name, phone_normalized, stage), listings(bina_id, location, price_azn_normalized, owner_outreach_status, source_availability)",
+      "id, agency_id, entity_type, lead_id, listing_id, title, due_at, priority, status, reminder_sent_at, buyer_leads(client_name, phone_normalized, stage), listings(bina_id, location, price_azn_normalized, owner_outreach_status, source_availability)",
     )
     .eq("priority", "HIGH")
     .in("status", ["OPEN", "SNOOZED"])
@@ -237,6 +253,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     console.error("Failed to query HIGH tasks:", highErr.message);
   } else if (highTasks && highTasks.length > 0) {
     for (const task of highTasks as unknown as TaskRecord[]) {
+      const targetChatId = agencyChatMap.get(String(task.agency_id ?? "").trim());
+      if (!targetChatId) {
+        console.warn(`Skipping HIGH task ${task.id}: no telegram_chat_id configured for agency ${task.agency_id}`);
+        continue;
+      }
+
       const entityLabel =
         task.entity_type === "BUYER_LEAD"
           ? "👤 Müştəri Follow-Up"
@@ -266,7 +288,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         soldWarning,
       ].filter(Boolean);
 
-      const sent = await sendTelegramMessage(botToken, primaryChatId, lines.join("\n"), {
+      const sent = await sendTelegramMessage(botToken, targetChatId, lines.join("\n"), {
         inline_keyboard: [
           [
             { text: "✅ Tamamlandı", callback_data: `task_done_${task.id}` },
@@ -288,9 +310,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // ---------------------------------------------------------------------------
   // 2. 09:30+ Asia/Baku Batched Morning Digest for NORMAL / LOW Tasks
-  //    Fires anytime >= 09:30 Baku (already gated by quiet hours above); each
-  //    task is marked with reminder_sent_at so repeated 5-minute ticks never
-  //    duplicate the daily digest, even if the 09:30-09:44 ticks are delayed.
+  //    Grouped strictly by agency_id so each agency only receives its own tasks.
   // ---------------------------------------------------------------------------
   const digestStartMin = 9 * 60 + 30; // 09:30 Baku
   const inDigestWindow = baku.minutesOfDay >= digestStartMin;
@@ -299,72 +319,89 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const { data: normalTasks, error: normalErr } = await supabase
       .from("follow_up_tasks")
       .select(
-        "id, entity_type, lead_id, listing_id, title, due_at, priority, status, reminder_sent_at, buyer_leads(client_name, phone_normalized, stage), listings(bina_id, location, price_azn_normalized, owner_outreach_status, source_availability)",
+        "id, agency_id, entity_type, lead_id, listing_id, title, due_at, priority, status, reminder_sent_at, buyer_leads(client_name, phone_normalized, stage), listings(bina_id, location, price_azn_normalized, owner_outreach_status, source_availability)",
       )
       .in("priority", ["NORMAL", "LOW"])
       .in("status", ["OPEN", "SNOOZED"])
       .lte("due_at", baku.dayEndIso)
       .or(`reminder_sent_at.is.null,reminder_sent_at.lt.${baku.dayStartIso}`)
       .order("due_at", { ascending: true })
-      .limit(30);
+      .limit(100);
 
     if (normalErr) {
       console.error("Failed to query NORMAL/LOW digest tasks:", normalErr.message);
     } else if (normalTasks && normalTasks.length > 0) {
-      const typedTasks = normalTasks as unknown as TaskRecord[];
-      const overdueCount = typedTasks.filter((t) => new Date(t.due_at).getTime() < now.getTime()).length;
-      const lines = [
-        `☀️ <b>Sabahınız Xeyir! Gündəlik Follow-Up Xülasəsi (${typedTasks.length})</b>`,
-        overdueCount > 0 ? `⚠️ Gecikmiş: <b>${overdueCount}</b> | Bugünkü: <b>${typedTasks.length - overdueCount}</b>` : null,
-        "",
-      ].filter((v) => v !== null) as string[];
-
-      const inlineRows: Array<Array<{ text: string; callback_data: string }>> = [];
-      for (let i = 0; i < typedTasks.length; i++) {
-        const t = typedTasks[i];
-        const tag =
-          t.entity_type === "BUYER_LEAD"
-            ? "👤"
-            : t.entity_type === "OWNER_OUTREACH"
-            ? "🏠"
-            : "🔎";
-        const overdueMark = new Date(t.due_at).getTime() < now.getTime() ? " [GECİKİB]" : "";
-        const safeTitle = t.title.length > 300 ? `${t.title.slice(0, 297)}...` : t.title;
-        lines.push(
-          `${i + 1}. ${tag} <b>${escapeHtml(safeTitle)}</b> — <code>${formatBakuDateTime(t.due_at)}</code>${overdueMark}`,
-        );
-        if (i < 5) {
-          inlineRows.push([
-            { text: `✅ #${i + 1} Bitdi`, callback_data: `task_done_${t.id}` },
-            { text: `⏰ +3s`, callback_data: `task_snooze_3h_${t.id}` },
-            { text: `📅 Sabah`, callback_data: `task_tomorrow_${t.id}` },
-          ]);
-        }
+      const tasksByAgency = new Map<string, TaskRecord[]>();
+      for (const task of normalTasks as unknown as TaskRecord[]) {
+        const aId = String(task.agency_id ?? "").trim();
+        if (!aId) continue;
+        const list = tasksByAgency.get(aId) ?? [];
+        list.push(task);
+        tasksByAgency.set(aId, list);
       }
 
-      const chunks = chunkLinesForTelegram(lines, TELEGRAM_MAX_CHUNK_CHARS);
-      let digestOk = chunks.length > 0;
-      for (let idx = 0; idx < chunks.length; idx++) {
-        const isLast = idx === chunks.length - 1;
-        const sent = await sendTelegramMessage(
-          botToken,
-          primaryChatId,
-          chunks[idx],
-          isLast && inlineRows.length > 0 ? { inline_keyboard: inlineRows } : undefined,
-        );
-        if (!sent) {
-          digestOk = false;
-          break;
+      for (const [agencyId, agencyTasks] of tasksByAgency.entries()) {
+        const targetChatId = agencyChatMap.get(agencyId);
+        if (!targetChatId) {
+          console.warn(`Skipping digest for agency ${agencyId}: no telegram_chat_id configured`);
+          continue;
         }
-      }
 
-      if (digestOk) {
-        const ids = typedTasks.map((t) => t.id);
-        await supabase
-          .from("follow_up_tasks")
-          .update({ reminder_sent_at: nowIso })
-          .in("id", ids);
-        digestSentCount = ids.length;
+        const batchTasks = agencyTasks.slice(0, 30);
+        const overdueCount = batchTasks.filter((t) => new Date(t.due_at).getTime() < now.getTime()).length;
+        const lines = [
+          `☀️ <b>Sabahınız Xeyir! Gündəlik Follow-Up Xülasəsi (${batchTasks.length})</b>`,
+          overdueCount > 0 ? `⚠️ Gecikmiş: <b>${overdueCount}</b> | Bugünkü: <b>${batchTasks.length - overdueCount}</b>` : null,
+          "",
+        ].filter((v) => v !== null) as string[];
+
+        const inlineRows: Array<Array<{ text: string; callback_data: string }>> = [];
+        for (let i = 0; i < batchTasks.length; i++) {
+          const t = batchTasks[i];
+          const tag =
+            t.entity_type === "BUYER_LEAD"
+              ? "👤"
+              : t.entity_type === "OWNER_OUTREACH"
+              ? "🏠"
+              : "🔎";
+          const overdueMark = new Date(t.due_at).getTime() < now.getTime() ? " [GECİKİB]" : "";
+          const safeTitle = t.title.length > 300 ? `${t.title.slice(0, 297)}...` : t.title;
+          lines.push(
+            `${i + 1}. ${tag} <b>${escapeHtml(safeTitle)}</b> — <code>${formatBakuDateTime(t.due_at)}</code>${overdueMark}`,
+          );
+          if (i < 5) {
+            inlineRows.push([
+              { text: `✅ #${i + 1} Bitdi`, callback_data: `task_done_${t.id}` },
+              { text: `⏰ +3s`, callback_data: `task_snooze_3h_${t.id}` },
+              { text: `📅 Sabah`, callback_data: `task_tomorrow_${t.id}` },
+            ]);
+          }
+        }
+
+        const chunks = chunkLinesForTelegram(lines, TELEGRAM_MAX_CHUNK_CHARS);
+        let digestOk = chunks.length > 0;
+        for (let idx = 0; idx < chunks.length; idx++) {
+          const isLast = idx === chunks.length - 1;
+          const sent = await sendTelegramMessage(
+            botToken,
+            targetChatId,
+            chunks[idx],
+            isLast && inlineRows.length > 0 ? { inline_keyboard: inlineRows } : undefined,
+          );
+          if (!sent) {
+            digestOk = false;
+            break;
+          }
+        }
+
+        if (digestOk) {
+          const ids = batchTasks.map((t) => t.id);
+          await supabase
+            .from("follow_up_tasks")
+            .update({ reminder_sent_at: nowIso })
+            .in("id", ids);
+          digestSentCount += ids.length;
+        }
       }
     }
   }

@@ -286,7 +286,7 @@ class BinaScraper:
         title_str = ", ".join(title_parts) if title_parts else f"Mənzil satılır ID {bina_id}"
 
         raw_bill = data.get("hasBillOfSale")
-        has_bill_of_sale = True if raw_bill is None else bool(raw_bill)
+        has_bill_of_sale = bool(raw_bill) if raw_bill is not None else False
 
         listing = {
             "bina_id": str(bina_id),
@@ -364,7 +364,7 @@ class BinaScraper:
             "area": None,
             "floor": None,
             "floors": None,
-            "has_bill_of_sale": True,
+            "has_bill_of_sale": False,
             "is_owner": owner_flag,
             "contact_type_name": contact_type,
             "contact_name": contact_name,

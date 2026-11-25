@@ -76,10 +76,11 @@ class TestTelegramDispatchWorker(unittest.TestCase):
         self.assertEqual(kwargs.get("target_account_handle"), "@bakuestate.premium")
 
         # Verify listing audit event was logged
-        self.mock_repo.record_listing_event.assert_called_once()
-        call_kwargs = self.mock_repo.record_listing_event.call_args[1]
+        self.mock_repo.insert_listing_event.assert_called_once()
+        call_kwargs = self.mock_repo.insert_listing_event.call_args[1]
         self.assertEqual(call_kwargs["listing_id"], "list-uuid-123")
         self.assertEqual(call_kwargs["event_type"], "STATUS_CHANGED")
+        self.assertEqual(call_kwargs["actor"], "local_worker")
 
     @patch("src.worker.local_worker.TelegramCRMDispatcher")
     def test_execute_job_completes_telegram_dispatch(self, MockDispatcher):

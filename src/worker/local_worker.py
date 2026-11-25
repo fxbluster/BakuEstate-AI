@@ -1546,10 +1546,10 @@ class BakuLocalWorker:
                 new_price_val = float(new_p) if new_p is not None else old_p
                 self.repo.update_listing(
                     str(listing["id"]),
-                    {"price": new_price_val, "price_azn": new_price_val},
+                    {"price": new_price_val, "price_azn_normalized": new_price_val},
                 )
                 listing["price"] = new_price_val
-                listing["price_azn"] = new_price_val
+                listing["price_azn_normalized"] = new_price_val
                 old_fmt = int(old_p) if (old_p is not None and old_p.is_integer()) else old_p
                 new_fmt = int(new_price_val) if new_price_val.is_integer() else new_price_val
                 alert_msg = f"📉 Diqqət: #{bina_id} nömrəli elanın qiyməti endi ({old_fmt} -> {new_fmt} AZN). Paylaşılmış videonun rəylərində endirimi qeyd edin və ya yeni video hazırlayaq."
@@ -1734,7 +1734,7 @@ class BakuLocalWorker:
                     try:
                         rv = None
                         if render_version_id:
-                            rv = self.repo.get_render_version(render_version_id)
+                            rv = self.repo.get_render_version_by_id(render_version_id)
                         if not rv:
                             rv = self.repo.get_latest_render_version(listing_id)
                         if rv and rv.get("video_cdn_url"):
@@ -1767,12 +1767,12 @@ class BakuLocalWorker:
 
         if self.repo.is_configured() and listing_id:
             try:
-                self.repo.record_listing_event(
+                self.repo.insert_listing_event(
                     listing_id=listing_id,
                     event_type="STATUS_CHANGED",
-                    actor="worker",
-                    summary=f"Telegram video lead dispatched: msg_id={res.get('message_id')}",
-                    metadata={"telegram_result": res, "job_id": job.get("id")},
+                    new_value={"telegram_result": res, "job_id": job.get("id")},
+                    triggered_job_id=str(job.get("id")) if job.get("id") else None,
+                    actor="local_worker",
                 )
             except Exception as err:
                 logger.warning("Could not record listing event for telegram dispatch: %s", err)
@@ -1863,7 +1863,39 @@ class BakuLocalWorker:
             if handler is None:
                 raise ValueError(f"Unsupported pipeline job_type: '{job_type}'")
 
+            if job_id and hasattr(self.repo, "is_job_cancel_requested") and self.repo.is_job_cancel_requested(job_id) is True:
+                logger.info("Job %s (%s) cancelled before execution.", job_id, job_type)
+                job_outcome_status = "CANCELLED"
+                self.repo.complete_pipeline_job(
+                    job_id,
+                    status="CANCELLED",
+                    error_message="Cancelled before execution",
+                    worker_id=self.worker_id,
+                )
+                return {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "status": "CANCELLED",
+                    "heartbeats_sent": hb_thread.heartbeat_count,
+                }
+
             result = handler(job)
+            if job_id and hasattr(self.repo, "is_job_cancel_requested") and self.repo.is_job_cancel_requested(job_id) is True:
+                logger.info("Job %s (%s) cancel requested during execution; marking CANCELLED.", job_id, job_type)
+                job_outcome_status = "CANCELLED"
+                self.repo.complete_pipeline_job(
+                    job_id,
+                    status="CANCELLED",
+                    error_message="Cancelled during execution",
+                    worker_id=self.worker_id,
+                )
+                return {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "status": "CANCELLED",
+                    "heartbeats_sent": hb_thread.heartbeat_count,
+                    "result": result,
+                }
             if hb_thread.lease_lost.is_set():
                 logger.warning(
                     "Job %s (%s) finished on worker '%s' after lease was lost; "
