@@ -23,25 +23,80 @@ function LoginForm() {
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    let active = true;
     const supabase = createClient();
 
-    if (typeof window !== "undefined") {
-      const hash = window.location.hash || "";
-      if (hash.includes("type=recovery") || searchParams.get("type") === "recovery") {
-        setRecoveryMode(true);
+    async function hydrateRecoverySession() {
+      if (typeof window === "undefined") return;
+      const hashStr = window.location.hash.startsWith("#")
+        ? window.location.hash.slice(1)
+        : window.location.hash;
+      const hashParams = new URLSearchParams(hashStr);
+      const urlParams = new URLSearchParams(window.location.search);
+
+      const errDesc =
+        hashParams.get("error_description") || urlParams.get("error_description");
+      if (errDesc) {
+        if (active) setError(`Link etibarsızdır və ya vaxtı bitib: ${errDesc}`);
+        return;
+      }
+
+      const code = urlParams.get("code");
+      const tokenHash = urlParams.get("token_hash");
+      const typeParam = hashParams.get("type") || urlParams.get("type");
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+
+      if (typeParam === "recovery" || accessToken || code || tokenHash) {
+        if (active) {
+          setRecoveryMode(true);
+          setError(null);
+        }
+      }
+
+      try {
+        if (accessToken && refreshToken) {
+          const { error: sessErr } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (sessErr && active) {
+            setError(`Sessiya bərpa edilə bilmədi: ${sessErr.message}`);
+          }
+        } else if (code) {
+          const { error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
+          if (codeErr && active) {
+            setError(`Sessiya kodu doğrulana bilmədi: ${codeErr.message}`);
+          }
+        } else if (tokenHash && typeParam === "recovery") {
+          const { error: otpErr } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: "recovery",
+          });
+          if (otpErr && active) {
+            setError(`Doğrulama xətası: ${otpErr.message}`);
+          }
+        }
+      } catch {
+        if (active) {
+          setError("Şifrə bərpası sessiyası açılarkən xəta baş verdi. Yeni link istəyin.");
+        }
       }
     }
+
+    hydrateRecoverySession();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
+      if (event === "PASSWORD_RECOVERY" && active) {
         setRecoveryMode(true);
         setError(null);
       }
     });
 
     return () => {
+      active = false;
       subscription.unsubscribe();
     };
   }, [searchParams]);
