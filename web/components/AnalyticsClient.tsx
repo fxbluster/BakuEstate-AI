@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   DollarSign,
   ExternalLink,
   Eye,
@@ -32,8 +35,11 @@ import {
 import type {
   BuyerLead,
   ChannelNiche,
+  DurationBucket,
+  HookType,
   LeadTimelineEvent,
   Listing,
+  PaginatedResult,
   Publication,
   RenderVersion,
   SocialComment,
@@ -77,12 +83,82 @@ export interface EnrichedComment extends SocialComment {
   > | null;
 }
 
+export interface AnalyticsNicheBucket {
+  publications_count: number;
+  views_count: number;
+  likes_count: number;
+  comments_count: number;
+  shares_count: number;
+  interactions_count: number;
+  engagement_rate_pct: number;
+  median_views: number;
+  intent_comments_count: number;
+  leads_count: number;
+  showings_count: number;
+  won_count: number;
+  actual_commission_azn: number;
+}
+
+export interface AnalyticsAbBucket {
+  count: number;
+  total_views: number;
+  avg_views: number;
+  intent_leads: number;
+  avg_leads: number;
+}
+
+export interface AnalyticsSummary {
+  ok?: boolean;
+  agency_id?: string;
+  role_scope?: string;
+  leads_restricted?: boolean;
+  window_days: number;
+  since_ts?: string;
+  totals: {
+    publications_count: number;
+    views_count: number;
+    likes_count: number;
+    comments_count: number;
+    shares_count: number;
+    interactions_count: number;
+    engagement_rate_pct: number;
+    scraped_comments_count: number;
+    intent_comments_count: number;
+    snapshots_count: number;
+    leads_count: number;
+    showings_count: number;
+    won_count: number;
+    actual_commission_azn: number;
+  };
+  funnel: {
+    views: number;
+    interactions: number;
+    intent_comments: number;
+    leads_count: number;
+    showings_count: number;
+    won_count: number;
+    actual_commission_azn: number;
+    view_to_engagement_pct: number;
+    engagement_to_lead_pct: number;
+    lead_to_showing_pct: number;
+    showing_to_won_pct: number;
+  };
+  by_niche?: Partial<Record<ChannelNiche, AnalyticsNicheBucket>>;
+  by_hook_type?: Partial<Record<HookType, AnalyticsAbBucket>>;
+  by_duration_bucket?: Partial<Record<DurationBucket, AnalyticsAbBucket>>;
+  generated_at?: string;
+}
+
 export interface AnalyticsClientProps {
   publications: EnrichedPublication[];
   comments: EnrichedComment[];
   snapshots: TelemetrySnapshot[];
   leads?: BuyerLead[];
   timelineEvents?: LeadTimelineEvent[];
+  summary?: AnalyticsSummary | null;
+  pagination?: PaginatedResult<EnrichedPublication>;
+  initialDays?: number;
+  initialNiche?: NicheFilter;
 }
 
 export type NicheFilter = "ALL" | ChannelNiche;
@@ -108,30 +184,36 @@ const NICHE_TABS: NicheTabItem[] = [
     label: "💎 @bakuestate.premium",
     handle: "@bakuestate.premium",
     badgeClass: "text-amber-300 border-amber-500/30 bg-amber-950/20",
-    activeClass: "bg-amber-500/25 text-amber-300 border-amber-500/60 shadow-sm shadow-amber-500/10",
+    activeClass:
+      "bg-amber-500/25 text-amber-300 border-amber-500/60 shadow-sm shadow-amber-500/10",
   },
   {
     id: "AFFORDABLE",
     label: "🏠 @baku.serfeli.evler",
     handle: "@baku.serfeli.evler",
     badgeClass: "text-emerald-300 border-emerald-500/30 bg-emerald-950/20",
-    activeClass: "bg-emerald-500/25 text-emerald-300 border-emerald-500/60 shadow-sm shadow-emerald-500/10",
+    activeClass:
+      "bg-emerald-500/25 text-emerald-300 border-emerald-500/60 shadow-sm shadow-emerald-500/10",
   },
   {
     id: "GENERAL",
     label: "🏢 @bakuestate.official",
     handle: "@bakuestate.official",
     badgeClass: "text-sky-300 border-sky-500/30 bg-sky-950/20",
-    activeClass: "bg-sky-500/25 text-sky-300 border-sky-500/60 shadow-sm shadow-sky-500/10",
+    activeClass:
+      "bg-sky-500/25 text-sky-300 border-sky-500/60 shadow-sm shadow-sky-500/10",
   },
   {
     id: "TIKTOK",
     label: "🔥 @baku_emlak_ai",
     handle: "@baku_emlak_ai",
     badgeClass: "text-rose-300 border-rose-500/30 bg-rose-950/20",
-    activeClass: "bg-rose-500/25 text-rose-300 border-rose-500/60 shadow-sm shadow-rose-500/10",
+    activeClass:
+      "bg-rose-500/25 text-rose-300 border-rose-500/60 shadow-sm shadow-rose-500/10",
   },
 ];
+
+const WINDOW_DAY_OPTIONS = [7, 30, 90] as const;
 
 export function AnalyticsClient({
   publications,
@@ -139,34 +221,81 @@ export function AnalyticsClient({
   snapshots,
   leads = [],
   timelineEvents = [],
+  summary = null,
+  pagination,
+  initialDays = 30,
+  initialNiche = "ALL",
 }: AnalyticsClientProps) {
-  // ---------------------------------------------------------------------------
-  // SLICE 1: selectedNiche (Interactive Account Filter Tabs)
-  // ---------------------------------------------------------------------------
-  const [selectedNiche, setSelectedNiche] = useState<NicheFilter>("ALL");
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [selectedNiche, setSelectedNiche] = useState<NicheFilter>(initialNiche);
+  const [windowDays, setWindowDays] = useState<number>(initialDays);
   const [commentFilter, setCommentFilter] = useState<
     "ALL" | "LEADS_ONLY" | "PRICE" | "MORTGAGE" | "LOCATION"
   >("ALL");
   const [showFormulaTooltip, setShowFormulaTooltip] = useState(false);
 
-  // Helper map from publication id to channel_niche
+  const isServerPaginated = Boolean(pagination);
+  const currentPage = pagination?.page ?? 1;
+  const pageSize = pagination?.pageSize ?? 24;
+  const totalCount =
+    pagination?.totalCount ??
+    summary?.totals.publications_count ??
+    publications.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const hasNextPage = pagination?.hasNextPage ?? false;
+
+  function navigateWithParams(
+    updates: Record<string, string | null>,
+    resetPage: boolean
+  ) {
+    const next = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    for (const [k, v] of Object.entries(updates)) {
+      if (!v || v === "ALL") {
+        next.delete(k);
+      } else {
+        next.set(k, v);
+      }
+    }
+    if (resetPage) {
+      next.set("page", "1");
+    }
+    const qs = next.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
+  }
+
   const pubNicheMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of publications) {
       if (p.channel_niche) {
         map.set(p.id, p.channel_niche);
       } else if (p.target_account_handle) {
-        if (p.target_account_handle.includes("premium")) map.set(p.id, "LUXURY");
-        else if (p.target_account_handle.includes("serfeli")) map.set(p.id, "AFFORDABLE");
-        else if (p.target_account_handle.includes("emlak_ai")) map.set(p.id, "TIKTOK");
+        if (p.target_account_handle.includes("premium"))
+          map.set(p.id, "LUXURY");
+        else if (p.target_account_handle.includes("serfeli"))
+          map.set(p.id, "AFFORDABLE");
+        else if (p.target_account_handle.includes("emlak_ai"))
+          map.set(p.id, "TIKTOK");
         else map.set(p.id, "GENERAL");
       }
     }
     return map;
   }, [publications]);
 
-  // Compute publication counts per niche for tab badges
   const nicheCounts = useMemo(() => {
+    if (summary?.by_niche) {
+      return {
+        ALL: summary.totals.publications_count,
+        LUXURY: summary.by_niche.LUXURY?.publications_count ?? 0,
+        AFFORDABLE: summary.by_niche.AFFORDABLE?.publications_count ?? 0,
+        GENERAL: summary.by_niche.GENERAL?.publications_count ?? 0,
+        TIKTOK: summary.by_niche.TIKTOK?.publications_count ?? 0,
+      };
+    }
+
     const counts: Record<string, number> = {
       ALL: publications.length,
       LUXURY: 0,
@@ -181,27 +310,24 @@ export function AnalyticsClient({
       }
     }
     return counts;
-  }, [publications, pubNicheMap]);
+  }, [summary, publications, pubNicheMap]);
 
-  // Filter publications by selected niche
   const filteredPublications = useMemo(() => {
-    if (selectedNiche === "ALL") return publications;
+    if (isServerPaginated || selectedNiche === "ALL") return publications;
     return publications.filter((p) => {
       const niche = p.channel_niche || pubNicheMap.get(p.id);
       return niche === selectedNiche;
     });
-  }, [publications, selectedNiche, pubNicheMap]);
+  }, [isServerPaginated, publications, selectedNiche, pubNicheMap]);
 
-  // Filter comments by selected niche
   const nicheComments = useMemo(() => {
-    if (selectedNiche === "ALL") return comments;
+    if (isServerPaginated || selectedNiche === "ALL") return comments;
     return comments.filter((c) => {
       const niche = pubNicheMap.get(c.publication_id);
       return niche === selectedNiche;
     });
-  }, [comments, selectedNiche, pubNicheMap]);
+  }, [isServerPaginated, comments, selectedNiche, pubNicheMap]);
 
-  // Filter leads by selected niche
   const filteredLeads = useMemo(() => {
     if (selectedNiche === "ALL") return leads;
     return leads.filter((l) => {
@@ -216,9 +342,6 @@ export function AnalyticsClient({
     });
   }, [leads, selectedNiche, pubNicheMap]);
 
-  // ---------------------------------------------------------------------------
-  // SLICE 2: perNicheMedians (Isolated Rolling Median Views per Niche)
-  // ---------------------------------------------------------------------------
   const perNicheMedians = useMemo(() => {
     const map = new Map<string, number>();
     const baselines: Record<string, number> = {
@@ -228,20 +351,21 @@ export function AnalyticsClient({
       TIKTOK: 12000,
       ALL: 2200,
     };
-    for (const niche of ["LUXURY", "AFFORDABLE", "GENERAL", "TIKTOK", "ALL"]) {
-      const pubs =
-        niche === "ALL"
-          ? publications
-          : publications.filter(
-              (p) => (p.channel_niche || pubNicheMap.get(p.id)) === niche
-            );
+    for (const niche of ["LUXURY", "AFFORDABLE", "GENERAL", "TIKTOK"] as const) {
+      const sqlMedian = summary?.by_niche?.[niche]?.median_views;
+      if (typeof sqlMedian === "number" && sqlMedian > 0) {
+        map.set(niche, sqlMedian);
+        continue;
+      }
+      const pubs = publications.filter(
+        (p) => (p.channel_niche || pubNicheMap.get(p.id)) === niche
+      );
       const views = pubs
         .map((p) => p.views_count)
         .filter((v) => v > 0)
         .sort((a, b) => a - b);
-
       if (views.length < 5) {
-        map.set(niche, baselines[niche] ?? 2200);
+        map.set(niche, baselines[niche]);
       } else {
         const mid = Math.floor(views.length / 2);
         map.set(
@@ -252,10 +376,10 @@ export function AnalyticsClient({
         );
       }
     }
+    map.set("ALL", baselines.ALL);
     return map;
-  }, [publications, pubNicheMap]);
+  }, [summary, publications, pubNicheMap]);
 
-  // Compute comment & lead stats per publication
   const commentsByPub = useMemo(() => {
     const map = new Map<string, { total: number; leads: number }>();
     for (const c of comments) {
@@ -269,7 +393,6 @@ export function AnalyticsClient({
     return map;
   }, [comments]);
 
-  // Attach computed metrics & fair per-niche NER scores to filtered publications
   const rankedPublications = useMemo(() => {
     return filteredPublications.map((p) => {
       const stats = commentsByPub.get(p.id) || {
@@ -282,8 +405,6 @@ export function AnalyticsClient({
       const median =
         perNicheMedians.get(nicheKey) ?? perNicheMedians.get("GENERAL") ?? 2200;
 
-      // Guarded NER Formula:
-      // (Views_48h / perNicheMedian) * 0.6 + (Leads_48h / max(1, Comments_48h)) * 0.4
       const viewRatio = (p.views_count || 0) / Math.max(1, median);
       const leadRatio = pubLeads / cCount;
       const ner = Number((viewRatio * 0.6 + leadRatio * 0.4).toFixed(2));
@@ -296,44 +417,58 @@ export function AnalyticsClient({
     });
   }, [filteredPublications, commentsByPub, perNicheMedians, pubNicheMap]);
 
-  // ---------------------------------------------------------------------------
-  // SLICE 3: erMetricCards (Resilient Social ER% & Health Badges)
-  // ---------------------------------------------------------------------------
-  const erMetricCards = useMemo(() => {
-    const totalViews = rankedPublications.reduce(
-      (acc, p) => acc + (p.views_count || 0),
-      0
-    );
-    const totalLikes = rankedPublications.reduce(
-      (acc, p) => acc + (p.likes_count || 0),
-      0
-    );
-    const totalComments = rankedPublications.reduce(
-      (acc, p) => acc + (p.comments_count || 0),
-      0
-    );
-    const totalShares = rankedPublications.reduce(
-      (acc, p) => acc + (p.shares_count || 0),
-      0
-    );
-    const totalInteractions = totalLikes + totalComments + totalShares;
+  const activeSummaryBucket =
+    selectedNiche !== "ALL" && summary?.by_niche?.[selectedNiche]
+      ? summary.by_niche[selectedNiche]
+      : null;
 
-    // Resilient ER% formula:
-    // Effective ER% = ((Likes + Comments + Shares) / max(1, Views)) * 100
-    // Guarded: returns 0.00% if views == 0, with cold-start guard for views < 50
-    let erPercent = 0;
-    if (totalViews >= 50) {
+  const erMetricCards = useMemo(() => {
+    const totalViews = activeSummaryBucket
+      ? activeSummaryBucket.views_count
+      : summary
+        ? summary.totals.views_count
+        : rankedPublications.reduce((acc, p) => acc + (p.views_count || 0), 0);
+    const totalLikes = activeSummaryBucket
+      ? activeSummaryBucket.likes_count
+      : summary
+        ? summary.totals.likes_count
+        : rankedPublications.reduce((acc, p) => acc + (p.likes_count || 0), 0);
+    const totalComments = activeSummaryBucket
+      ? activeSummaryBucket.comments_count
+      : summary
+        ? summary.totals.comments_count
+        : rankedPublications.reduce(
+            (acc, p) => acc + (p.comments_count || 0),
+            0
+          );
+    const totalShares = activeSummaryBucket
+      ? activeSummaryBucket.shares_count
+      : summary
+        ? summary.totals.shares_count
+        : rankedPublications.reduce((acc, p) => acc + (p.shares_count || 0), 0);
+    const totalInteractions = activeSummaryBucket
+      ? activeSummaryBucket.interactions_count
+      : summary
+        ? summary.totals.interactions_count
+        : totalLikes + totalComments + totalShares;
+    const activePubsCount = activeSummaryBucket
+      ? activeSummaryBucket.publications_count
+      : summary
+        ? summary.totals.publications_count
+        : rankedPublications.length;
+
+    let erPercent = activeSummaryBucket
+      ? activeSummaryBucket.engagement_rate_pct
+      : summary
+        ? summary.totals.engagement_rate_pct
+        : 0;
+
+    if (!summary && totalViews > 0) {
       erPercent = Number(
         ((totalInteractions / Math.max(1, totalViews)) * 100).toFixed(2)
       );
-    } else if (totalViews > 0) {
-      erPercent = Number(
-        ((totalInteractions / totalViews) * 100).toFixed(2)
-      );
     }
 
-    // Health badge determination:
-    // > 3.5% High / Green, 1.5% - 3.5% Normal / Gold, < 1.5% Low / Slate
     let health: {
       label: string;
       description: string;
@@ -384,67 +519,89 @@ export function AnalyticsClient({
       totalInteractions,
       erPercent,
       health,
-      activePubsCount: rankedPublications.length,
+      activePubsCount,
     };
-  }, [rankedPublications]);
+  }, [activeSummaryBucket, summary, rankedPublications]);
 
-  // ---------------------------------------------------------------------------
-  // SLICE 4: funnelBreakdown (4-Tier Mobile Instagram & TikTok Pipeline Funnel)
-  // ---------------------------------------------------------------------------
   const funnelBreakdown = useMemo(() => {
-    // Stage 1: Total Views across niche reels
     const views = erMetricCards.totalViews;
-
-    // Stage 2: Engagement & Scraped Intent Comments
     const interactions = erMetricCards.totalInteractions;
-    const intentCommentsCount = nicheComments.filter(
-      (c) => c.is_intent_lead || c.buyer_lead_id !== null
-    ).length;
+    const intentCommentsCount = activeSummaryBucket
+      ? activeSummaryBucket.intent_comments_count
+      : summary
+        ? summary.funnel.intent_comments
+        : nicheComments.filter(
+            (c) => c.is_intent_lead || c.buyer_lead_id !== null
+          ).length;
 
-    // Stage 3: Inbound WhatsApp Leads (attributed via bio link & kod:{bina_id})
-    const leadsCount = filteredLeads.length;
+    const leadsCount = activeSummaryBucket
+      ? activeSummaryBucket.leads_count
+      : summary
+        ? summary.funnel.leads_count
+        : filteredLeads.length;
 
-    // Stage 4: Showings & Closed Won Commissions
-    const leadIdSet = new Set(filteredLeads.map((l) => l.id));
-    const showingEventsCount = timelineEvents.filter(
-      (e) =>
-        e.event_type === "SHOWING_SCHEDULED" &&
-        (!e.lead_id || leadIdSet.has(e.lead_id))
-    ).length;
+    const showingsCount = activeSummaryBucket
+      ? activeSummaryBucket.showings_count
+      : summary
+        ? summary.funnel.showings_count
+        : (() => {
+            const leadIdSet = new Set(filteredLeads.map((l) => l.id));
+            const showingEventsCount = timelineEvents.filter(
+              (e) =>
+                e.event_type === "SHOWING_SCHEDULED" &&
+                (!e.lead_id || leadIdSet.has(e.lead_id))
+            ).length;
+            const showingsFromLeads = filteredLeads.filter((l) =>
+              [
+                "VIEWING_SCHEDULED",
+                "VIEWED",
+                "NEGOTIATING",
+                "DEPOSIT",
+                "WON_CLOSED",
+              ].includes(l.stage)
+            ).length;
+            return Math.max(showingsFromLeads, showingEventsCount);
+          })();
 
-    const showingsFromLeads = filteredLeads.filter(
-      (l) =>
-        l.stage === "VIEWING_SCHEDULED" ||
-        l.stage === "VIEWED" ||
-        l.stage === "NEGOTIATING" ||
-        l.stage === "DEPOSIT" ||
-        l.stage === "WON_CLOSED"
-    ).length;
+    const closedCount = activeSummaryBucket
+      ? activeSummaryBucket.won_count
+      : summary
+        ? summary.funnel.won_count
+        : filteredLeads.filter((l) => l.stage === "WON_CLOSED").length;
 
-    const showingsCount = Math.max(showingsFromLeads, showingEventsCount);
+    const totalCommissionAzn = activeSummaryBucket
+      ? activeSummaryBucket.actual_commission_azn
+      : summary
+        ? summary.funnel.actual_commission_azn
+        : filteredLeads.reduce(
+            (acc, l) => acc + (l.actual_commission_azn || 0),
+            0
+          );
 
-    const wonLeads = filteredLeads.filter((l) => l.stage === "WON_CLOSED");
-    const closedCount = wonLeads.length;
-    const totalCommissionAzn = filteredLeads.reduce(
-      (acc, l) => acc + (l.actual_commission_azn || 0),
-      0
-    );
-
-    // Progressive conversion rates
     const viewToEngRate =
-      views > 0 ? Number(((interactions / views) * 100).toFixed(1)) : 0;
+      !activeSummaryBucket && summary
+        ? summary.funnel.view_to_engagement_pct
+        : views > 0
+          ? Number(((interactions / views) * 100).toFixed(1))
+          : 0;
     const engToLeadRate =
-      interactions > 0
-        ? Number(((leadsCount / interactions) * 100).toFixed(1))
-        : 0;
+      !activeSummaryBucket && summary
+        ? summary.funnel.engagement_to_lead_pct
+        : interactions > 0
+          ? Number(((leadsCount / interactions) * 100).toFixed(1))
+          : 0;
     const leadToShowingRate =
-      leadsCount > 0
-        ? Number(((showingsCount / leadsCount) * 100).toFixed(1))
-        : 0;
+      !activeSummaryBucket && summary
+        ? summary.funnel.lead_to_showing_pct
+        : leadsCount > 0
+          ? Number(((showingsCount / leadsCount) * 100).toFixed(1))
+          : 0;
     const showingToWonRate =
-      showingsCount > 0
-        ? Number(((closedCount / showingsCount) * 100).toFixed(1))
-        : 0;
+      !activeSummaryBucket && summary
+        ? summary.funnel.showing_to_won_pct
+        : showingsCount > 0
+          ? Number(((closedCount / showingsCount) * 100).toFixed(1))
+          : 0;
 
     return {
       stage1: {
@@ -478,17 +635,51 @@ export function AnalyticsClient({
         rateText: `${leadToShowingRate}% baxışa keçid • ${showingToWonRate}% satış`,
       },
     };
-  }, [erMetricCards, nicheComments, filteredLeads, timelineEvents]);
+  }, [
+    erMetricCards,
+    activeSummaryBucket,
+    summary,
+    nicheComments,
+    filteredLeads,
+    timelineEvents,
+  ]);
 
-  // Leaderboard: Top performing videos by views / engagement
   const leaderboard = useMemo(() => {
-    return [...rankedPublications]
-      .sort((a, b) => (b.views_count || 0) - (a.views_count || 0))
-      .slice(0, 10);
+    return [...rankedPublications].sort(
+      (a, b) => (b.views_count || 0) - (a.views_count || 0)
+    );
   }, [rankedPublications]);
 
-  // A/B Hook Type Comparison: PRICE_FIRST vs LOCATION_FIRST
   const abHookMetrics = useMemo(() => {
+    if (summary?.by_hook_type) {
+      const pf = summary.by_hook_type.PRICE_FIRST;
+      const lf = summary.by_hook_type.LOCATION_FIRST;
+      return {
+        priceFirst: {
+          count: pf?.count ?? 0,
+          avgViews: Math.round(pf?.avg_views ?? 0),
+          avgLeads: Number((pf?.avg_leads ?? 0).toFixed(1)),
+          avgNer: Number(
+            (
+              ((pf?.avg_views ?? 0) / 2200) * 0.6 +
+              Math.min(1, pf?.avg_leads ?? 0) * 0.4
+            ).toFixed(2)
+          ),
+        },
+        locationFirst: {
+          count: lf?.count ?? 0,
+          avgViews: Math.round(lf?.avg_views ?? 0),
+          avgLeads: Number((lf?.avg_leads ?? 0).toFixed(1)),
+          avgNer: Number(
+            (
+              ((lf?.avg_views ?? 0) / 2200) * 0.6 +
+              Math.min(1, lf?.avg_leads ?? 0) * 0.4
+            ).toFixed(2)
+          ),
+        },
+      };
+    }
+
     const priceFirstPubs = rankedPublications.filter(
       (p) => p.render?.hook_type === "PRICE_FIRST"
     );
@@ -515,10 +706,38 @@ export function AnalyticsClient({
       priceFirst: calcMetrics(priceFirstPubs),
       locationFirst: calcMetrics(locationFirstPubs),
     };
-  }, [rankedPublications]);
+  }, [summary, rankedPublications]);
 
-  // A/B Duration Bucket Comparison: SHORT_25_30 vs LONG_40_50
   const abDurationMetrics = useMemo(() => {
+    if (summary?.by_duration_bucket) {
+      const sh = summary.by_duration_bucket.SHORT_25_30;
+      const lg = summary.by_duration_bucket.LONG_40_50;
+      return {
+        short: {
+          count: sh?.count ?? 0,
+          avgViews: Math.round(sh?.avg_views ?? 0),
+          avgLeads: Number((sh?.avg_leads ?? 0).toFixed(1)),
+          avgNer: Number(
+            (
+              ((sh?.avg_views ?? 0) / 2200) * 0.6 +
+              Math.min(1, sh?.avg_leads ?? 0) * 0.4
+            ).toFixed(2)
+          ),
+        },
+        long: {
+          count: lg?.count ?? 0,
+          avgViews: Math.round(lg?.avg_views ?? 0),
+          avgLeads: Number((lg?.avg_leads ?? 0).toFixed(1)),
+          avgNer: Number(
+            (
+              ((lg?.avg_views ?? 0) / 2200) * 0.6 +
+              Math.min(1, lg?.avg_leads ?? 0) * 0.4
+            ).toFixed(2)
+          ),
+        },
+      };
+    }
+
     const shortPubs = rankedPublications.filter(
       (p) => p.render?.duration_bucket === "SHORT_25_30"
     );
@@ -545,56 +764,68 @@ export function AnalyticsClient({
       short: calcMetrics(shortPubs),
       long: calcMetrics(longPubs),
     };
-  }, [rankedPublications]);
+  }, [summary, rankedPublications]);
 
-  // Filtered comments stream
   const filteredComments = useMemo(() => {
     return nicheComments.filter((c) => {
       if (commentFilter === "LEADS_ONLY") {
         return c.is_intent_lead || c.buyer_lead_id !== null;
       }
-      if (commentFilter === "PRICE") {
-        return c.intent_category === "PRICE";
-      }
-      if (commentFilter === "MORTGAGE") {
-        return c.intent_category === "MORTGAGE";
-      }
-      if (commentFilter === "LOCATION") {
-        return c.intent_category === "LOCATION";
-      }
+      if (commentFilter === "PRICE") return c.intent_category === "PRICE";
+      if (commentFilter === "MORTGAGE") return c.intent_category === "MORTGAGE";
+      if (commentFilter === "LOCATION") return c.intent_category === "LOCATION";
       return true;
     });
   }, [nicheComments, commentFilter]);
 
-  // Current active niche label
   const activeNicheTab =
     NICHE_TABS.find((t) => t.id === selectedNiche) || NICHE_TABS[0];
   const currentNicheMedian =
     perNicheMedians.get(selectedNiche) ?? perNicheMedians.get("GENERAL") ?? 2200;
+  const snapshotsCount = summary?.totals.snapshots_count ?? snapshots.length;
 
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-widest text-gold-400">
-            Sosial İntellekt, Niş Reytinqi &amp; 4-Pilləli Qıf
+            Sosial İntellekt, SQL Aqreqasiya &amp; 4-Pilləli Qıf
           </p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-50 sm:text-3xl">
             Sosial Media Analitikası
           </h1>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          <div className="inline-flex items-center gap-1 rounded-xl border border-slate-800 bg-obsidian-900/90 p-1">
+            {WINDOW_DAY_OPTIONS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => {
+                  setWindowDays(d);
+                  if (isServerPaginated) {
+                    navigateWithParams({ days: String(d) }, true);
+                  }
+                }}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                  windowDays === d
+                    ? "bg-gold-500/20 text-gold-300 border border-gold-500/40"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {d} gün
+              </button>
+            ))}
+          </div>
           <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
           <span>
-            Canlı Telemetriya • {snapshots.length} Snapshot • 4 Hesab Paylanması
+            SQL Telemetriya • {snapshotsCount} Snapshot • Son {windowDays} gün
           </span>
         </div>
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 1. Account Filter Tabs (Slice 1: selectedNiche)                       */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 1. Account Filter Tabs */}
       <div className="exec-card p-3 bg-obsidian-900/90 border-slate-800/80">
         <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/60">
           <div className="flex items-center gap-2">
@@ -620,7 +851,15 @@ export function AnalyticsClient({
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setSelectedNiche(tab.id)}
+                onClick={() => {
+                  setSelectedNiche(tab.id);
+                  if (isServerPaginated) {
+                    navigateWithParams(
+                      { niche: tab.id === "ALL" ? null : tab.id },
+                      true
+                    );
+                  }
+                }}
                 className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-medium border transition-all ${
                   isSelected
                     ? tab.activeClass
@@ -643,11 +882,8 @@ export function AnalyticsClient({
         </div>
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 2. Executive Resilient ER & KPI Metric Cards (Slice 3: erMetricCards)  */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 2. Executive Resilient ER & KPI Metric Cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {/* Total Views */}
         <div className="exec-card p-4 space-y-1">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium">Toplam Baxış</span>
@@ -659,11 +895,11 @@ export function AnalyticsClient({
             {formatCompactNumber(erMetricCards.totalViews)}
           </p>
           <p className="text-[11px] text-slate-400">
-            {erMetricCards.activePubsCount} aktiv paylaşımdan ({activeNicheTab.handle})
+            {erMetricCards.activePubsCount} aktiv paylaşımdan (
+            {activeNicheTab.handle})
           </p>
         </div>
 
-        {/* Resilient Social Engagement Rate (ER%) */}
         <div className="exec-card p-4 space-y-1 border-emerald-500/30 bg-gradient-to-br from-obsidian-900 via-obsidian-900 to-emerald-950/20">
           <div className="flex items-center justify-between text-emerald-400">
             <span className="text-xs font-semibold">İştirak Nisbəti (ER%)</span>
@@ -689,7 +925,6 @@ export function AnalyticsClient({
           </p>
         </div>
 
-        {/* Total Social Reactions */}
         <div className="exec-card p-4 space-y-1">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium">Sosial Reaksiyalar</span>
@@ -707,7 +942,6 @@ export function AnalyticsClient({
           </p>
         </div>
 
-        {/* Closed Won Commissions / Inbound Leads */}
         <div className="exec-card p-4 space-y-1 border-gold-500/30 bg-gradient-to-br from-obsidian-900 via-obsidian-900 to-gold-950/20">
           <div className="flex items-center justify-between text-gold-400">
             <span className="text-xs font-semibold">Satış &amp; Komissiya</span>
@@ -724,14 +958,12 @@ export function AnalyticsClient({
             </span>
           </div>
           <p className="text-[11px] text-slate-400">
-            {filteredLeads.length} lead-dən tamamlanmış sövdələşmələr
+            {funnelBreakdown.stage3.value} lead-dən tamamlanmış sövdələşmələr
           </p>
         </div>
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 3. Real 4-Tier Pipeline Funnel (Slice 4: funnelBreakdown)            */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 3. Real 4-Tier Pipeline Funnel */}
       <div className="exec-card p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-800/80 pb-3">
           <div className="flex items-center gap-2">
@@ -740,10 +972,11 @@ export function AnalyticsClient({
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-100">
-                4-Pilləli Sosial Qıf &amp; Real Atribusiya (Mobile Pipeline Funnel)
+                4-Pilləli Sosial Qıf &amp; Real Atribusiya
               </h2>
               <p className="text-[11px] text-slate-400">
-                Video Baxış $\rightarrow$ Sosial Reaksiyalar $\rightarrow$ WhatsApp / Bio Leadləri $\rightarrow$ Fiziki Baxış və Satış
+                Video Baxış → Sosial Reaksiyalar → WhatsApp / Bio Leadləri →
+                Fiziki Baxış və Satış
               </p>
             </div>
           </div>
@@ -753,7 +986,6 @@ export function AnalyticsClient({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Tier 1: Total Views */}
           <div className="relative rounded-2xl border border-sky-500/30 bg-gradient-to-b from-sky-950/20 to-obsidian-950 p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="rounded-md bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-300 border border-sky-500/30">
@@ -772,13 +1004,8 @@ export function AnalyticsClient({
             <p className="text-[11px] text-slate-400 leading-tight">
               {funnelBreakdown.stage1.subtitle}
             </p>
-            <div className="pt-2 border-t border-slate-800/80 flex items-center gap-1 text-[10px] text-sky-400 font-mono">
-              <Eye className="h-3 w-3" />
-              <span>Bütün paylaşılan videolar</span>
-            </div>
           </div>
 
-          {/* Tier 2: Engagement & Intent Comments */}
           <div className="relative rounded-2xl border border-violet-500/30 bg-gradient-to-b from-violet-950/20 to-obsidian-950 p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="rounded-md bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300 border border-violet-500/30">
@@ -803,7 +1030,6 @@ export function AnalyticsClient({
             </div>
           </div>
 
-          {/* Tier 3: Inbound WhatsApp / Bio Leads */}
           <div className="relative rounded-2xl border border-emerald-500/30 bg-gradient-to-b from-emerald-950/20 to-obsidian-950 p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-500/30">
@@ -828,7 +1054,6 @@ export function AnalyticsClient({
             </div>
           </div>
 
-          {/* Tier 4: Showings & Won Closed Deals */}
           <div className="relative rounded-2xl border border-gold-500/40 bg-gradient-to-b from-gold-950/30 to-obsidian-950 p-4 space-y-2 shadow-lg shadow-gold-950/20">
             <div className="flex items-center justify-between">
               <span className="rounded-md bg-gold-500/20 px-2 py-0.5 text-[10px] font-bold text-gold-300 border border-gold-500/40">
@@ -858,9 +1083,7 @@ export function AnalyticsClient({
         </div>
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 4. A/B Performance Summary & NER Niche Medians                       */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 4. A/B Performance Summary & NER Niche Medians */}
       <div className="exec-card p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-800/80 pb-3">
           <div className="flex items-center gap-2">
@@ -872,12 +1095,12 @@ export function AnalyticsClient({
                 A/B Test Nəticələri &amp; Niş-Seqmentli NER Analizi
               </h2>
               <p className="text-[11px] text-slate-400">
-                Qarmaq növü və video xronometrajının auditoriya konversiyasına təsiri
+                Qarmaq növü və video xronometrajının auditoriya konversiyasına
+                təsiri
               </p>
             </div>
           </div>
 
-          {/* Formula Tooltip Button */}
           <button
             type="button"
             onClick={() => setShowFormulaTooltip(!showFormulaTooltip)}
@@ -888,33 +1111,20 @@ export function AnalyticsClient({
           </button>
         </div>
 
-        {/* Formula Explanation Callout */}
         {showFormulaTooltip && (
-          <div className="rounded-xl border border-gold-500/30 bg-gold-500/5 p-4 text-xs space-y-2 animate-in fade-in duration-150">
+          <div className="rounded-xl border border-gold-500/30 bg-gold-500/5 p-4 text-xs space-y-2">
             <div className="flex items-center gap-2 font-bold text-gold-300">
               <HelpCircle className="h-4 w-4" />
-              <span>Ədalətli Niş-Seqmentli NER (Normalized Engagement Ratio) Düsturu</span>
+              <span>Ədalətli Niş-Seqmentli NER Düsturu</span>
             </div>
             <div className="font-mono bg-obsidian-950/80 p-2.5 rounded-lg border border-slate-800 text-slate-200">
-              NER = (Views_48h / Niche_Median_Views) × 0.6 + (Leads_48h / max(1, Comments_48h)) × 0.4
+              NER = (Views_48h / Niche_Median_Views) × 0.6 + (Leads_48h /
+              max(1, Comments_48h)) × 0.4
             </div>
-            <p className="text-slate-300 leading-relaxed">
-              Əvvəlki qlobal median (bütün kanallar üzrə 10,000+ baxış) lüks mənzilləri ədalətsiz cəzalandırırdı. İndi hər kanal öz fərdi niş medianı ilə qiymətləndirilir:
-              <br />
-              • <strong className="text-amber-300">LUXURY (@bakuestate.premium):</strong> Baza medianı 800 baxış (yüksək marjalı lüks əmlaklar).
-              <br />
-              • <strong className="text-emerald-300">AFFORDABLE (@baku.serfeli.evler):</strong> Baza medianı 4,500 baxış (orta və büdcəli evlər).
-              <br />
-              • <strong className="text-sky-300">GENERAL (@bakuestate.official):</strong> Baza medianı 2,200 baxış (standart portfel).
-              <br />
-              • <strong className="text-rose-300">TIKTOK (@baku_emlak_ai):</strong> Baza medianı 12,000 baxış (viral dinamika).
-            </p>
           </div>
         )}
 
-        {/* 2-Column Comparison Grid */}
         <div className="grid gap-4 md:grid-cols-2">
-          {/* Hook Type: Price-First vs Location-First */}
           <div className="rounded-xl border border-slate-800 bg-obsidian-950/60 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-300">
@@ -942,12 +1152,6 @@ export function AnalyticsClient({
                     {abHookMetrics.priceFirst.avgLeads}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>NER Reytinq:</span>
-                  <span className="font-mono font-bold text-gold-300">
-                    {abHookMetrics.priceFirst.avgNer}
-                  </span>
-                </div>
               </div>
 
               <div className="rounded-lg border border-slate-800/90 bg-obsidian-900/90 p-3 space-y-1">
@@ -955,7 +1159,8 @@ export function AnalyticsClient({
                   Location-First (Məkan)
                 </p>
                 <p className="text-lg font-bold text-slate-100">
-                  {formatCompactNumber(abHookMetrics.locationFirst.avgViews)} baxış
+                  {formatCompactNumber(abHookMetrics.locationFirst.avgViews)}{" "}
+                  baxış
                 </p>
                 <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-800">
                   <span>Ort. Müştəri:</span>
@@ -963,17 +1168,10 @@ export function AnalyticsClient({
                     {abHookMetrics.locationFirst.avgLeads}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>NER Reytinq:</span>
-                  <span className="font-mono font-bold text-sky-300">
-                    {abHookMetrics.locationFirst.avgNer}
-                  </span>
-                </div>
               </div>
             </div>
           </div>
 
-          {/* Duration Bucket: 25-30s vs 40-50s */}
           <div className="rounded-xl border border-slate-800 bg-obsidian-950/60 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-300">
@@ -1001,12 +1199,6 @@ export function AnalyticsClient({
                     {abDurationMetrics.short.avgLeads}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>NER Reytinq:</span>
-                  <span className="font-mono font-bold text-emerald-300">
-                    {abDurationMetrics.short.avgNer}
-                  </span>
-                </div>
               </div>
 
               <div className="rounded-lg border border-slate-800/90 bg-obsidian-900/90 p-3 space-y-1">
@@ -1022,21 +1214,13 @@ export function AnalyticsClient({
                     {abDurationMetrics.long.avgLeads}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>NER Reytinq:</span>
-                  <span className="font-mono font-bold text-violet-300">
-                    {abDurationMetrics.long.avgNer}
-                  </span>
-                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 5. Top-Performing Video Leaderboard (Filtered by Niche)              */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 5. Top-Performing Video Leaderboard + Server Pagination */}
       <div className="exec-card p-5 space-y-4">
         <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
           <div className="flex items-center gap-2">
@@ -1045,27 +1229,28 @@ export function AnalyticsClient({
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-100">
-                Top Video Reytinqi (Leaderboard - {activeNicheTab.label})
+                Top Video Reytinqi ({activeNicheTab.label})
               </h2>
               <p className="text-[11px] text-slate-400">
-                Ən çox baxış və müştəri sorğusu gətirən paylaşımlar (Fərdi Niş NER əsasında)
+                Ən çox baxış və müştəri sorğusu gətirən paylaşımlar
               </p>
             </div>
           </div>
           <span className="text-xs text-slate-400">
-            Top {leaderboard.length} video
+            Cəmi {totalCount} paylaşım
           </span>
         </div>
 
         {leaderboard.length === 0 ? (
           <div className="py-10 text-center text-slate-500 text-xs">
-            Seçilmiş niş üzrə hələlik telemetriya toplanmış video paylaşımı yoxdur.
+            Seçilmiş niş üzrə hələlik telemetriya toplanmış video paylaşımı
+            yoxdur.
           </div>
         ) : (
           <div className="divide-y divide-slate-800/60">
             {leaderboard.map((item, index) => {
               const thumb = item.listing?.photo_urls?.[0];
-              const rank = index + 1;
+              const rank = (currentPage - 1) * pageSize + index + 1;
               const medalColor =
                 rank === 1
                   ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
@@ -1077,6 +1262,8 @@ export function AnalyticsClient({
 
               const itemNiche =
                 item.channel_niche || pubNicheMap.get(item.id) || "GENERAL";
+              const listingSlug =
+                item.listing?.bina_id || item.listing?.id || item.listing_id;
 
               return (
                 <div
@@ -1084,14 +1271,12 @@ export function AnalyticsClient({
                   className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-3 hover:bg-obsidian-850/40 px-2 rounded-xl transition"
                 >
                   <div className="flex items-center gap-3">
-                    {/* Rank Badge */}
                     <span
                       className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border font-mono text-xs font-bold ${medalColor}`}
                     >
                       {rank}
                     </span>
 
-                    {/* Thumbnail */}
                     <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-800 bg-obsidian-950">
                       {thumb ? (
                         <img
@@ -1106,15 +1291,16 @@ export function AnalyticsClient({
                       )}
                     </div>
 
-                    {/* Listing Info */}
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
-                        {item.listing?.bina_id && (
+                        {listingSlug && (
                           <Link
-                            href={`/listings/${item.listing.bina_id}`}
+                            href={`/listings/${listingSlug}`}
                             className="font-mono text-xs font-bold text-gold-300 hover:underline"
                           >
-                            #{item.listing.bina_id}
+                            {item.listing?.bina_id
+                              ? `#${item.listing.bina_id}`
+                              : "OFF-MARKET"}
                           </Link>
                         )}
                         <span className="text-xs font-semibold text-slate-100 line-clamp-1">
@@ -1137,7 +1323,11 @@ export function AnalyticsClient({
                         )}
                         {item.render?.duration_bucket && (
                           <span className="rounded bg-obsidian-950 px-1.5 py-0.5 text-[10px] text-sky-400 border border-slate-800">
-                            {DURATION_BUCKET_LABELS[item.render.duration_bucket]}
+                            {
+                              DURATION_BUCKET_LABELS[
+                                item.render.duration_bucket
+                              ]
+                            }
                           </span>
                         )}
                         <span className="rounded bg-obsidian-950 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 border border-slate-800">
@@ -1147,7 +1337,6 @@ export function AnalyticsClient({
                     </div>
                   </div>
 
-                  {/* Metrics & Actions */}
                   <div className="flex items-center gap-4 sm:gap-6 self-end sm:self-center">
                     <div className="text-right">
                       <p className="text-xs font-bold text-slate-100 flex items-center gap-1 justify-end">
@@ -1171,7 +1360,10 @@ export function AnalyticsClient({
                         <span>{item.leads_count || 0} lead</span>
                       </p>
                       <p className="text-[10px] text-slate-400">
-                        NER: <span className="font-bold text-gold-300">{item.ner_score ?? "—"}</span>
+                        NER:{" "}
+                        <span className="font-bold text-gold-300">
+                          {item.ner_score ?? "—"}
+                        </span>
                       </p>
                     </div>
 
@@ -1192,11 +1384,50 @@ export function AnalyticsClient({
             })}
           </div>
         )}
+
+        {isServerPaginated && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3 text-xs">
+            <span className="text-slate-400">
+              <strong className="text-slate-100">
+                {`Səhifə ${currentPage} / ${totalPages}`}
+              </strong>{" "}
+              • Cəmi {`${totalCount} paylaşım`}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() =>
+                  navigateWithParams(
+                    { page: String(Math.max(1, currentPage - 1)) },
+                    false
+                  )
+                }
+                className="exec-btn-secondary py-1.5 px-3 text-xs disabled:opacity-40"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                <span>Əvvəlki</span>
+              </button>
+              <button
+                type="button"
+                disabled={!hasNextPage && currentPage >= totalPages}
+                onClick={() =>
+                  navigateWithParams(
+                    { page: String(Math.min(totalPages, currentPage + 1)) },
+                    false
+                  )
+                }
+                className="exec-btn-secondary py-1.5 px-3 text-xs disabled:opacity-40"
+              >
+                <span>Növbəti</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* 6. Live Social Comments Stream (Filtered by Niche & Intent)          */}
-      {/* -------------------------------------------------------------------- */}
+      {/* 6. Live Social Comments Stream */}
       <div className="exec-card p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800/80 pb-3">
           <div className="flex items-center gap-2">
@@ -1205,15 +1436,15 @@ export function AnalyticsClient({
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-100">
-                Canlı Sosial Şərhlər &amp; Alıcı Sorğuları Stream-i ({activeNicheTab.label})
+                Canlı Sosial Şərhlər &amp; Alıcı Sorğuları (
+                {activeNicheTab.label})
               </h2>
               <p className="text-[11px] text-slate-400">
-                Instagram Reels və TikTok-dan toplanan real vaxt şərhləri və süni intellekt təsnifatı
+                Cari səhifədəki paylaşımlar üzrə real vaxt şərhləri
               </p>
             </div>
           </div>
 
-          {/* Comment Stream Filter Tabs */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
@@ -1299,14 +1530,10 @@ export function AnalyticsClient({
                       <span className="text-[11px] text-slate-500">
                         {formatRelativeAz(comment.created_at)}
                       </span>
-
-                      {/* Intent Classification Tag */}
                       <StatusBadge
                         label={categoryMeta.label}
                         tone={categoryMeta.tone}
                       />
-
-                      {/* Captured Lead Indicator */}
                       {(comment.is_intent_lead || comment.buyer_lead_id) && (
                         <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-950/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
                           <Sparkles className="h-3 w-3" />
@@ -1315,22 +1542,22 @@ export function AnalyticsClient({
                       )}
                     </div>
 
-                    {comment.listing?.bina_id && (
+                    {comment.listing && (
                       <Link
-                        href={`/listings/${comment.listing.bina_id}`}
+                        href={`/listings/${comment.listing.bina_id || comment.listing.id}`}
                         className="text-[11px] font-mono text-gold-400 hover:underline"
                       >
-                        Elan #{comment.listing.bina_id}
+                        {comment.listing.bina_id
+                          ? `Elan #${comment.listing.bina_id}`
+                          : "OFF-MARKET"}
                       </Link>
                     )}
                   </div>
 
-                  {/* Comment Text */}
                   <p className="text-xs text-slate-100 bg-obsidian-900/90 p-2.5 rounded-lg border border-slate-850">
                     &ldquo;{comment.comment_text}&rdquo;
                   </p>
 
-                  {/* Suggested AI Reply & Action Buttons */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-slate-800/60">
                     {comment.suggested_reply ? (
                       <p className="text-[11px] text-slate-400 line-clamp-1 italic">

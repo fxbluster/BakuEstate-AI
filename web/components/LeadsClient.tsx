@@ -2,17 +2,22 @@
 
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   AlertOctagon,
   Bot,
   Building2,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
   DollarSign,
+  Download,
   Link2,
   MessageCircle,
   Plus,
   Save,
   Search,
+  UserCheck,
   UserPlus,
   Users,
   X,
@@ -31,17 +36,20 @@ import {
   SOURCE_AVAILABILITY_META,
 } from "@/lib/format";
 import type {
+  AgencyMember,
+  AgencyRole,
   BuyerLeadWithListings,
   LeadListingJoin,
   LeadListingRelation,
   LeadSourceChannel,
   LeadStage,
+  PaginatedResult,
 } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 export interface ListingPickerOption {
   id: string;
-  bina_id: string;
+  bina_id: string | null;
   title: string | null;
   location: string | null;
   price_azn_normalized: number;
@@ -51,9 +59,58 @@ export interface ListingPickerOption {
   area: number | null;
 }
 
+export interface AgencyCrmKpis {
+  ok?: boolean;
+  agency_id?: string;
+  role_scope?: string;
+  broker_split_pct?: number;
+  total_leads: number;
+  active_leads?: number;
+  won_leads?: number;
+  lost_leads?: number;
+  overdue_followups?: number;
+  open_tasks?: number;
+  stage_counts?: Partial<Record<LeadStage, number>>;
+  expected_commission_total_azn: number;
+  expected_broker_commission_azn: number;
+  expected_agency_commission_azn: number;
+  actual_commission_total_azn: number;
+  actual_broker_commission_azn: number;
+  actual_agency_commission_azn: number;
+  by_broker?: Array<{
+    user_id: string;
+    display_name: string;
+    commission_split_pct: number;
+    lead_count: number;
+    won_count: number;
+    expected_total_azn: number;
+    expected_broker_azn: number;
+    expected_agency_azn: number;
+    actual_total_azn: number;
+    actual_broker_azn: number;
+    actual_agency_azn: number;
+  }>;
+  generated_at?: string;
+}
+
+export interface LeadsFilterState {
+  search?: string;
+  stage?: string;
+  agent?: string;
+}
+
+type LeadWithAgent = BuyerLeadWithListings & {
+  assigned_agent_id?: string | null;
+};
+
 interface LeadsClientProps {
   initialLeads: BuyerLeadWithListings[];
   listingOptions: ListingPickerOption[];
+  pagination?: PaginatedResult<BuyerLeadWithListings>;
+  kpis?: AgencyCrmKpis | null;
+  agencyMembers?: AgencyMember[];
+  memberRole?: AgencyRole;
+  initialFilters?: LeadsFilterState;
 }
 
 const STAGE_ORDER: LeadStage[] = [
@@ -80,6 +137,14 @@ function defaultFollowupLocalBaku(): string {
   return `${new Date(bakuMs).toISOString().slice(0, 10)}T11:00`;
 }
 
+function defaultExportRange(): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10);
+  const fromDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+  const from = fromDate.toISOString().slice(0, 10);
+  return { from, to };
+}
+
 function isListingUnavailable(
   item: NonNullable<LeadListingJoin["listings"]>
 ): boolean {
@@ -93,11 +158,24 @@ function isListingUnavailable(
 export function LeadsClient({
   initialLeads,
   listingOptions,
+  pagination,
+  kpis = null,
+  agencyMembers = [],
+  memberRole = "BROKER",
+  initialFilters,
 }: LeadsClientProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const { openAgentHub } = useCopilot();
-  const [leads, setLeads] = useState<BuyerLeadWithListings[]>(initialLeads);
 
-  // Sync leads to localStorage cache for Tier 0 0ms Cockpit HUD rendering
+  const [leads, setLeads] = useState<LeadWithAgent[]>(
+    initialLeads as LeadWithAgent[]
+  );
+
+  useEffect(() => {
+    setLeads(initialLeads as LeadWithAgent[]);
+  }, [initialLeads]);
+
   useEffect(() => {
     if (typeof window !== "undefined" && leads && leads.length > 0) {
       try {
@@ -111,8 +189,14 @@ export function LeadsClient({
     }
   }, [leads]);
 
-  const [stageFilter, setStageFilter] = useState<LeadStage | "ALL">("ALL");
-  const [search, setSearch] = useState("");
+  const [stageFilter, setStageFilter] = useState<LeadStage | "ALL">(
+    (initialFilters?.stage as LeadStage | "ALL") || "ALL"
+  );
+  const [search, setSearch] = useState(initialFilters?.search ?? "");
+  const [agentFilter, setAgentFilter] = useState(
+    initialFilters?.agent ?? "ALL"
+  );
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: "ok" | "err";
     text: string;
@@ -135,9 +219,7 @@ export function LeadsClient({
   const [notes, setNotes] = useState("");
 
   // Inline Commission / Outcome Editor Modal
-  const [editingLead, setEditingLead] = useState<BuyerLeadWithListings | null>(
-    null
-  );
+  const [editingLead, setEditingLead] = useState<LeadWithAgent | null>(null);
   const [editStage, setEditStage] = useState<LeadStage>("NEW_INQUIRY");
   const [editExpected, setEditExpected] = useState("");
   const [editActual, setEditActual] = useState("");
@@ -150,16 +232,71 @@ export function LeadsClient({
   const [altRelation, setAltRelation] =
     useState<LeadListingRelation>("PITCHED");
 
+  const isServerPaginated = Boolean(pagination);
+  const currentPage = pagination?.page ?? 1;
+  const pageSize = pagination?.pageSize ?? 24;
+  const totalCount = pagination?.totalCount ?? kpis?.total_leads ?? leads.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const hasNextPage = pagination?.hasNextPage ?? false;
+
+  const assignableBrokers = useMemo(
+    () =>
+      agencyMembers.filter(
+        (m) => m.is_active && (m.role === "BROKER" || m.role === "ADMIN")
+      ),
+    [agencyMembers]
+  );
+
+  function navigateWithParams(
+    updates: Record<string, string | null>,
+    resetPage: boolean
+  ) {
+    const next = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    for (const [k, v] of Object.entries(updates)) {
+      if (!v || v === "ALL") {
+        next.delete(k);
+      } else {
+        next.set(k, v);
+      }
+    }
+    if (resetPage) {
+      next.set("page", "1");
+    }
+    const qs = next.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
+  }
+
   const stageCounts = useMemo(() => {
+    if (kpis?.stage_counts) {
+      const map: Record<string, number> = { ALL: kpis.total_leads };
+      for (const s of STAGE_ORDER) {
+        map[s] = Number(kpis.stage_counts[s] ?? 0);
+      }
+      return map;
+    }
     const map: Record<string, number> = { ALL: leads.length };
     for (const s of STAGE_ORDER) map[s] = 0;
     for (const l of leads) {
       map[l.stage] = (map[l.stage] ?? 0) + 1;
     }
     return map;
-  }, [leads]);
+  }, [kpis, leads]);
 
   const commissionTotals = useMemo(() => {
+    if (kpis) {
+      return {
+        totalLeads: kpis.total_leads,
+        expected: kpis.expected_commission_total_azn,
+        actual: kpis.actual_commission_total_azn,
+        actualBroker: kpis.actual_broker_commission_azn,
+        actualAgency: kpis.actual_agency_commission_azn,
+        expectedBroker: kpis.expected_broker_commission_azn,
+        expectedAgency: kpis.expected_agency_commission_azn,
+      };
+    }
+
     let expected = 0;
     let actual = 0;
     for (const l of leads) {
@@ -170,13 +307,25 @@ export function LeadsClient({
         actual += Number(l.actual_commission_azn ?? 0);
       }
     }
-    return { expected, actual };
-  }, [leads]);
+    return {
+      totalLeads: leads.length,
+      expected,
+      actual,
+      actualBroker: null as number | null,
+      actualAgency: null as number | null,
+      expectedBroker: null as number | null,
+      expectedAgency: null as number | null,
+    };
+  }, [kpis, leads]);
 
   const filteredLeads = useMemo(() => {
+    if (isServerPaginated) return leads;
+
     const q = search.trim().toLowerCase();
     return leads.filter((lead) => {
       if (stageFilter !== "ALL" && lead.stage !== stageFilter) return false;
+      if (agentFilter !== "ALL" && lead.assigned_agent_id !== agentFilter)
+        return false;
       if (q) {
         const hay = [
           lead.client_name,
@@ -194,7 +343,93 @@ export function LeadsClient({
       }
       return true;
     });
-  }, [leads, stageFilter, search]);
+  }, [isServerPaginated, leads, stageFilter, agentFilter, search]);
+
+  async function handleExportCommissionsCsv() {
+    setExportingCsv(true);
+    setFeedback(null);
+    try {
+      const { from, to } = defaultExportRange();
+      const headers: Record<string, string> = {};
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers.Authorization = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        // cookie fallback
+      }
+
+      const res = await fetch(
+        `/api/export/commissions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+        {
+          method: "GET",
+          headers,
+        }
+      );
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(
+          errData?.error || `CSV ixrac xətası (HTTP ${res.status})`
+        );
+      }
+
+      const blob = await res.blob();
+      if (typeof window !== "undefined" && typeof URL.createObjectURL === "function") {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `bakuestate-commissions-${from}-${to}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      setFeedback({
+        type: "ok",
+        text: `Komissiya hesabatı (${from} – ${to}) CSV formatında yükləndi.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: "err",
+        text: err instanceof Error ? err.message : "CSV ixrac xətası",
+      });
+    } finally {
+      setExportingCsv(false);
+    }
+  }
+
+  async function handleAssignBroker(lead: LeadWithAgent, nextAgentId: string) {
+    const supabase = createClient();
+    const assignedValue = nextAgentId || null;
+    const { error } = await supabase
+      .from("buyer_leads")
+      .update({ assigned_agent_id: assignedValue })
+      .eq("id", lead.id);
+
+    if (error) {
+      setFeedback({
+        type: "err",
+        text: `Broker təhkimi xətası: ${error.message}`,
+      });
+      return;
+    }
+
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === lead.id ? { ...l, assigned_agent_id: assignedValue } : l
+      )
+    );
+    setFeedback({
+      type: "ok",
+      text: `${lead.client_name} üçün məsul broker yeniləndi.`,
+    });
+  }
 
   async function handleQuickAdd(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -205,7 +440,8 @@ export function LeadsClient({
 
     try {
       const contactTrim = phoneOrHandle.trim();
-      const isHandle = contactTrim.startsWith("@") || /[a-zA-Z]/.test(contactTrim);
+      const isHandle =
+        contactTrim.startsWith("@") || /[a-zA-Z]/.test(contactTrim);
       const phoneNormalized =
         contactTrim && !isHandle ? normalizePhoneInput(contactTrim) : null;
       const socialHandle = contactTrim && isHandle ? contactTrim : null;
@@ -272,7 +508,7 @@ export function LeadsClient({
               updated_at: new Date().toISOString(),
               listings: {
                 id: opt.id,
-                bina_id: opt.bina_id,
+                bina_id: opt.bina_id || "",
                 title: opt.title,
                 location: opt.location,
                 price_azn_normalized: opt.price_azn_normalized,
@@ -291,8 +527,8 @@ export function LeadsClient({
         }
       }
 
-      const fullLead: BuyerLeadWithListings = {
-        ...(createdLead as BuyerLeadWithListings),
+      const fullLead: LeadWithAgent = {
+        ...(createdLead as LeadWithAgent),
         lead_listings: linkedJoin,
       };
       setLeads((prev) => [fullLead, ...prev]);
@@ -318,7 +554,10 @@ export function LeadsClient({
     }
   }
 
-  async function handleQuickStageChange(lead: BuyerLeadWithListings, nextStage: LeadStage) {
+  async function handleQuickStageChange(
+    lead: LeadWithAgent,
+    nextStage: LeadStage
+  ) {
     const supabase = createClient();
     const { error } = await supabase
       .from("buyer_leads")
@@ -333,7 +572,7 @@ export function LeadsClient({
     );
   }
 
-  function openEditModal(lead: BuyerLeadWithListings) {
+  function openEditModal(lead: LeadWithAgent) {
     setEditingLead(lead);
     setEditStage(lead.stage);
     setEditExpected(
@@ -415,7 +654,7 @@ export function LeadsClient({
           updated_at: new Date().toISOString(),
           listings: {
             id: opt.id,
-            bina_id: opt.bina_id,
+            bina_id: opt.bina_id || "",
             title: opt.title,
             location: opt.location,
             price_azn_normalized: opt.price_azn_normalized,
@@ -476,34 +715,81 @@ export function LeadsClient({
             Müştəri CRM &amp; Follow-Up
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={() => setAddOpen(true)}
-          className="exec-btn-primary"
-        >
-          <UserPlus className="h-4 w-4" />
-          <span>10-San Müştəri Əlavə Et</span>
-        </button>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {memberRole !== "SMM" && (
+            <button
+              type="button"
+              disabled={exportingCsv}
+              onClick={handleExportCommissionsCsv}
+              className="exec-btn-secondary text-xs"
+            >
+              <Download className="h-3.5 w-3.5 text-gold-400" />
+              <span>
+                {exportingCsv ? "Yüklənir..." : "Komissiya CSV İxrac"}
+              </span>
+            </button>
+          )}
+
+          {memberRole !== "SMM" && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="exec-btn-primary"
+            >
+              <UserPlus className="h-4 w-4" />
+              <span>10-San Müştəri Əlavə Et</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Commission KPI Strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {/* Commission KPI Strip (SQL get_agency_crm_kpis) */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="exec-card p-4">
           <p className="text-xs text-slate-400">Ümumi Müştəri</p>
           <p className="mt-1.5 text-2xl font-bold text-slate-50">
-            {leads.length}
+            {commissionTotals.totalLeads}
           </p>
+          {kpis && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              {kpis.active_leads ?? 0} aktiv • {kpis.won_leads ?? 0} bağlı
+            </p>
+          )}
         </div>
         <div className="exec-card p-4">
           <p className="text-xs text-slate-400">Gözlənilən Komissiya (Aktiv)</p>
           <p className="mt-1.5 text-2xl font-bold text-gold-300">
             {formatAzn(commissionTotals.expected)}
           </p>
+          {commissionTotals.expectedBroker !== null && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Broker: {formatAzn(commissionTotals.expectedBroker)} • Agentlik:{" "}
+              {formatAzn(commissionTotals.expectedAgency)}
+            </p>
+          )}
         </div>
-        <div className="exec-card p-4 col-span-2 sm:col-span-1">
-          <p className="text-xs text-slate-400">Qazanılmış Komissiya (Bağlı)</p>
+        <div className="exec-card p-4">
+          <p className="text-xs text-slate-400">
+            Qazanılmış Komissiya (Bağlı)
+          </p>
           <p className="mt-1.5 text-2xl font-bold text-emerald-300">
             {formatAzn(commissionTotals.actual)}
+          </p>
+          {commissionTotals.actualBroker !== null && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Broker: {formatAzn(commissionTotals.actualBroker)} • Agentlik:{" "}
+              {formatAzn(commissionTotals.actualAgency)}
+            </p>
+          )}
+        </div>
+        <div className="exec-card p-4">
+          <p className="text-xs text-slate-400">Gecikmiş / Açıq Follow-Up</p>
+          <p className="mt-1.5 text-2xl font-bold text-amber-300">
+            {kpis ? kpis.overdue_followups ?? 0 : 0}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {kpis ? `${kpis.open_tasks ?? 0} açıq tapşırıq` : "SQL KPI"}
           </p>
         </div>
       </div>
@@ -527,23 +813,64 @@ export function LeadsClient({
         </div>
       )}
 
-      {/* Stage Funnel Filter Strip + Search */}
+      {/* Stage Funnel Filter Strip + Search + Broker Filter */}
       <div className="exec-card p-4 space-y-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Müştəri adı, telefon, @handle və ya bağlı bina_id axtar..."
-            className="exec-input pl-10"
-          />
-        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (isServerPaginated) {
+              navigateWithParams({ search: search.trim() || null }, true);
+            }
+          }}
+          className="flex flex-col gap-2.5 sm:flex-row sm:items-center"
+        >
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Müştəri adı, telefon, @handle və ya bağlı bina_id axtar..."
+              className="exec-input pl-10"
+            />
+          </div>
+
+          {assignableBrokers.length > 0 && memberRole === "ADMIN" && (
+            <select
+              aria-label="Broker filtri"
+              value={agentFilter}
+              onChange={(e) => {
+                const nextAgent = e.target.value;
+                setAgentFilter(nextAgent);
+                if (isServerPaginated) {
+                  navigateWithParams({ agent: nextAgent }, true);
+                }
+              }}
+              className="exec-select text-xs min-w-[180px]"
+            >
+              <option value="ALL">Bütün Brokerlər</option>
+              {assignableBrokers.map((b) => (
+                <option key={b.user_id} value={b.user_id}>
+                  {b.display_name} ({b.commission_split_pct}%)
+                </option>
+              ))}
+            </select>
+          )}
+
+          {isServerPaginated && (
+            <button type="submit" className="exec-btn-secondary text-xs py-2">
+              Axtar
+            </button>
+          )}
+        </form>
 
         <div className="flex flex-wrap gap-1.5">
           <button
             type="button"
-            onClick={() => setStageFilter("ALL")}
+            onClick={() => {
+              setStageFilter("ALL");
+              if (isServerPaginated) navigateWithParams({ stage: null }, true);
+            }}
             className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
               stageFilter === "ALL"
                 ? "border-gold-500/60 bg-gold-500/15 text-gold-300"
@@ -556,7 +883,11 @@ export function LeadsClient({
             <button
               key={stage}
               type="button"
-              onClick={() => setStageFilter(stage)}
+              onClick={() => {
+                setStageFilter(stage);
+                if (isServerPaginated)
+                  navigateWithParams({ stage }, true);
+              }}
               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                 stageFilter === stage
                   ? "border-gold-500/60 bg-gold-500/15 text-gold-300"
@@ -594,7 +925,6 @@ export function LeadsClient({
 
             return (
               <div key={lead.id} className="exec-card p-5 space-y-4">
-                {/* RED ALERT BANNER if any linked listing is OWNER_SOLD or REMOVED_ON_BINA */}
                 {soldLinked.length > 0 && (
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-rose-500/60 bg-rose-600/20 px-4 py-3 text-xs text-rose-100">
                     <div className="flex items-start gap-2.5">
@@ -605,7 +935,11 @@ export function LeadsClient({
                         </p>
                         <p className="mt-0.5 text-rose-200/90">
                           {soldLinked
-                            .map((s) => `#${s.listings?.bina_id}`)
+                            .map((s) =>
+                              s.listings?.bina_id
+                                ? `#${s.listings.bina_id}`
+                                : "OFF-MARKET"
+                            )
                             .join(", ")}{" "}
                           aktual deyil — müştəriyə dərhal alternativ mənzil
                           təklif edin.
@@ -665,8 +999,29 @@ export function LeadsClient({
                     </div>
                   </div>
 
-                  {/* Quick Stage & Action Controls */}
+                  {/* Quick Stage, Broker Assignment & Action Controls */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {assignableBrokers.length > 0 && memberRole === "ADMIN" && (
+                      <div className="inline-flex items-center gap-1">
+                        <UserCheck className="h-3.5 w-3.5 text-gold-400" />
+                        <select
+                          aria-label={`Məsul Broker — ${lead.client_name}`}
+                          value={lead.assigned_agent_id ?? ""}
+                          onChange={(e) =>
+                            handleAssignBroker(lead, e.target.value)
+                          }
+                          className="exec-select py-1.5 text-xs"
+                        >
+                          <option value="">Təhkim edilməyib</option>
+                          {assignableBrokers.map((b) => (
+                            <option key={b.user_id} value={b.user_id}>
+                              {b.display_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
                     <select
                       aria-label="Mərhələ"
                       value={lead.stage}
@@ -782,10 +1137,11 @@ export function LeadsClient({
                         const l = ll.listings;
                         if (!l) return null;
                         const dead = isListingUnavailable(l);
+                        const slug = l.bina_id || l.id;
                         return (
                           <Link
                             key={`${ll.lead_id}-${ll.listing_id}`}
-                            href={`/listings/${l.bina_id}`}
+                            href={`/listings/${slug}`}
                             className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs transition ${
                               dead
                                 ? "border-rose-500/50 bg-rose-950/30 hover:border-rose-400"
@@ -794,7 +1150,8 @@ export function LeadsClient({
                           >
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-100 truncate">
-                                #{l.bina_id} • {l.title || l.location || "Elan"}
+                                {l.bina_id ? `#${l.bina_id}` : "OFF-MARKET"} •{" "}
+                                {l.title || l.location || "Elan"}
                               </p>
                               <p className="text-[11px] text-slate-400">
                                 {formatAzn(l.price_azn_normalized)} •{" "}
@@ -820,6 +1177,48 @@ export function LeadsClient({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Server-Side Pagination Controls */}
+      {isServerPaginated && (
+        <div className="exec-card flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs">
+          <span className="text-slate-400">
+            <strong className="text-slate-100">
+              {`Səhifə ${currentPage} / ${totalPages}`}
+            </strong>{" "}
+            • Cəmi {`${totalCount} müştəri`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={currentPage <= 1}
+              onClick={() =>
+                navigateWithParams(
+                  { page: String(Math.max(1, currentPage - 1)) },
+                  false
+                )
+              }
+              className="exec-btn-secondary py-1.5 px-3 text-xs disabled:opacity-40"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              <span>Əvvəlki</span>
+            </button>
+            <button
+              type="button"
+              disabled={!hasNextPage && currentPage >= totalPages}
+              onClick={() =>
+                navigateWithParams(
+                  { page: String(Math.min(totalPages, currentPage + 1)) },
+                  false
+                )
+              }
+              className="exec-btn-secondary py-1.5 px-3 text-xs disabled:opacity-40"
+            >
+              <span>Növbəti</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -927,7 +1326,8 @@ export function LeadsClient({
                   <option value="">Elan seçin (opsional)</option>
                   {listingOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
-                      #{opt.bina_id} — {formatAzn(opt.price_azn_normalized)} •{" "}
+                      {opt.bina_id ? `#${opt.bina_id}` : "OFF-MARKET"} —{" "}
+                      {formatAzn(opt.price_azn_normalized)} •{" "}
                       {opt.location || opt.title || "Bakı"}
                     </option>
                   ))}
@@ -1149,7 +1549,8 @@ export function LeadsClient({
                     )
                     .map((opt) => (
                       <option key={opt.id} value={opt.id}>
-                        #{opt.bina_id} — {formatAzn(opt.price_azn_normalized)} •{" "}
+                        {opt.bina_id ? `#${opt.bina_id}` : "OFF-MARKET"} —{" "}
+                        {formatAzn(opt.price_azn_normalized)} •{" "}
                         {opt.location || opt.title || "Bakı"}
                       </option>
                     ))}
