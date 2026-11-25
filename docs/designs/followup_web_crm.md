@@ -445,15 +445,15 @@ flowchart TD
 *   **Type / Scope:** Müştəri CRM & Follow-Up Səhifəsi
 *   **Proposed Changes:** Mərhələ qıfı, 10 saniyəlik sürətli əlavə modalı, bağlı elanlar (satılmış elan üçün qırmızı alternativ xəbərdarlığı), nəticə və komissiya izləməsi.
 
-#### 33. `web/app/jobs/page.tsx` & `web/components/JobsClient.tsx` (Create)
+#### 33. `web/app/jobs/page.tsx` & `web/components/JobsClient.tsx` (Create / Unified Center)
 
-*   **Type / Scope:** İş Növbəsi Monitoru
-*   **Proposed Changes:** Canlı `pipeline_jobs` cədvəli, xəta detalları, aktiv `RENDER_INITIAL` dublikat qorunması (`queue-render/route.ts`), oxunaqlı nişanlar (xam JSON yerinə), deterministik Bakı ay adları (`24 Noy, 19:39` — `M11` ləğvi), boş səhifələrdə qlobal HUD süzgəci və 1 kliklik `Retry` (mövcud sətri `QUEUED` resetləməklə).
+*   **Type / Scope:** Vahid İş Növbəsi və Worker Mərkəzi (`/jobs?tab=jobs` və `?tab=worker`)
+*   **Proposed Changes:** İş Növbəsi və Lokal Worker monitorunu təkrarsız şəkildə birləşdirən 2-sekməli mərkəz (`İş Tarixçəsi` və `Kompüter Monitoru`): 1 başlıq, sadə Azərbaycan dilində 1 düymə paneli (`bina.az-dan Elan Yığ` — manual sorğularda `enqueue_render_jobs: false` göndərərək avtomatik toplu render yaratmır; `Aktualığı Yoxla`, `Yenilə`), kompakt Worker status zolağı, oxunaqlı tapşırıq nişanları, deterministik Bakı ay adları (`24 Noy, 19:39`), boş səhifələrdə qlobal HUD süzgəci və 1 kliklik `Retry`.
 
-#### 33b. `web/app/worker/page.tsx`, `web/components/WorkerMonitorClient.tsx` & `supabase/migrations/202611250001_worker_telemetry_and_realtime.sql` (Create)
+#### 33b. `web/app/worker/page.tsx`, `web/components/WorkerMonitorClient.tsx` & `supabase/migrations/202611250001_worker_telemetry_and_realtime.sql` (Unified Redirect & Live Panel)
 
-*   **Type / Scope:** Canlı Lokal Windows Worker Monitoru (`/worker`)
-*   **Proposed Changes:** Hər 5 saniyədən bir yenilənən və Supabase Realtime (`worker_heartbeats`, `pipeline_jobs`) ilə sinxronlaşan ayrılmış `/worker` paneli: aktiv `PID`, `uptime`, növbəti Bakı avto-yığım saatı, aktiv elan/faza göstəricisi, `recent_logs` konsol axını və oflayn rejimdə 1-klik kopyalanan PowerShell başlatma əmri.
+*   **Type / Scope:** Vahid Worker Canlı Paneli (`WorkerLivePanel` + `/worker` → `/jobs?tab=worker` yönləndirməsi)
+*   **Proposed Changes:** `/worker` marşrutu köhnə linkləri qırmadan `/jobs?tab=worker` sekmesine yönləndirir (`AppShell` yan menyusunda vahid 5 bölmə). `WorkerLivePanel` təkrar başlıq və təkrar son işlər siyahısı olmadan aktiv `PID`, `uptime`, növbəti Bakı avto-yığım saatı (`12:30` / `19:30`), aktiv elan/faza göstəricisi, `recent_logs` konsol axını və oflayn rejimdə 1-klik kopyalanan PowerShell başlatma əmrini göstərir.
 
 #### 34. `tests/test_change_detector.py`, `tests/test_supabase_repo.py`, `tests/test_local_worker.py` (Create) & `README.md` (Modify)
 

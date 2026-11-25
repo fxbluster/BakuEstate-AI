@@ -872,6 +872,29 @@ class TestMultiAccountNicheRouting(unittest.TestCase):
         self.assertIn("recent_logs", meta)
         self.assertIn("jobs_processed_session", meta)
 
+    def test_handle_scrape_new_respects_enqueue_render_jobs_param(self):
+        self.mock_pipeline.run_ingestion.return_value = [{"bina_id": "999"}]
+
+        # Default (when omitted) preserves True for AUTO_SCHEDULER
+        self.worker.execute_job({
+            "id": "job-scrape-auto",
+            "job_type": "SCRAPE_NEW",
+            "trigger_source": "AUTO_SCHEDULER",
+            "params_json": {"pages": 1, "limit": 3},
+        })
+        _, kwargs_auto = self.mock_pipeline.run_ingestion.call_args
+        self.assertTrue(kwargs_auto["enqueue_render_jobs"])
+
+        # Explicit False suppresses automatic video queuing on manual Web UI clicks
+        self.worker.execute_job({
+            "id": "job-scrape-manual",
+            "job_type": "SCRAPE_NEW",
+            "trigger_source": "WEB_UI",
+            "params_json": {"pages": 2, "limit": 3, "enqueue_render_jobs": False},
+        })
+        _, kwargs_manual = self.mock_pipeline.run_ingestion.call_args
+        self.assertFalse(kwargs_manual["enqueue_render_jobs"])
+
 
 if __name__ == "__main__":
     unittest.main()

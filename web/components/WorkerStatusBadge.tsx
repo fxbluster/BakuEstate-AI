@@ -12,17 +12,26 @@ interface WorkerStatusBadgeProps {
   initialWorkers?: WorkerStatusRow[];
   compact?: boolean;
   showMonitorLink?: boolean;
+  onOpenMonitor?: () => void;
 }
 
 export function WorkerStatusBadge({
   initialWorkers,
   compact = false,
   showMonitorLink = false,
+  onOpenMonitor,
 }: WorkerStatusBadgeProps) {
   const [workers, setWorkers] = useState<WorkerStatusRow[]>(
     initialWorkers ?? []
   );
   const [loaded, setLoaded] = useState(Boolean(initialWorkers));
+
+  useEffect(() => {
+    if (initialWorkers) {
+      setWorkers(initialWorkers);
+      setLoaded(true);
+    }
+  }, [initialWorkers]);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
@@ -63,7 +72,7 @@ export function WorkerStatusBadge({
   if (compact) {
     return (
       <Link
-        href="/worker"
+        href="/jobs?tab=worker"
         className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium transition hover:brightness-110 ${
           isBusy
             ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
@@ -73,7 +82,7 @@ export function WorkerStatusBadge({
         }`}
         title={
           primary
-            ? `Lokal Worker (${primary.worker_id}) • Son siqnal: ${formatRelativeAz(primary.last_seen_at)} — İzləmək üçün klikləyin`
+            ? `Lokal Worker (${primary.worker_id}) • Son siqnal: ${formatRelativeAz(primary.last_seen_at)} — Monitoru aç`
             : "Lokal Windows Worker monitorunu aç"
         }
       >
@@ -174,15 +183,24 @@ export function WorkerStatusBadge({
           </div>
         )}
 
-        {showMonitorLink && (
-          <Link
-            href="/worker"
+        {onOpenMonitor ? (
+          <button
+            type="button"
+            onClick={onOpenMonitor}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gold-500/35 bg-gold-500/10 px-3 py-1.5 text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
           >
-            <span>Canlı Monitor</span>
+            <span>Kompüter Monitoru</span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        ) : showMonitorLink ? (
+          <Link
+            href="/jobs?tab=worker"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gold-500/35 bg-gold-500/10 px-3 py-1.5 text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
+          >
+            <span>Kompüter Monitoru</span>
             <ArrowRight className="h-3.5 w-3.5" />
           </Link>
-        )}
+        ) : null}
       </div>
     </div>
   );

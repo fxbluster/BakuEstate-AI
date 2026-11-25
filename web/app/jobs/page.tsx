@@ -1,13 +1,23 @@
 import { createClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
-import { JobsClient } from "@/components/JobsClient";
+import { JobsClient, type JobsCenterTab } from "@/components/JobsClient";
 import type { PipelineJob, WorkerStatusRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export default async function JobsPage() {
+export default async function JobsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const initialTab: JobsCenterTab =
+    resolvedParams?.tab === "worker" ? "worker" : "jobs";
+
   if (!isSupabaseConfigured()) {
-    return <JobsClient initialJobs={[]} initialWorkers={[]} />;
+    return (
+      <JobsClient initialJobs={[]} initialWorkers={[]} initialTab={initialTab} />
+    );
   }
 
   const supabase = await createClient();
@@ -29,6 +39,7 @@ export default async function JobsPage() {
     <JobsClient
       initialJobs={(jobsRes.data as PipelineJob[] | null) ?? []}
       initialWorkers={(workersRes.data as WorkerStatusRow[] | null) ?? []}
+      initialTab={initialTab}
     />
   );
 }

@@ -46,6 +46,7 @@ if (-not $LogFile) {
 $WatchdogScript = Join-Path $WorkingDir "src\worker\watchdog.py"
 $StartupFolder = [Environment]::GetFolderPath('Startup')
 $StartupBat = Join-Path $StartupFolder "$TaskName.bat"
+$StartupVbs = Join-Path $StartupFolder "$TaskName.vbs"
 
 # Ensure data\logs directory exists
 $LogDir = Split-Path -Parent $LogFile
@@ -90,11 +91,12 @@ if ($Status) {
         Write-Host "Last Task Result: $($taskInfo.LastTaskResult)"
         Write-Host "Log Output File:  $LogFile"
         Write-Host "==========================================================" -ForegroundColor Cyan
-    } elseif (Test-Path $StartupBat) {
+    } elseif ((Test-Path $StartupVbs) -or (Test-Path $StartupBat)) {
+        $launcherPath = if (Test-Path $StartupVbs) { $StartupVbs } else { $StartupBat }
         Write-Host "==========================================================" -ForegroundColor Cyan
         Write-Host " BakuEstate Worker Service Status (User Startup)" -ForegroundColor Cyan
         Write-Host "==========================================================" -ForegroundColor Cyan
-        Write-Host "Launcher File:    $StartupBat"
+        Write-Host "Launcher File:    $launcherPath"
         Write-Host "Log Output File:  $LogFile"
         $running = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*watchdog.py*" }
         if ($running) {
@@ -116,6 +118,10 @@ if ($Start) {
         Write-Host "Starting Scheduled Task '$TaskName'..." -ForegroundColor Green
         Start-ScheduledTask -TaskName $TaskName
         Write-Host "Task '$TaskName' started successfully." -ForegroundColor Green
+    } elseif (Test-Path $StartupVbs) {
+        Write-Host "Starting Worker via hidden Startup script: $StartupVbs..." -ForegroundColor Green
+        Start-Process "wscript.exe" -ArgumentList "`"$StartupVbs`""
+        Write-Host "Worker daemon started." -ForegroundColor Green
     } elseif (Test-Path $StartupBat) {
         Write-Host "Starting Worker via Startup script: $StartupBat..." -ForegroundColor Green
         Start-Process "cmd.exe" -ArgumentList "/c ""`"$StartupBat`"""" -WindowStyle Hidden
@@ -152,6 +158,10 @@ if ($Unregister) {
         Write-Host "Unregistering Scheduled Task '$TaskName'..." -ForegroundColor Yellow
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Host "Task '$TaskName' removed successfully." -ForegroundColor Green
+    }
+    if (Test-Path $StartupVbs) {
+        Remove-Item -Path $StartupVbs -Force
+        Write-Host "Removed Startup launcher '$StartupVbs'." -ForegroundColor Green
     }
     if (Test-Path $StartupBat) {
         Remove-Item -Path $StartupBat -Force
@@ -214,14 +224,22 @@ try {
     Write-Host "  Get-Content data\logs\worker_service.log -Tail 50 -Wait" -ForegroundColor Cyan
 } catch {
     Write-Host "[INFO] Task Scheduler registration requires elevated admin rights ($_)." -ForegroundColor Yellow
-    Write-Host "[INFO] Falling back to Windows User Startup folder registration..." -ForegroundColor Cyan
+    Write-Host "[INFO] Falling back to hidden Windows User Startup launcher (.vbs)..." -ForegroundColor Cyan
 
-    $BatContent = "@echo off`r`ncd /d `"$WorkingDir`"`r`n`"$PythonExe`" `"$WatchdogScript`" >> `"$LogFile`" 2>&1`r`n"
-    Set-Content -Path $StartupBat -Value $BatContent -Encoding ASCII
-    Write-Host "[SUCCESS] Registered BakuEstate Worker Service in User Startup folder!" -ForegroundColor Green
-    Write-Host "Launcher Script:  $StartupBat"
+    if (Test-Path $StartupBat) {
+        Remove-Item -Path $StartupBat -Force -ErrorAction SilentlyContinue
+    }
+
+    $VbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "$WorkingDir"
+WshShell.Run "cmd.exe /c """"$PythonExe"" ""$WatchdogScript"" >> ""$LogFile"" 2>&1""", 0, False
+"@
+    Set-Content -Path $StartupVbs -Value $VbsContent -Encoding ASCII
+    Write-Host "[SUCCESS] Registered BakuEstate Worker Service in User Startup folder (hidden)!" -ForegroundColor Green
+    Write-Host "Launcher Script:  $StartupVbs"
     Write-Host "Log Output File:  $LogFile"
-    Write-Host "The worker will automatically run on every Windows user login." -ForegroundColor Green
+    Write-Host "The worker will automatically run hidden in the background on every Windows user login." -ForegroundColor Green
     Write-Host "To start it immediately without waiting for next login, run:" -ForegroundColor White
     Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\setup_worker_service.ps1 -Start" -ForegroundColor Cyan
 }

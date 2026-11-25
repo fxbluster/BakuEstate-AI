@@ -7,7 +7,6 @@ import {
   Building2,
   Cpu,
   LayoutDashboard,
-  Server,
   Users,
   Sparkles,
   Zap,
@@ -40,15 +39,9 @@ const NAV_ITEMS = [
   },
   {
     href: "/jobs",
-    label: "İş Növbəsi",
+    label: "İş Növbəsi & Worker",
     shortLabel: "Növbə",
     icon: Cpu,
-  },
-  {
-    href: "/worker",
-    label: "Lokal Worker",
-    shortLabel: "Worker",
-    icon: Server,
   },
 ];
 
@@ -106,6 +99,7 @@ function AppShellContent({
 }) {
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
+    if (href === "/jobs" && pathname.startsWith("/worker")) return true;
     return pathname === href || pathname.startsWith(`${href}/`);
   }
 

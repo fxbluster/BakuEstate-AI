@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -10,10 +10,12 @@ import {
   Clock,
   Cpu,
   ExternalLink,
+  ListChecks,
   Mic,
   Play,
   RefreshCw,
   RotateCcw,
+  Server,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
@@ -29,10 +31,14 @@ import { extractErrorMessage } from "@/lib/errors";
 import type { JobStatus, PipelineJob, WorkerStatusRow } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 import { WorkerStatusBadge } from "./WorkerStatusBadge";
+import { WorkerLivePanel } from "./WorkerMonitorClient";
+
+export type JobsCenterTab = "jobs" | "worker";
 
 interface JobsClientProps {
   initialJobs: PipelineJob[];
   initialWorkers: WorkerStatusRow[];
+  initialTab?: JobsCenterTab;
 }
 
 const STATUS_TABS: Array<JobStatus | "ALL"> = [
@@ -44,7 +50,9 @@ const STATUS_TABS: Array<JobStatus | "ALL"> = [
   "EXPIRED",
 ];
 
-function extractReadableParams(job: PipelineJob): Array<{ label: string; value: string; accent?: boolean }> {
+function extractReadableParams(
+  job: PipelineJob
+): Array<{ label: string; value: string; accent?: boolean }> {
   const p = job.params_json ?? {};
   const chips: Array<{ label: string; value: string; accent?: boolean }> = [];
 
@@ -76,8 +84,14 @@ function extractReadableParams(job: PipelineJob): Array<{ label: string; value: 
   return chips;
 }
 
-export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
+export function JobsClient({
+  initialJobs,
+  initialWorkers,
+  initialTab = "jobs",
+}: JobsClientProps) {
+  const [activeTab, setActiveTab] = useState<JobsCenterTab>(initialTab);
   const [jobs, setJobs] = useState<PipelineJob[]>(initialJobs);
+  const [workers, setWorkers] = useState<WorkerStatusRow[]>(initialWorkers);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "ALL">("ALL");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -88,41 +102,55 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
     text: string;
   } | null>(null);
 
-  async function fetchJobs() {
+  const fetchAll = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
     setRefreshing(true);
     try {
       const supabase = createClient();
-      const { data } = await supabase
-        .from("pipeline_jobs")
-        .select("*, listings(id, bina_id, title)")
-        .order("created_at", { ascending: false })
-        .limit(100);
-      if (data) {
-        setJobs(data as PipelineJob[]);
-      }
+      const [jRes, wRes] = await Promise.all([
+        supabase
+          .from("pipeline_jobs")
+          .select("*, listings(id, bina_id, title)")
+          .order("created_at", { ascending: false })
+          .limit(100),
+        supabase
+          .from("worker_status")
+          .select("*")
+          .order("last_seen_at", { ascending: false })
+          .limit(5),
+      ]);
+      if (jRes.data) setJobs(jRes.data as PipelineJob[]);
+      if (wRes.data) setWorkers(wRes.data as WorkerStatusRow[]);
     } finally {
       setRefreshing(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (!autoRefresh || !isSupabaseConfigured()) return;
-    const timer = setInterval(fetchJobs, 10_000);
+    const intervalMs = activeTab === "worker" ? 5_000 : 10_000;
+    const timer = setInterval(fetchAll, intervalMs);
     return () => clearInterval(timer);
-  }, [autoRefresh]);
+  }, [autoRefresh, activeTab, fetchAll]);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
     try {
       const supabase = createClient();
       const channel = supabase
-        .channel("jobs_queue_realtime")
+        .channel("jobs_and_worker_realtime")
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "pipeline_jobs" },
           () => {
-            fetchJobs();
+            fetchAll();
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "worker_heartbeats" },
+          () => {
+            fetchAll();
           }
         )
         .subscribe();
@@ -131,9 +159,9 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
         supabase.removeChannel(channel);
       };
     } catch {
-      // Realtime optional fallback
+      // Polling remains active
     }
-  }, []);
+  }, [fetchAll]);
 
   const counts = useMemo(() => {
     const map: Record<string, number> = { ALL: jobs.length };
@@ -193,7 +221,7 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
       const label = JOB_TYPE_LABELS[job.job_type] ?? job.job_type;
       setFeedback({
         type: "ok",
-        text: `${label} işi yenidən növbəyə (QUEUED) salındı.`,
+        text: `${label} işi yenidən növbəyə salındı.`,
       });
     } catch (err) {
       setFeedback({
@@ -233,7 +261,9 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
           listing_id: null,
           trigger_source: "WEB_UI",
           params_json:
-            jobType === "SCRAPE_NEW" ? { pages: 2, limit: 3 } : { limit: 30 },
+            jobType === "SCRAPE_NEW"
+              ? { pages: 2, limit: 3, enqueue_render_jobs: false }
+              : { limit: 30 },
           status: "QUEUED",
         })
         .select("*, listings(id, bina_id, title)")
@@ -245,7 +275,10 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
       }
       setFeedback({
         type: "ok",
-        text: `${label} işi növbəyə əlavə edildi.`,
+        text:
+          jobType === "SCRAPE_NEW"
+            ? "bina.az-dan yeni elanların yığımı növbəyə salındı (avtomatik video yaradılmır — özünüz seçəcəksiniz)."
+            : "Elanların bina.az-da aktivlik yoxlaması növbəyə salındı.",
       });
     } catch (err) {
       setFeedback({
@@ -259,14 +292,14 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
+      {/* Unified Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-widest text-gold-400">
-            Avtomatlaşdırma və Montaj Axını
+            Kompüter və Montaj Mərkəzi
           </p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-50 sm:text-3xl">
-            İş Növbəsi Monitoru
+            İş Növbəsi və Worker
           </h1>
         </div>
 
@@ -276,22 +309,24 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
             disabled={busyId !== null}
             onClick={() => enqueueUtilityJob("SCRAPE_NEW")}
             className="exec-btn-primary text-xs"
+            title="bina.az-dan yalnız yeni elanları bazaya çəkir (avtomatik video yaratmır)"
           >
             <Play className="h-3.5 w-3.5" />
-            <span>Yeni Scrape Başlat</span>
+            <span>bina.az-dan Elan Yığ</span>
           </button>
           <button
             type="button"
             disabled={busyId !== null}
             onClick={() => enqueueUtilityJob("LIVENESS_CHECK")}
             className="exec-btn-secondary text-xs"
+            title="Bazada olan elanların bina.az-da satılıb-silinmədiyini yoxlayır"
           >
             <Activity className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Aktivlik Yoxla</span>
+            <span>Aktualığı Yoxla</span>
           </button>
           <button
             type="button"
-            onClick={fetchJobs}
+            onClick={fetchAll}
             disabled={refreshing}
             className="exec-btn-secondary text-xs"
           >
@@ -303,7 +338,13 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
         </div>
       </div>
 
-      <WorkerStatusBadge initialWorkers={initialWorkers} showMonitorLink />
+      {/* Compact Always-Visible Worker Strip */}
+      <WorkerStatusBadge
+        initialWorkers={workers}
+        onOpenMonitor={
+          activeTab === "jobs" ? () => setActiveTab("worker") : undefined
+        }
+      />
 
       {feedback && (
         <div
@@ -326,24 +367,33 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
         </div>
       )}
 
-      {/* Filter Tabs + Auto-Refresh Toggle */}
-      <div className="exec-card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap gap-1.5">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setStatusFilter(tab)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                statusFilter === tab
-                  ? "border-gold-500/60 bg-gold-500/15 text-gold-300"
-                  : "border-slate-800 bg-obsidian-950 text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              {tab === "ALL" ? "Hamısı" : JOB_STATUS_META[tab].label} (
-              {counts[tab] ?? 0})
-            </button>
-          ))}
+      {/* Clean 2-Tab Navigation */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+        <div className="inline-flex rounded-xl border border-slate-800 bg-obsidian-950/90 p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab("jobs")}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+              activeTab === "jobs"
+                ? "bg-gold-500/20 text-gold-300 border border-gold-500/40 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 border border-transparent"
+            }`}
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            <span>İş Tarixçəsi ({jobs.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("worker")}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+              activeTab === "worker"
+                ? "bg-gold-500/20 text-gold-300 border border-gold-500/40 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 border border-transparent"
+            }`}
+          >
+            <Server className="h-3.5 w-3.5" />
+            <span>Kompüter Monitoru</span>
+          </button>
         </div>
 
         <label className="inline-flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
@@ -353,172 +403,206 @@ export function JobsClient({ initialJobs, initialWorkers }: JobsClientProps) {
             onChange={(e) => setAutoRefresh(e.target.checked)}
             className="rounded border-slate-700 bg-obsidian-950 text-gold-500 focus:ring-gold-500/30"
           />
-          <span>Canlı yeniləmə (10 san)</span>
+          <span>
+            Canlı yeniləmə ({activeTab === "worker" ? "5 san" : "10 san"})
+          </span>
         </label>
       </div>
 
-      {/* Jobs List */}
-      {filtered.length === 0 ? (
-        <div className="exec-card flex flex-col items-center justify-center py-14 text-center px-6">
-          <Cpu className="h-10 w-10 text-slate-600" />
-          <p className="mt-3 text-sm font-medium text-slate-200">
-            Bu status üzrə iş tapılmadı
-          </p>
-        </div>
+      {/* Tab Content */}
+      {activeTab === "worker" ? (
+        <WorkerLivePanel workers={workers} jobs={jobs} />
       ) : (
-        <div className="space-y-3">
-          {filtered.map((job) => {
-            const stMeta = JOB_STATUS_META[job.status];
-            const canRetry =
-              job.status === "FAILED" || job.status === "EXPIRED";
-            const readableChips = extractReadableParams(job);
-            const binaId =
-              job.listings?.bina_id ||
-              (typeof job.params_json?.bina_id === "string"
-                ? job.params_json.bina_id
-                : null);
-            const durationStr = formatDurationAz(job.started_at, job.finished_at);
-            const isTechOpen = Boolean(expandedTechIds[job.id]);
+        <div className="space-y-4">
+          {/* Status Filters */}
+          <div className="flex flex-wrap gap-1.5">
+            {STATUS_TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setStatusFilter(tab)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                  statusFilter === tab
+                    ? "border-gold-500/60 bg-gold-500/15 text-gold-300"
+                    : "border-slate-800 bg-obsidian-950 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {tab === "ALL" ? "Hamısı" : JOB_STATUS_META[tab].label} (
+                {counts[tab] ?? 0})
+              </button>
+            ))}
+          </div>
 
-            return (
-              <div key={job.id} className="exec-card p-4 space-y-2.5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1.5 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge label={stMeta.label} tone={stMeta.tone} />
-                      <span className="text-sm font-semibold text-slate-100">
-                        {JOB_TYPE_LABELS[job.job_type] ?? job.job_type}
-                      </span>
-                      <StatusBadge
-                        label={
-                          JOB_TRIGGER_LABELS[job.trigger_source] ??
-                          job.trigger_source
-                        }
-                        tone="neutral"
-                      />
-                      {binaId && (
-                        <Link
-                          href={`/listings/${binaId}`}
-                          className="inline-flex items-center gap-1 rounded-md border border-gold-500/30 bg-gold-500/10 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
+          {filtered.length === 0 ? (
+            <div className="exec-card flex flex-col items-center justify-center py-14 text-center px-6">
+              <Cpu className="h-10 w-10 text-slate-600" />
+              <p className="mt-3 text-sm font-medium text-slate-200">
+                Bu status üzrə iş tapılmadı
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filtered.map((job) => {
+                const stMeta = JOB_STATUS_META[job.status];
+                const canRetry =
+                  job.status === "FAILED" || job.status === "EXPIRED";
+                const readableChips = extractReadableParams(job);
+                const binaId =
+                  job.listings?.bina_id ||
+                  (typeof job.params_json?.bina_id === "string"
+                    ? job.params_json.bina_id
+                    : null);
+                const durationStr = formatDurationAz(
+                  job.started_at,
+                  job.finished_at
+                );
+                const isTechOpen = Boolean(expandedTechIds[job.id]);
+
+                return (
+                  <div key={job.id} className="exec-card p-4 space-y-2.5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusBadge
+                            label={stMeta.label}
+                            tone={stMeta.tone}
+                          />
+                          <span className="text-sm font-semibold text-slate-100">
+                            {JOB_TYPE_LABELS[job.job_type] ?? job.job_type}
+                          </span>
+                          <StatusBadge
+                            label={
+                              JOB_TRIGGER_LABELS[job.trigger_source] ??
+                              job.trigger_source
+                            }
+                            tone="neutral"
+                          />
+                          {binaId && (
+                            <Link
+                              href={`/listings/${binaId}`}
+                              className="inline-flex items-center gap-1 rounded-md border border-gold-500/30 bg-gold-500/10 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
+                            >
+                              <span>Elan #{binaId}</span>
+                              <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          )}
+                        </div>
+
+                        {job.listings?.title && (
+                          <p className="text-xs font-medium text-slate-300 truncate">
+                            {job.listings.title}
+                          </p>
+                        )}
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                          <span>
+                            Başlama: {formatBakuDateTime(job.created_at)} (
+                            {formatRelativeAz(job.created_at)})
+                          </span>
+                          {job.finished_at && durationStr !== "—" && (
+                            <span className="inline-flex items-center gap-1 text-slate-300">
+                              <Clock className="h-3 w-3 text-slate-500" />
+                              <span>Müddət: {durationStr}</span>
+                            </span>
+                          )}
+                          {job.attempts > 1 && (
+                            <span>
+                              Cəhd: {job.attempts}/{job.max_attempts}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {canRetry && (
+                          <button
+                            type="button"
+                            disabled={busyId === job.id}
+                            onClick={() => handleRetry(job)}
+                            className="exec-btn-primary text-xs py-2 shrink-0"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>
+                              {busyId === job.id
+                                ? "Göndərilir..."
+                                : "Yenidən Cəhd"}
+                            </span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedTechIds((prev) => ({
+                              ...prev,
+                              [job.id]: !prev[job.id],
+                            }))
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-obsidian-950/70 px-2.5 py-1.5 text-[11px] font-medium text-slate-400 hover:text-slate-200 hover:border-slate-700 transition"
+                          title="Texniki detalları göstər/gizlə"
                         >
-                          <span>Elan #{binaId}</span>
-                          <ExternalLink className="h-3 w-3" />
-                        </Link>
-                      )}
+                          <span>Texniki</span>
+                          {isTechOpen ? (
+                            <ChevronUp className="h-3 w-3" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3" />
+                          )}
+                        </button>
+                      </div>
                     </div>
 
-                    {job.listings?.title && (
-                      <p className="text-xs font-medium text-slate-300 truncate">
-                        {job.listings.title}
-                      </p>
+                    {readableChips.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        {readableChips.map((chip, idx) => (
+                          <span
+                            key={`${chip.label}-${idx}`}
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${
+                              chip.accent
+                                ? "border-sky-500/30 bg-sky-500/10 text-sky-300 font-medium"
+                                : "border-slate-800 bg-obsidian-950/70 text-slate-300"
+                            }`}
+                          >
+                            {chip.label === "Səs" && (
+                              <Mic className="h-3 w-3 text-gold-400" />
+                            )}
+                            {chip.label === "Hesab" ? (
+                              <span>{chip.value}</span>
+                            ) : (
+                              <span>
+                                {chip.label}: {chip.value}
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
                     )}
 
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                      <span>
-                        Başlama: {formatBakuDateTime(job.created_at)} (
-                        {formatRelativeAz(job.created_at)})
-                      </span>
-                      {job.finished_at && durationStr !== "—" && (
-                        <span className="inline-flex items-center gap-1 text-slate-300">
-                          <Clock className="h-3 w-3 text-slate-500" />
-                          <span>Müddət: {durationStr}</span>
-                        </span>
-                      )}
-                      {job.attempts > 1 && (
-                        <span>
-                          Cəhd: {job.attempts}/{job.max_attempts}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {canRetry && (
-                      <button
-                        type="button"
-                        disabled={busyId === job.id}
-                        onClick={() => handleRetry(job)}
-                        className="exec-btn-primary text-xs py-2 shrink-0"
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        <span>
-                          {busyId === job.id ? "Göndərilir..." : "Yenidən Cəhd"}
-                        </span>
-                      </button>
+                    {isTechOpen && (
+                      <div className="rounded-lg border border-slate-800 bg-obsidian-950/90 p-3 font-mono text-[11px] text-slate-400 space-y-1">
+                        <div>Job ID: {job.id}</div>
+                        <div>
+                          Cəhd: {job.attempts}/{job.max_attempts} • Worker:{" "}
+                          {job.locked_by || "—"}
+                        </div>
+                        <div className="overflow-x-auto">
+                          Parametrlər: {JSON.stringify(job.params_json ?? {})}
+                        </div>
+                      </div>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedTechIds((prev) => ({
-                          ...prev,
-                          [job.id]: !prev[job.id],
-                        }))
-                      }
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-obsidian-950/70 px-2.5 py-1.5 text-[11px] font-medium text-slate-400 hover:text-slate-200 hover:border-slate-700 transition"
-                      title="Texniki detalları göstər/gizlə"
-                    >
-                      <span>Texniki</span>
-                      {isTechOpen ? (
-                        <ChevronUp className="h-3 w-3" />
-                      ) : (
-                        <ChevronDown className="h-3 w-3" />
-                      )}
-                    </button>
+                    {job.error_message && (
+                      <div className="flex items-start gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-400" />
+                        <pre className="whitespace-pre-wrap font-mono text-[11px] break-all">
+                          {job.error_message}
+                        </pre>
+                      </div>
+                    )}
                   </div>
-                </div>
-
-                {readableChips.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                    {readableChips.map((chip, idx) => (
-                      <span
-                        key={`${chip.label}-${idx}`}
-                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${
-                          chip.accent
-                            ? "border-sky-500/30 bg-sky-500/10 text-sky-300 font-medium"
-                            : "border-slate-800 bg-obsidian-950/70 text-slate-300"
-                        }`}
-                      >
-                        {chip.label === "Səs" && (
-                          <Mic className="h-3 w-3 text-gold-400" />
-                        )}
-                        {chip.label === "Səs" ? (
-                          <span>
-                            {chip.label}: {chip.value}
-                          </span>
-                        ) : chip.label === "Hesab" ? (
-                          <span>{chip.value}</span>
-                        ) : (
-                          <span>
-                            {chip.label}: {chip.value}
-                          </span>
-                        )}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {isTechOpen && (
-                  <div className="rounded-lg border border-slate-800 bg-obsidian-950/90 p-3 font-mono text-[11px] text-slate-400 space-y-1">
-                    <div>Job ID: {job.id}</div>
-                    <div>Cəhd: {job.attempts}/{job.max_attempts} • Worker: {job.locked_by || "—"}</div>
-                    <div className="overflow-x-auto">
-                      Parametrlər: {JSON.stringify(job.params_json ?? {})}
-                    </div>
-                  </div>
-                )}
-
-                {job.error_message && (
-                  <div className="flex items-start gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-400" />
-                    <pre className="whitespace-pre-wrap font-mono text-[11px] break-all">
-                      {job.error_message}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

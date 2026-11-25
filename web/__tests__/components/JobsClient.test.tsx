@@ -138,10 +138,44 @@ describe("JobsClient UI Cleanup & Formatting", () => {
 
     render(<JobsClient initialJobs={[activeScrapeJob]} initialWorkers={[sampleWorker]} />);
 
-    const btn = screen.getByRole("button", { name: /Yeni Scrape Başlat/i });
+    const btn = screen.getByRole("button", { name: /bina\.az-dan Elan Yığ/i });
     fireEvent.click(btn);
 
     expect(mockInsert).not.toHaveBeenCalled();
     expect(screen.getByText(/artıq aktiv növbədədir/i)).not.toBeNull();
+  });
+
+  it("enqueues SCRAPE_NEW with enqueue_render_jobs=false on manual click", async () => {
+    render(<JobsClient initialJobs={sampleJobs} initialWorkers={[sampleWorker]} />);
+
+    const btn = screen.getByRole("button", { name: /bina\.az-dan Elan Yığ/i });
+    fireEvent.click(btn);
+
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job_type: "SCRAPE_NEW",
+        trigger_source: "WEB_UI",
+        status: "QUEUED",
+        params_json: {
+          pages: 2,
+          limit: 3,
+          enqueue_render_jobs: false,
+        },
+      })
+    );
+  });
+
+  it("switches cleanly to Kompüter Monitoru tab without duplicating jobs filter list", () => {
+    render(<JobsClient initialJobs={sampleJobs} initialWorkers={[sampleWorker]} />);
+
+    expect(screen.getByRole("button", { name: /^Hamısı/i })).not.toBeNull();
+
+    const monitorBtns = screen.getAllByRole("button", { name: /Kompüter Monitoru/i });
+    fireEvent.click(monitorBtns[monitorBtns.length - 1]);
+
+    expect(screen.queryByRole("button", { name: /^Hamısı/i })).toBeNull();
+    expect(screen.getAllByText("DESKTOP-6UBPFU0").length).toBeGreaterThan(0);
+    expect(screen.getByText("Canlı Konsol Logları")).not.toBeNull();
   });
 });

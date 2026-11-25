@@ -660,12 +660,13 @@ class BakuLocalWorker:
         limit = int(params.get("limit") or self.scrape_limit)
         specific_id = params.get("specific_id") or None
         check_existing = bool(params.get("check_existing_for_changes", True))
+        enqueue_renders = bool(params.get("enqueue_render_jobs", True))
 
         ingested = self.pipeline.run_ingestion(
             pages=pages,
             limit_per_page=limit,
             specific_id=specific_id,
-            enqueue_render_jobs=True,
+            enqueue_render_jobs=enqueue_renders,
             check_existing_for_changes=check_existing,
         )
         return {"job_type": "SCRAPE_NEW", "ingested_count": len(ingested)}
