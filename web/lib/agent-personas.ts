@@ -1,3 +1,10 @@
+import {
+  fetchDistrictPriceMedians,
+  formatDistrictMediansPromptContext,
+  type DistrictPriceMedianRow,
+  type SupabaseMediansQueryClient,
+} from "@/lib/market-benchmarks";
+
 /**
  * BakuEstate-AI Autonomous Executive Agent Hub - Personas & Immutable Agency Rules
  *
@@ -82,7 +89,7 @@ export const CORE_AGENCY_INVARIANTS = {
   COMMISSION_FLOOR_DEFENSE:
     "Alıcı və ya satıcıdan alınan 50-100 AZN xidmət haqqından imtina edilməsinə icazə verilmir; 2000-5000 AZN endirim qazancı və hüquqi yoxlanış zəmanəti vurğulanmalıdır.",
   BAKU_MEDIAN_VALUATION:
-    "Nəsimi və Yasamal rayonları üzrə təmirli m² qiymət meyarı 2200-2800 AZN, Xətai üzrə 1900-2400 AZN aralığında əsas götürülməlidir.",
+    "Nəsimi, Yasamal, Xətai və digər Bakı rayonları üzrə m² qiymət meyarı statik təxminlərlə deyil, canlı public.district_price_medians bazasından gələn 60 günlük median və p25–p75 dəhlizi əsasında qiymətləndirilməlidir.",
 } as const;
 
 /**
@@ -169,7 +176,7 @@ Rolun və Məqsədin:
 Danışıq Vərdişi və Üslub:
 - Rəsmi, canlı və qətiyyətli Bakı biznes leksikonu.
 - Vaxt itkisinə yol vermə, uzun-uzadı giriş cümlələri qurma. Birbaşa məğzə keç.
-- Agentlik prinsiplərini (Kupça tələbi, komissiyanın qorunması, real bazar qiymətləndirməsi) hər zaman rəhbər tut.
+- Agentlik prinsiplərini (Kupça tələbi, komissiyanın qorunması, canlı bazar medianı ilə qiymətləndirmə) hər zaman rəhbər tut.
 - Strukturlaşdırılmış həll yolları və konkret fəaliyyət addımları təqdim et.`,
   },
 
@@ -201,13 +208,13 @@ Danışıq Vərdişi və Üslub:
     ],
     systemPrompt: `Sən BakuEstate-AI agentliyinin Bazar Telemetriyası və Video Performans Analitikisən (Market Telemetry & Video Performance Analyst).
 Rolun və Məqsədin:
-- Agentliyin 4 əsas Instagram kanalının inkişafına, video izlənmə metrikalarına və lid generasiyasına cavabdehsən:
+- Agentliyin 4 əsas kanalının inkişafına, video izlənmə metrikalarına və lid generasiyasına cavabdehsən:
   1. @bakuestate.official (Baş brend səhifəsi, təsdiqlənmiş əməliyyatlar, korporativ etibar)
   2. @baku.serfeli.evler (Büdcəli, tez satılan, sərfəli və daxili kredit mənzillər)
   3. @bakuestate.premium (Lüks seqment, penthauslar, Ağ Şəhər, Sea Breeze, villalar)
   4. @baku_emlak_ai (Süni intellekt analizləri, bazar trendləri, dinamik xəritə hesabatları)
 - Video çarxların (Reels) 14 günlük baxış trayektoriyasını, ilk 3 saniyəlik qarmağını (hook), baxış retention əyrisini və ER% (Engagement Rate) göstəricisini sahə medianı ilə müqayisə edirsən.
-- Bakının rayonları üzrə (Yasamal 2200-2800 AZN/m², Nəsimi 2300-3000 AZN/m², Xətai 1900-2400 AZN/m², Ağ Şəhər 3000-4500+ AZN/m²) real m² qiymət arbitrajlarını təhlil edirsən.
+- Bakının rayonları üzrə real m² qiymət arbitrajlarını statik rəqəmlərlə deyil, canlı public.district_price_medians (60 günlük median və p25–p75 dəhlizi) kontekstinə əsasən təhlil edirsən.
 - Zərurət olduqda Sol Kətan telemetriya və video kartlarını açmaq üçün düymə təqdim et: [📊 Analitikaya Bax](stage:ANALYTICS_TELEMETRY:<publication_id>) və ya [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>).
 
 Danışıq Vərdişi və Üslub:
@@ -300,17 +307,21 @@ export function isValidAgentPersonaId(id: unknown): id is AgentPersonaId {
   );
 }
 
+export interface AgentSystemInstructionOptions {
+  learnedInsights?: string[];
+  operatorContext?: string;
+  activePortfolioContext?: string;
+  districtMedians?: DistrictPriceMedianRow[];
+  districtMediansContext?: string;
+}
+
 /**
  * Assembles the complete system prompt for a persona, injecting core agency invariants,
- * anti-robotic negative constraints, and optional learned episodic memory insights.
+ * anti-robotic negative constraints, live district median context, and optional learned episodic memory insights.
  */
 export function buildAgentSystemInstruction(
   agentId: unknown,
-  options?: {
-    learnedInsights?: string[];
-    operatorContext?: string;
-    activePortfolioContext?: string;
-  }
+  options?: AgentSystemInstructionOptions
 ): string {
   const persona = getAgentPersona(agentId);
 
@@ -325,6 +336,18 @@ export function buildAgentSystemInstruction(
     `Süni və standart 'müştəri xidməti' təbəssümündən qaç. Real Bakı daşınmaz əmlak dilində, səmimi, qısa və məqsədyönlü danış.`,
     `İnteraktiv Sol Kətan fəaliyyət düymələrini markdown formatında daxil et: [🎬 Videoya Bax](stage:VIDEO_INSPECTION:<bina_id>), [📊 Analitika](stage:ANALYTICS_TELEMETRY:<id>), [💬 Danışıq](stage:CRM_NEGOTIATION:<lead_id>).`,
   ];
+
+  if (options?.districtMedians && options.districtMedians.length > 0) {
+    sections.push(
+      `\n--- CANLI RAYON MEDİANLARI (public.district_price_medians) ---`,
+      formatDistrictMediansPromptContext(options.districtMedians)
+    );
+  } else if (options?.districtMediansContext) {
+    sections.push(
+      `\n--- CANLI RAYON MEDİANLARI (public.district_price_medians) ---`,
+      options.districtMediansContext
+    );
+  }
 
   if (options?.learnedInsights && options.learnedInsights.length > 0) {
     sections.push(
@@ -349,4 +372,20 @@ export function buildAgentSystemInstruction(
   }
 
   return sections.join("\n");
+}
+
+/**
+ * Async helper that loads live `public.district_price_medians` from Supabase
+ * and injects them into `buildAgentSystemInstruction`.
+ */
+export async function buildAgentSystemInstructionWithLiveMedians(
+  supabase: SupabaseMediansQueryClient | null | undefined,
+  agentId: unknown,
+  options?: Omit<AgentSystemInstructionOptions, "districtMedians"> & { agencyId?: string }
+): Promise<string> {
+  const districtMedians = await fetchDistrictPriceMedians(supabase, options?.agencyId);
+  return buildAgentSystemInstruction(agentId, {
+    ...options,
+    districtMedians,
+  });
 }
