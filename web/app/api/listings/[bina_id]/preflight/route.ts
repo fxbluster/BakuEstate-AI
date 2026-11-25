@@ -1,12 +1,51 @@
 import { NextResponse } from "next/server";
+import { ProxyAgent } from "undici";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOperator } from "@/lib/auth/resolve-operator";
+import { getBinaProxyUrl } from "@/lib/supabase/env";
+
+export const runtime = "nodejs";
 
 const DESKTOP_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const NUMERIC_ID_REGEX = /^\d+$/;
+
+const PROXY_CIRCUIT_FAILURE_THRESHOLD = 5;
+const PROXY_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+
+let consecutiveProxyFailures = 0;
+let proxyCircuitOpenedAt: number | null = null;
+
+function isProxyCircuitOpen(): boolean {
+  if (proxyCircuitOpenedAt === null) {
+    return false;
+  }
+  if (Date.now() - proxyCircuitOpenedAt >= PROXY_CIRCUIT_COOLDOWN_MS) {
+    // Half-open: allow one probe attempt
+    proxyCircuitOpenedAt = null;
+    consecutiveProxyFailures = PROXY_CIRCUIT_FAILURE_THRESHOLD - 1;
+    return false;
+  }
+  return true;
+}
+
+function recordProxyFailure(): boolean {
+  consecutiveProxyFailures += 1;
+  if (consecutiveProxyFailures >= PROXY_CIRCUIT_FAILURE_THRESHOLD) {
+    proxyCircuitOpenedAt = Date.now();
+    return true;
+  }
+  return false;
+}
+
+function recordProxySuccess(): void {
+  consecutiveProxyFailures = 0;
+  proxyCircuitOpenedAt = null;
+}
 
 const REMOVED_DOM_PHRASES = [
   "bu elan artıq aktiv deyil",
@@ -47,6 +86,7 @@ interface PreflightRequestBody {
   render_version_id?: string;
   dispatch_to_telegram?: boolean;
   bypass_live_check?: boolean;
+  manual_override?: boolean;
 }
 
 export async function POST(
@@ -63,7 +103,7 @@ export async function POST(
   }
   const { operator } = auth;
 
-  // 2. Resolve route params
+  // 2. Resolve route params (UUID for OFF_MARKET/any listing or numeric bina_id)
   const { bina_id: binaIdParam } = await context.params;
   if (!binaIdParam) {
     return NextResponse.json(
@@ -73,8 +113,9 @@ export async function POST(
   }
 
   const paramIsUuid = UUID_REGEX.test(binaIdParam);
-  const numericBinaId = paramIsUuid ? null : parseInt(binaIdParam, 10);
-  if (!paramIsUuid && (numericBinaId === null || Number.isNaN(numericBinaId))) {
+  const paramIsNumeric = NUMERIC_ID_REGEX.test(binaIdParam);
+  const numericBinaId = paramIsNumeric ? parseInt(binaIdParam, 10) : null;
+  if (!paramIsUuid && numericBinaId === null) {
     return NextResponse.json(
       {
         ok: false,
@@ -98,7 +139,9 @@ export async function POST(
     render_version_id,
     dispatch_to_telegram = false,
     bypass_live_check = false,
+    manual_override = false,
   } = body;
+  const effectiveBypassLiveCheck = Boolean(bypass_live_check || manual_override);
 
   const supabase = createAdminClient();
   const isListingUuid = Boolean(listing_id && UUID_REGEX.test(listing_id));
@@ -194,7 +237,7 @@ export async function POST(
   let portalPrice: number | null = null;
   const isOffMarket = listing.source_type === "OFF_MARKET";
 
-  if (isOffMarket || bypass_live_check || !effectiveBinaId) {
+  if (isOffMarket || effectiveBypassLiveCheck || !effectiveBinaId) {
     if (!expectedPrice || expectedPrice <= 0) {
       return NextResponse.json(
         {
@@ -208,15 +251,42 @@ export async function POST(
     portalPrice = expectedPrice;
     responseTimeMs = Date.now() - startTime;
   } else {
+    if (isProxyCircuitOpen()) {
+      responseTimeMs = Date.now() - startTime;
+      await supabase.from("preflight_checks").insert({
+        listing_id: listing.id,
+        agency_id: operator.agencyId,
+        bina_id: parsedBinaInt,
+        result: "SCRAPE_ERROR",
+        response_time_ms: responseTimeMs,
+      });
+
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "PROXY_CIRCUIT_OPEN",
+          manual_override_allowed: true,
+          can_fallback_to_db: true,
+          db_price: expectedPrice,
+          response_time_ms: responseTimeMs,
+          message:
+            "bina.az proxy dövrə açarı (circuit breaker) 5 ardıcıl xətadan sonra müvəqqəti açılıb. Manual təsdiq (MANUAL_OVERRIDE) ilə davam edə bilərsiniz.",
+        },
+        { status: 503 }
+      );
+    }
+
     const targetUrl = `https://bina.az/items/${effectiveBinaId}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const proxyUrl = getBinaProxyUrl();
+    const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
 
     let fetchRes: Response;
     let html = "";
 
     try {
-      fetchRes = await fetch(targetUrl, {
+      const fetchInit: RequestInit & { dispatcher?: unknown } = {
         method: "GET",
         headers: {
           "User-Agent": DESKTOP_USER_AGENT,
@@ -228,12 +298,18 @@ export async function POST(
         },
         signal: controller.signal,
         cache: "no-store",
-      });
+      };
+      if (proxyAgent) {
+        fetchInit.dispatcher = proxyAgent;
+      }
+
+      fetchRes = await fetch(targetUrl, fetchInit);
       responseTimeMs = Date.now() - startTime;
       clearTimeout(timeoutId);
     } catch (fetchErr: unknown) {
       clearTimeout(timeoutId);
       responseTimeMs = Date.now() - startTime;
+      const circuitTripped = recordProxyFailure();
       const isTimeout =
         fetchErr instanceof Error && fetchErr.name === "AbortError";
       const errorMessage = isTimeout
@@ -250,6 +326,22 @@ export async function POST(
         response_time_ms: responseTimeMs,
       });
 
+      if (circuitTripped) {
+        return NextResponse.json(
+          {
+            ok: false,
+            reason: "PROXY_CIRCUIT_OPEN",
+            manual_override_allowed: true,
+            can_fallback_to_db: true,
+            db_price: expectedPrice,
+            response_time_ms: responseTimeMs,
+            message:
+              "bina.az proxy dövrə açarı (circuit breaker) 5 ardıcıl xətadan sonra açıldı. Manual təsdiq (MANUAL_OVERRIDE) ilə davam edə bilərsiniz.",
+          },
+          { status: 503 }
+        );
+      }
+
       return NextResponse.json(
         {
           ok: false,
@@ -261,6 +353,10 @@ export async function POST(
         },
         { status: 502 }
       );
+    } finally {
+      if (proxyAgent && typeof proxyAgent.close === "function") {
+        void proxyAgent.close().catch(() => undefined);
+      }
     }
 
     const isHttpDelisted = fetchRes.status === 404 || fetchRes.status === 410;
@@ -278,6 +374,35 @@ export async function POST(
       html.includes("<title>Just a moment...</title>") ||
       html.includes("cf-browser-verification") ||
       html.includes("Attention Required! | Cloudflare");
+
+    if (isCloudflareBlocked) {
+      const circuitTripped = recordProxyFailure();
+      if (circuitTripped) {
+        await supabase.from("preflight_checks").insert({
+          listing_id: listing.id,
+          agency_id: operator.agencyId,
+          bina_id: parsedBinaInt,
+          result: "SCRAPE_ERROR",
+          response_time_ms: responseTimeMs,
+        });
+
+        return NextResponse.json(
+          {
+            ok: false,
+            reason: "PROXY_CIRCUIT_OPEN",
+            manual_override_allowed: true,
+            can_fallback_to_db: true,
+            db_price: expectedPrice,
+            response_time_ms: responseTimeMs,
+            message:
+              "bina.az Cloudflare bloklaması ardıcıl 5 dəfə təkrarlandı. Proxy dövrə açarı açıldı; manual təsdiq (MANUAL_OVERRIDE) mümkündür.",
+          },
+          { status: 503 }
+        );
+      }
+    } else {
+      recordProxySuccess();
+    }
 
     if (isCloudflareBlocked) {
       const idempotencyKey = `preflight_${effectiveBinaId}_${Date.now()}`;
@@ -606,7 +731,9 @@ export async function POST(
     agency_id: operator.agencyId,
     bina_id: parsedBinaInt,
     result:
-      isOffMarket || bypass_live_check ? "PASSED_WITH_DB_FALLBACK" : "PASSED",
+      isOffMarket || effectiveBypassLiveCheck
+        ? "PASSED_WITH_DB_FALLBACK"
+        : "PASSED",
     portal_price: portalPrice,
     video_price: expectedPrice,
     price_delta_pct: 0,
