@@ -1,16 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { POST as dispatchVideoPOST } from "../app/api/telegram/dispatch-video/route";
 import { POST as queueRenderPOST } from "../app/api/pipeline/queue-render/route";
 
-// Mock Supabase admin client
-const mockInsert = vi.fn();
-const mockSelect = vi.fn();
-const mockEq = vi.fn();
-const mockOrder = vi.fn();
-const mockLimit = vi.fn();
-const mockSingle = vi.fn();
-const mockMaybeSingle = vi.fn();
-const mockOr = vi.fn();
+const mockRpc = vi.fn();
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
@@ -20,7 +12,55 @@ vi.mock("@/lib/supabase/admin", () => ({
         error: null,
       }),
     },
+    rpc: mockRpc,
     from: (table: string) => {
+      if (table === "agency_members") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  user_id: "083d8ea3-4a73-4b85-8479-0c532ce939f0",
+                  agency_id: "agency-1",
+                  role: "ADMIN",
+                  display_name: "Operator",
+                  is_active: true,
+                },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+
+      if (table === "agency_settings") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { telegram_chat_id: "6238843776" },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+
+      if (table === "listing_owner_contacts") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: { owner_phone_raw: "+994501234567" },
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+
       if (table === "render_versions") {
         return {
           select: () => ({
@@ -30,9 +70,10 @@ vi.mock("@/lib/supabase/admin", () => ({
                   data: [
                     {
                       id: "rv-test-1",
-                      listing_id: "listing-test-1",
+                      listing_id: "11111111-1111-4111-8111-111111111111",
                       bina_id: "5616503",
                       video_cdn_url: "https://cdn.bakuestate.az/renders/5616503_v1.mp4",
+                      storage_pruned_at: null,
                     },
                   ],
                   error: null,
@@ -41,9 +82,10 @@ vi.mock("@/lib/supabase/admin", () => ({
               maybeSingle: () => ({
                 data: {
                   id: "rv-test-1",
-                  listing_id: "listing-test-1",
+                  listing_id: "11111111-1111-4111-8111-111111111111",
                   bina_id: "5616503",
                   video_cdn_url: "https://cdn.bakuestate.az/renders/5616503_v1.mp4",
+                  storage_pruned_at: null,
                 },
                 error: null,
               }),
@@ -55,12 +97,12 @@ vi.mock("@/lib/supabase/admin", () => ({
       if (table === "listings") {
         const mockListingData = {
           data: {
-            id: "listing-test-1",
+            id: "11111111-1111-4111-8111-111111111111",
             bina_id: "5616503",
+            agency_id: "agency-1",
             title: "Nəsimi 3 otaqlı",
             price_azn_normalized: 185000,
             location: "Nəsimi rayonu",
-            owner_phone_raw: "+994501234567",
             contact_name: "Əli Məmmədov",
             has_bill_of_sale: true,
           },
@@ -69,9 +111,9 @@ vi.mock("@/lib/supabase/admin", () => ({
         return {
           select: () => ({
             eq: () => ({
-              maybeSingle: () => mockListingData,
-            }),
-            or: () => ({
+              eq: () => ({
+                maybeSingle: () => mockListingData,
+              }),
               maybeSingle: () => mockListingData,
             }),
           }),
@@ -109,7 +151,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({
     auth: {
       getUser: vi.fn().mockResolvedValue({
-        data: { user: { id: "083d8ea3-4a73-4b85-8479-0c532ce939f0" } },
+        data: { user: { id: "083d8ea3-4a73-4b85-8479-0c532ce939f0", email: "operator@bakuestate.az" } },
         error: null,
       }),
     },
@@ -117,8 +159,15 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 describe("POST /api/telegram/dispatch-video", () => {
+  const origEnv = { ...process.env };
+
   beforeEach(() => {
     vi.restoreAllMocks();
+    process.env = { ...origEnv, TELEGRAM_BOT_TOKEN: "live-bot-token", TELEGRAM_CHAT_ID: "6238843776" };
+  });
+
+  afterEach(() => {
+    process.env = origEnv;
   });
 
   it("returns 400 when listing_id is missing", async () => {
@@ -136,8 +185,7 @@ describe("POST /api/telegram/dispatch-video", () => {
   });
 
   it("dispatches video directly via URL when file size <= 20MB", async () => {
-    // Mock HEAD request returning 12MB (12,582,912 bytes)
-    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    global.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
       if (init?.method === "HEAD") {
         return Promise.resolve({
           ok: true,
@@ -147,7 +195,6 @@ describe("POST /api/telegram/dispatch-video", () => {
           }),
         });
       }
-      // Mock Telegram Bot API calls
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -162,10 +209,10 @@ describe("POST /api/telegram/dispatch-video", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer <TEST_SUPABASE_JWT>",
+        Authorization: "Bearer header.payload.signature",
       },
       body: JSON.stringify({
-        listing_id: "listing-test-1",
+        listing_id: "11111111-1111-4111-8111-111111111111",
         target_account: "@bakuestate.premium",
       }),
     });
@@ -179,8 +226,7 @@ describe("POST /api/telegram/dispatch-video", () => {
   });
 
   it("enqueues TELEGRAM_DISPATCH into pipeline_jobs when file size exceeds 20MB", async () => {
-    // Mock HEAD request returning 35MB (36,700,160 bytes)
-    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    global.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
       if (init?.method === "HEAD") {
         return Promise.resolve({
           ok: true,
@@ -197,10 +243,10 @@ describe("POST /api/telegram/dispatch-video", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer <TEST_SUPABASE_JWT>",
+        Authorization: "Bearer header.payload.signature",
       },
       body: JSON.stringify({
-        listing_id: "listing-test-1",
+        listing_id: "11111111-1111-4111-8111-111111111111",
         target_account: "@bakuestate.premium",
       }),
     });
@@ -214,8 +260,7 @@ describe("POST /api/telegram/dispatch-video", () => {
   });
 
   it("enqueues into pipeline_jobs when HEAD request times out", async () => {
-    // Mock HEAD request failing / timing out
-    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    global.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
       if (init?.method === "HEAD") {
         return Promise.reject(new Error("AbortError: operation timed out"));
       }
@@ -226,10 +271,10 @@ describe("POST /api/telegram/dispatch-video", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer <TEST_SUPABASE_JWT>",
+        Authorization: "Bearer header.payload.signature",
       },
       body: JSON.stringify({
-        listing_id: "listing-test-1",
+        listing_id: "11111111-1111-4111-8111-111111111111",
       }),
     });
 
@@ -261,15 +306,20 @@ describe("POST /api/pipeline/queue-render", () => {
     expect(data.error).toContain("listing_id parametri tələb olunur");
   });
 
-  it("successfully enqueues RENDER_INITIAL job into pipeline_jobs", async () => {
+  it("successfully enqueues RENDER_INITIAL job via atomic RPC", async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: { ok: true, already_queued: false, job_id: "job-queued-999" },
+      error: null,
+    });
+
     const req = new Request("http://localhost:3000/api/pipeline/queue-render", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer <TEST_SUPABASE_JWT>",
+        Authorization: "Bearer header.payload.signature",
       },
       body: JSON.stringify({
-        listing_id: "listing-test-1",
+        listing_id: "11111111-1111-4111-8111-111111111111",
         bina_id: "5616503",
         target_account: "@bakuestate.premium",
         voice_preset: "Arif",

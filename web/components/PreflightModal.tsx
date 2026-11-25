@@ -228,8 +228,13 @@ export function PreflightModal({
 
   // Guard ref: Prevents duplicate execution and infinite re-render loops
   const lastCheckedListingIdRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const runInitialPreflightCheck = async (targetListing: ListingWithLatestRender) => {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setStatusState("CHECKING");
     setErrorMessage(null);
     setTelegramError(null);
@@ -241,6 +246,7 @@ export function PreflightModal({
       const res = await fetch(`/api/listings/${targetListing.bina_id}/preflight`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           listing_id: targetListing.id,
           render_version_id: targetListing.latestRender?.id || null,
@@ -248,12 +254,15 @@ export function PreflightModal({
         }),
       });
 
+      if (controller.signal.aborted) return;
+
       const data: PreflightResponseData = await res.json().catch(() => ({
         ok: false,
         reason: "ERROR",
         message: "API cavabı oxuna bilmədi (JSON parse xətası).",
       }));
 
+      if (controller.signal.aborted) return;
       setResultData(data);
 
       if (res.ok && data.ok) {
@@ -262,30 +271,14 @@ export function PreflightModal({
           onListingUpdated({
             ...targetListing,
             editorial_status: "APPROVED",
-            publication: {
-              ...(targetListing.publication || {
-                id: "",
-                listing_id: targetListing.id,
-                render_version_id: targetListing.latestRender?.id || null,
-                channel: "INSTAGRAM_REELS",
-                post_url: null,
-                caption_used: null,
-                published_at: null,
-                notes: null,
-                views_count: 0,
-                likes_count: 0,
-                comments_count: 0,
-                shares_count: 0,
-                external_post_id: null,
-                telemetry_status: "PENDING",
-                last_scraped_at: null,
-                next_poll_at: null,
-                created_at: new Date().toISOString(),
-              }),
-              status: "READY_TO_PUBLISH",
-              preflight_status: "PASSED",
-              verified_at: new Date().toISOString(),
-            },
+            publication: targetListing.publication
+              ? {
+                  ...targetListing.publication,
+                  status: "READY_TO_PUBLISH",
+                  preflight_status: "PASSED",
+                  verified_at: new Date().toISOString(),
+                }
+              : null,
           });
         }
       } else if (data.reason === "PRICE_CHANGED") {
@@ -338,6 +331,12 @@ export function PreflightModal({
         );
       }
     } catch (err) {
+      if (
+        controller.signal.aborted ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
+        return;
+      }
       setStatusState("ERROR");
       setErrorMessage(
         err instanceof Error
@@ -353,6 +352,8 @@ export function PreflightModal({
       runInitialPreflightCheck(listing);
     }
     if (!isOpen) {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
       lastCheckedListingIdRef.current = null;
       setStatusState("IDLE");
       setResultData(null);
@@ -362,6 +363,9 @@ export function PreflightModal({
       setTelegramSent(false);
       setIsDispatchingTelegram(false);
     }
+    return () => {
+      abortControllerRef.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, listing?.id]);
 
@@ -383,13 +387,14 @@ export function PreflightModal({
         }),
       });
 
-      const data: PreflightResponseData = await res.json().catch(() => ({
-        ok: false,
-        reason: "ERROR",
-        message: "Telegram göndəriş cavabı oxuna bilmədi.",
-      }));
+      const data: PreflightResponseData & { telegram_dispatched?: boolean } =
+        await res.json().catch(() => ({
+          ok: false,
+          reason: "ERROR",
+          message: "Telegram göndəriş cavabı oxuna bilmədi.",
+        }));
 
-      if (res.ok && data.ok) {
+      if (res.ok && data.ok && data.telegram_dispatched !== false) {
         setTelegramSent(true);
         setStatusState("PASSED");
         if (data.telegram_message_id) {
@@ -448,56 +453,44 @@ export function PreflightModal({
     setErrorMessage(null);
 
     try {
-      const supabase = createClient();
-      const oldPrice = resultData?.old_price ?? listing.price_azn_normalized;
       const newPrice =
         resultData?.new_price ??
         resultData?.portal_price ??
         listing.price_azn_normalized;
-      const deltaPct = resultData?.delta_pct ?? 0;
+      const target = resolveTargetAccount(listing);
 
-      const idempotencyKey = `rerender_price_${listing.id}_${Date.now()}`;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        // Cookie auth fallback
+      }
 
-      // Insert RENDER_PRICE_DROP job into pipeline_jobs
-      const { error: jobErr } = await supabase.from("pipeline_jobs").insert({
-        idempotency_key: idempotencyKey,
-        job_type: "RENDER_PRICE_DROP",
-        listing_id: listing.id,
-        trigger_source: "WEB_UI",
-        params_json: {
+      const res = await fetch("/api/pipeline/queue-render", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
           listing_id: listing.id,
           bina_id: listing.bina_id,
-          old_price: oldPrice,
-          new_price: newPrice,
-          delta_pct: deltaPct,
-        },
-        status: "QUEUED",
+          job_type: "RERENDER",
+          target_account: target.handle,
+        }),
       });
 
-      if (jobErr) throw jobErr;
-
-      // Update listing state to reflect rerender queued
-      await supabase
-        .from("listings")
-        .update({
-          editorial_status: "NEEDS_RERENDER",
-          price: newPrice,
-          price_azn_normalized: newPrice,
-        })
-        .eq("id", listing.id);
-
-      // Audit event
-      await supabase.from("listing_events").insert({
-        listing_id: listing.id,
-        event_type: "PRICE_CHANGED",
-        old_value_json: { price_azn_normalized: oldPrice },
-        new_value_json: {
-          price_azn_normalized: newPrice,
-          delta_pct: deltaPct,
-        },
-        price_delta_pct: deltaPct,
-        actor: "web_user",
-      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        throw new Error(
+          data?.error || "Yeni render növbəsinə əlavə edilərkən xəta baş verdi."
+        );
+      }
 
       setRerenderSuccess(true);
 

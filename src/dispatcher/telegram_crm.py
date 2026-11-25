@@ -80,14 +80,15 @@ def get_property_type(listing: Dict[str, Any]) -> str:
     return "MƏNZİL"
 
 
-def get_targeted_hashtags(prop_type: str) -> list[str]:
+def get_targeted_hashtags(prop_type: str, has_bill_of_sale: bool = False) -> list[str]:
     """Returns at most 5 high-converting, clean viral hashtags without competitor tags."""
+    doc_tag = "#kupcali" if has_bill_of_sale else "#dasinmazemlak"
     if prop_type == "HƏYƏT EVİ":
-        return ["#emlak", "#evler", "#heyetevleri", "#kupcali", "#baku"]
+        return ["#emlak", "#evler", "#heyetevleri", doc_tag, "#baku"]
     elif prop_type == "VİLLA":
-        return ["#villa", "#luxuryrealestate", "#baku", "#emlak", "#kupcali"]
+        return ["#villa", "#luxuryrealestate", "#baku", "#emlak", doc_tag]
     else:
-        return ["#emlak", "#menzil", "#baku", "#kupcali", "#ipoteka"]
+        return ["#emlak", "#menzil", "#baku", doc_tag, "#baki" if not has_bill_of_sale else "#ipoteka"]
 
 
 def generate_crm_caption(
@@ -200,8 +201,13 @@ def generate_public_caption(listing: Dict[str, Any]) -> str:
     floor_str = f" | {floor}/{floors} mərtəbə" if floor else ""
 
     prop_type = get_property_type(listing)
-    hashtags = get_targeted_hashtags(prop_type)[:5]
-    kupca_badge = "✅ Dövlət Çıxarışı (Kupça) var - İpotekaya yararlıdır!" if listing.get("has_bill_of_sale", True) else "Müqaviləli"
+    has_kupca = bool(listing.get("has_bill_of_sale", False))
+    hashtags = get_targeted_hashtags(prop_type, has_bill_of_sale=has_kupca)[:5]
+    kupca_badge = (
+        "✅ Dövlət Çıxarışı (Kupça) var - İpotekaya yararlıdır!"
+        if has_kupca
+        else "Müqaviləli / Sənəd dəqiqləşdirilir"
+    )
 
     bina_id = str(listing.get("bina_id", "")).strip()
     niche = listing.get("channel_niche")
@@ -217,8 +223,14 @@ def generate_public_caption(listing: Dict[str, Any]) -> str:
     wa_text = f"Salam, kod:{bina_id}-{niche_slug}"
     public_wa_link = f"https://wa.me/{agency_phone}?text={urllib.parse.quote(wa_text)}"
 
+    headline = (
+        f"🔥 <b>TƏCİLİ KUPÇALI {prop_type} SATILIR!</b> 🔥"
+        if has_kupca
+        else f"🔥 <b>{prop_type} SATILIR!</b> 🔥"
+    )
+
     caption_lines = [
-        f"🔥 <b>TƏCİLİ KUPÇALI {prop_type} SATILIR!</b> 🔥",
+        headline,
         "",
         f"💰 <b>Qiymət:</b> {formatted_price} {curr}",
         f"📍 <b>Ünvan:</b> {loc}",

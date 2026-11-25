@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import fs from "fs";
+import { requireOperator } from "@/lib/auth/resolve-operator";
 
-// Standard desktop User-Agent for real-time bina.az portal checks
 const DESKTOP_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-// Deactivation phrases indicating a listing was removed, expired, or sold
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const REMOVED_DOM_PHRASES = [
   "bu elan artıq aktiv deyil",
   "bu elan artiq aktiv deyil",
@@ -55,22 +56,25 @@ export async function POST(
   const startTime = Date.now();
   let responseTimeMs = 0;
 
-  // 1. Resolve route params
-  const { bina_id: binaIdParam } = await context.params;
+  // 1. Require authenticated & active agency member
+  const auth = await requireOperator(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const { operator } = auth;
 
+  // 2. Resolve route params
+  const { bina_id: binaIdParam } = await context.params;
   if (!binaIdParam) {
     return NextResponse.json(
-      {
-        ok: false,
-        reason: "ERROR",
-        message: "bina_id parametri tələb olunur.",
-      },
+      { ok: false, reason: "ERROR", message: "bina_id parametri tələb olunur." },
       { status: 400 }
     );
   }
 
-  const numericBinaId = parseInt(binaIdParam, 10);
-  if (Number.isNaN(numericBinaId)) {
+  const paramIsUuid = UUID_REGEX.test(binaIdParam);
+  const numericBinaId = paramIsUuid ? null : parseInt(binaIdParam, 10);
+  if (!paramIsUuid && (numericBinaId === null || Number.isNaN(numericBinaId))) {
     return NextResponse.json(
       {
         ok: false,
@@ -81,12 +85,12 @@ export async function POST(
     );
   }
 
-  // 2. Parse request body
+  // 3. Parse request body
   let body: PreflightRequestBody = {};
   try {
     body = await request.json();
   } catch {
-    // Body is optional if listing_id is derived from bina_id
+    // Body optional
   }
 
   const {
@@ -95,15 +99,19 @@ export async function POST(
     dispatch_to_telegram = false,
     bypass_live_check = false,
   } = body;
+
   const supabase = createAdminClient();
+  const isListingUuid = Boolean(listing_id && UUID_REGEX.test(listing_id));
 
-  // 3. Query listing, latest render_version, and publication from Supabase
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const isListingUuid = listing_id && UUID_REGEX.test(listing_id);
+  let listingQuery = supabase
+    .from("listings")
+    .select("*")
+    .eq("agency_id", operator.agencyId);
 
-  let listingQuery = supabase.from("listings").select("*");
   if (isListingUuid) {
-    listingQuery = listingQuery.eq("id", listing_id);
+    listingQuery = listingQuery.eq("id", listing_id!);
+  } else if (paramIsUuid) {
+    listingQuery = listingQuery.eq("id", binaIdParam);
   } else {
     listingQuery = listingQuery.eq("bina_id", String(numericBinaId));
   }
@@ -115,14 +123,47 @@ export async function POST(
       {
         ok: false,
         reason: "ERROR",
-        message: `Elan verilənlər bazasında tapılmadı (bina_id: ${numericBinaId}).`,
+        message: `Elan verilənlər bazasında tapılmadı (${binaIdParam}).`,
       },
       { status: 404 }
     );
   }
 
+  const effectiveBinaId = listing.bina_id ? String(listing.bina_id) : null;
+  const parsedBinaInt =
+    effectiveBinaId && !Number.isNaN(parseInt(effectiveBinaId, 10))
+      ? parseInt(effectiveBinaId, 10)
+      : null;
+
+  // Fetch agency settings (contact phone + telegram chat)
+  const { data: agencySettings } = await supabase
+    .from("agency_settings")
+    .select("public_phone, telegram_chat_id")
+    .eq("agency_id", operator.agencyId)
+    .maybeSingle();
+
+  // Fetch owner contact separately (blocked for SMM)
+  let ownerPhoneRaw = "";
+  if (operator.role !== "SMM") {
+    const { data: ownerContact } = await supabase
+      .from("listing_owner_contacts")
+      .select("owner_phone_raw, owner_phone_normalized")
+      .eq("listing_id", listing.id)
+      .eq("agency_id", operator.agencyId)
+      .maybeSingle();
+    ownerPhoneRaw =
+      ownerContact?.owner_phone_raw ||
+      ownerContact?.owner_phone_normalized ||
+      listing.owner_phone_raw ||
+      listing.owner_phone_normalized ||
+      "";
+  }
+
   // Fetch render version (specific or latest)
-  let rvQuery = supabase.from("render_versions").select("*");
+  let rvQuery = supabase
+    .from("render_versions")
+    .select("*")
+    .eq("agency_id", operator.agencyId);
   if (render_version_id) {
     rvQuery = rvQuery.eq("id", render_version_id);
   } else {
@@ -134,15 +175,15 @@ export async function POST(
   const { data: renderVersion } = await rvQuery.maybeSingle();
 
   // Fetch latest publication record
-  const { data: publication } = await supabase
+  const { data: existingPublication } = await supabase
     .from("publications")
     .select("*")
     .eq("listing_id", listing.id)
+    .eq("agency_id", operator.agencyId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  // Baseline expected price from render version or listing record
   const expectedPrice = Number(
     renderVersion?.rendered_price ??
       listing.price_azn_normalized ??
@@ -151,8 +192,9 @@ export async function POST(
   );
 
   let portalPrice: number | null = null;
+  const isOffMarket = listing.source_type === "OFF_MARKET";
 
-  if (bypass_live_check) {
+  if (isOffMarket || bypass_live_check || !effectiveBinaId) {
     if (!expectedPrice || expectedPrice <= 0) {
       return NextResponse.json(
         {
@@ -166,8 +208,7 @@ export async function POST(
     portalPrice = expectedPrice;
     responseTimeMs = Date.now() - startTime;
   } else {
-    // 4. Fetch https://bina.az/items/${bina_id} with 8-second timeout & desktop User-Agent
-    const targetUrl = `https://bina.az/items/${numericBinaId}`;
+    const targetUrl = `https://bina.az/items/${effectiveBinaId}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -201,10 +242,10 @@ export async function POST(
             fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
           }`;
 
-      // Audit log
       await supabase.from("preflight_checks").insert({
         listing_id: listing.id,
-        bina_id: numericBinaId,
+        agency_id: operator.agencyId,
+        bina_id: parsedBinaInt,
         result: "SCRAPE_ERROR",
         response_time_ms: responseTimeMs,
       });
@@ -222,9 +263,7 @@ export async function POST(
       );
     }
 
-    // 5. Liveness Check & Residential Worker Delegation
     const isHttpDelisted = fetchRes.status === 404 || fetchRes.status === 410;
-
     if (!isHttpDelisted) {
       try {
         html = await fetchRes.text();
@@ -233,7 +272,6 @@ export async function POST(
       }
     }
 
-    // Detect Cloudflare Turnstile / anti-bot challenge on datacenter IPs (e.g. Vercel AWS)
     const isCloudflareBlocked =
       fetchRes.status === 403 ||
       fetchRes.status === 429 ||
@@ -242,20 +280,18 @@ export async function POST(
       html.includes("Attention Required! | Cloudflare");
 
     if (isCloudflareBlocked) {
-      console.log(
-        `[PREFLIGHT] Cloudflare challenge detected on Vercel IP. Delegating to residential Local Worker via pipeline_jobs...`
-      );
-
-      const idempotencyKey = `preflight_${numericBinaId}_${Date.now()}`;
+      const idempotencyKey = `preflight_${effectiveBinaId}_${Date.now()}`;
       const { data: job, error: jobErr } = await supabase
         .from("pipeline_jobs")
         .insert({
+          agency_id: operator.agencyId,
+          created_by: operator.operatorId,
           idempotency_key: idempotencyKey,
           job_type: "PREFLIGHT_CHECK",
           listing_id: listing.id,
           trigger_source: "WEB_UI",
           params_json: {
-            bina_id: numericBinaId,
+            bina_id: parsedBinaInt ?? effectiveBinaId,
             listing_id: listing.id,
             expected_price: expectedPrice,
           },
@@ -265,7 +301,6 @@ export async function POST(
         .single();
 
       if (!jobErr && job?.id) {
-        // Poll pipeline_jobs for up to 6.5s (16 x 400ms)
         const pollStart = Date.now();
         let workerResult: Record<string, unknown> | null = null;
 
@@ -274,12 +309,11 @@ export async function POST(
 
           const { data: jobStatus } = await supabase
             .from("pipeline_jobs")
-            .select("status, error_message")
+            .select("status")
             .eq("id", job.id)
             .single();
 
           if (jobStatus?.status === "SUCCEEDED") {
-            // Query latest preflight_checks entry for this listing
             const { data: checkData } = await supabase
               .from("preflight_checks")
               .select("*")
@@ -308,7 +342,10 @@ export async function POST(
             });
           }
 
-          if (workerResult.portal_price !== undefined && workerResult.portal_price !== null) {
+          if (
+            workerResult.portal_price !== undefined &&
+            workerResult.portal_price !== null
+          ) {
             const parsed = parseFloat(String(workerResult.portal_price));
             if (!Number.isNaN(parsed) && parsed > 0) {
               portalPrice = parsed;
@@ -322,18 +359,16 @@ export async function POST(
     const hasDeletedClass =
       html.includes("item_status_deleted") ||
       /class=["'][^"']*item_status_deleted[^"']*["']/i.test(html);
-
     const hasDeletedText = REMOVED_DOM_PHRASES.some((phrase) =>
       lowerHtml.includes(phrase)
     );
 
-    // Check Next.js __NEXT_DATA__ dehydrated JSON if present
     let isNextDataDeleted = false;
     try {
       const nextMatch = html.match(
         /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
       );
-      if (nextMatch && nextMatch[1]) {
+      if (nextMatch?.[1]) {
         const nextJson = JSON.parse(nextMatch[1]);
         const currentItem = nextJson?.props?.pageProps?.currentItemData;
         const statusCode = nextJson?.props?.pageProps?.statusCode;
@@ -343,9 +378,14 @@ export async function POST(
         if (currentItem) {
           const itemStatus = String(currentItem.status || "").toLowerCase();
           if (
-            ["deleted", "removed", "expired", "archived", "sold", "inactive"].includes(
-              itemStatus
-            ) ||
+            [
+              "deleted",
+              "removed",
+              "expired",
+              "archived",
+              "sold",
+              "inactive",
+            ].includes(itemStatus) ||
             currentItem.isDeleted ||
             currentItem.isExpired
           ) {
@@ -354,37 +394,38 @@ export async function POST(
         }
       }
     } catch {
-      // Ignore JSON parsing errors
+      // Ignore parse errors
     }
 
-    const isRemoved =
-      isHttpDelisted || hasDeletedClass || hasDeletedText || isNextDataDeleted;
-
-    if (isRemoved) {
-      // Update listing: source_availability='REMOVED_ON_BINA', editorial_status='ARCHIVED'
+    if (
+      isHttpDelisted ||
+      hasDeletedClass ||
+      hasDeletedText ||
+      isNextDataDeleted
+    ) {
       await supabase
         .from("listings")
         .update({
           source_availability: "REMOVED_ON_BINA",
           editorial_status: "ARCHIVED",
         })
-        .eq("id", listing.id);
+        .eq("id", listing.id)
+        .eq("agency_id", operator.agencyId);
 
-      // Update publication if present
-      if (publication) {
+      if (existingPublication) {
         await supabase
           .from("publications")
           .update({
             preflight_status: "REMOVED_ON_BINA",
             last_preflight_error: "Elan bina.az-dan silinib və ya satılıb.",
           })
-          .eq("id", publication.id);
+          .eq("id", existingPublication.id);
       }
 
-      // Log to preflight_checks (result='REMOVED_ON_BINA')
       await supabase.from("preflight_checks").insert({
         listing_id: listing.id,
-        bina_id: numericBinaId,
+        agency_id: operator.agencyId,
+        bina_id: parsedBinaInt,
         result: "REMOVED_ON_BINA",
         response_time_ms: responseTimeMs,
       });
@@ -397,87 +438,63 @@ export async function POST(
       });
     }
 
-    // 6. Robust Multi-Layer Price Extraction & Comparison (if not already extracted by worker)
     if (portalPrice === null) {
-      // Layer 1: __NEXT_DATA__ JSON parsing (canonical bina.az pageProps)
       try {
         const nextMatch = html.match(
           /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
         );
-        if (nextMatch && nextMatch[1]) {
+        if (nextMatch?.[1]) {
           const nextJson = JSON.parse(nextMatch[1]);
           const pageProps = nextJson?.props?.pageProps;
-
-          // Check currentItemData.price
           const currentItem = pageProps?.currentItemData;
           if (currentItem?.price !== undefined && currentItem?.price !== null) {
-            if (typeof currentItem.price === "object") {
-              const rawTotal = currentItem.price.total ?? currentItem.price.value;
-              if (rawTotal !== undefined && rawTotal !== null) {
-                const p = parseFloat(String(rawTotal));
-                if (!Number.isNaN(p) && p > 0) portalPrice = p;
-              }
-            } else if (
-              typeof currentItem.price === "number" ||
-              typeof currentItem.price === "string"
-            ) {
-              const p = parseFloat(String(currentItem.price));
-              if (!Number.isNaN(p) && p > 0) portalPrice = p;
-            }
+            const rawTotal =
+              typeof currentItem.price === "object"
+                ? currentItem.price.total ?? currentItem.price.value
+                : currentItem.price;
+            const p = parseFloat(String(rawTotal));
+            if (!Number.isNaN(p) && p > 0) portalPrice = p;
           }
 
-          // Check apolloState Item:ID
-          if (portalPrice === null && pageProps?.apolloState) {
-            const itemObj = pageProps.apolloState[`Item:${numericBinaId}`];
+          if (portalPrice === null && pageProps?.apolloState && effectiveBinaId) {
+            const itemObj = pageProps.apolloState[`Item:${effectiveBinaId}`];
             if (itemObj?.price !== undefined && itemObj?.price !== null) {
-              if (typeof itemObj.price === "object") {
-                const rawTotal = itemObj.price.total ?? itemObj.price.value;
-                if (rawTotal !== undefined && rawTotal !== null) {
-                  const p = parseFloat(String(rawTotal));
-                  if (!Number.isNaN(p) && p > 0) portalPrice = p;
-                }
-              } else if (
-                typeof itemObj.price === "number" ||
-                typeof itemObj.price === "string"
-              ) {
-                const p = parseFloat(String(itemObj.price));
-                if (!Number.isNaN(p) && p > 0) portalPrice = p;
-              }
+              const rawTotal =
+                typeof itemObj.price === "object"
+                  ? itemObj.price.total ?? itemObj.price.value
+                  : itemObj.price;
+              const p = parseFloat(String(rawTotal));
+              if (!Number.isNaN(p) && p > 0) portalPrice = p;
             }
           }
         }
       } catch {
-        // Ignore JSON parsing errors
+        // Ignore parse errors
       }
 
-      // Layer 2: Regex for Apollo GraphQL cached Price object in HTML
       if (portalPrice === null) {
         const apolloMatch = html.match(
           /"price":\s*\{\s*"__typename":\s*"Price"[^}]*"total":\s*(\d+)/
         );
-        if (apolloMatch && apolloMatch[1]) {
+        if (apolloMatch?.[1]) {
           const p = parseFloat(apolloMatch[1]);
           if (!Number.isNaN(p) && p > 0) portalPrice = p;
         }
       }
 
-      // Layer 3: Schema.org / JSON-LD Offer Price
       if (portalPrice === null) {
-        const ldMatch = html.match(
-          /"@type":\s*"Offer"[^}]*"price":\s*"(\d+)"/
-        );
-        if (ldMatch && ldMatch[1]) {
+        const ldMatch = html.match(/"@type":\s*"Offer"[^}]*"price":\s*"(\d+)"/);
+        if (ldMatch?.[1]) {
           const p = parseFloat(ldMatch[1]);
           if (!Number.isNaN(p) && p > 0) portalPrice = p;
         }
       }
 
-      // Layer 4: Styled-components price text preceding currency symbol (AZN or ₼)
       if (portalPrice === null) {
         const scMatch =
           html.match(/>([\d\s]{3,15})<\/[a-z0-9]+>[^<]{0,20}(?:AZN|₼)/i) ||
           html.match(/>([\d\s]{3,15})\s*(?:<!--.*?-->\s*)*(?:AZN|₼)/i);
-        if (scMatch && scMatch[1]) {
+        if (scMatch?.[1]) {
           const rawDigits = scMatch[1].replace(/\D/g, "");
           if (rawDigits) {
             const parsed = parseFloat(rawDigits);
@@ -486,13 +503,14 @@ export async function POST(
         }
       }
 
-      // Layer 5: Legacy HTML span with class="price-val"
       if (portalPrice === null) {
         const priceValMatch = html.match(
           /class=["'][^"']*price-val[^"']*["'][^>]*>([\s\S]*?)<\//i
         );
-        if (priceValMatch && priceValMatch[1]) {
-          const rawVal = priceValMatch[1].replace(/<[^>]*>/g, "").replace(/\s+/g, "");
+        if (priceValMatch?.[1]) {
+          const rawVal = priceValMatch[1]
+            .replace(/<[^>]*>/g, "")
+            .replace(/\s+/g, "");
           const parsed = parseFloat(rawVal);
           if (!Number.isNaN(parsed) && parsed > 0) portalPrice = parsed;
         }
@@ -500,13 +518,10 @@ export async function POST(
     }
 
     if (portalPrice === null || Number.isNaN(portalPrice) || portalPrice <= 0) {
-      console.error(
-        `[PREFLIGHT ERROR] bina_id=${numericBinaId} fetchStatus=${fetchRes.status} htmlLen=${html.length} snippet=${html.slice(0, 300)}`
-      );
-
       await supabase.from("preflight_checks").insert({
         listing_id: listing.id,
-        bina_id: numericBinaId,
+        agency_id: operator.agencyId,
+        bina_id: parsedBinaInt,
         result: "SCRAPE_ERROR",
         response_time_ms: responseTimeMs,
       });
@@ -516,7 +531,7 @@ export async function POST(
           ok: false,
           reason: "SCRAPE_ERROR",
           message:
-            "bina.az portalından canlı qiymət oxuna bilmədi (Vercel bulud IP bloklaması). Bazadakı təsdiqlənmiş qiymətlə göndərə və ya yerli worker-i (local_worker.py) işə sala bilərsiniz.",
+            "bina.az portalından canlı qiymət oxuna bilmədi. Bazadakı təsdiqlənmiş qiymətlə göndərə və ya worker-i işə sala bilərsiniz.",
           can_fallback_to_db: true,
           db_price: expectedPrice,
           response_time_ms: responseTimeMs,
@@ -528,7 +543,7 @@ export async function POST(
     }
   }
 
-  // Compare with render_version?.rendered_price || listing.price_azn / price_azn_normalized
+  // Price comparison
   const priceDelta = Math.abs(portalPrice - expectedPrice);
   const deltaPct =
     expectedPrice > 0
@@ -536,29 +551,31 @@ export async function POST(
       : 0;
 
   if (priceDelta >= 1.0) {
-    // Update listing price and price_azn_normalized
     await supabase
       .from("listings")
       .update({
         price: portalPrice,
         price_azn_normalized: portalPrice,
       })
-      .eq("id", listing.id);
+      .eq("id", listing.id)
+      .eq("agency_id", operator.agencyId);
 
-    if (publication) {
+    if (existingPublication) {
       await supabase
         .from("publications")
         .update({
           preflight_status: "PRICE_MISMATCH",
-          last_preflight_error: `Qiymət dəyişib: ${expectedPrice} -> ${portalPrice} AZN (${deltaPct > 0 ? "+" : ""}${deltaPct}%)`,
+          last_preflight_error: `Qiymət dəyişib: ${expectedPrice} -> ${portalPrice} AZN (${
+            deltaPct > 0 ? "+" : ""
+          }${deltaPct}%)`,
         })
-        .eq("id", publication.id);
+        .eq("id", existingPublication.id);
     }
 
-    // Log to preflight_checks (result='PRICE_CHANGED', portal_price, video_price, price_delta_pct)
     await supabase.from("preflight_checks").insert({
       listing_id: listing.id,
-      bina_id: numericBinaId,
+      agency_id: operator.agencyId,
+      bina_id: parsedBinaInt,
       result: "PRICE_CHANGED",
       portal_price: portalPrice,
       video_price: expectedPrice,
@@ -575,54 +592,137 @@ export async function POST(
       portal_price: portalPrice,
       video_price: expectedPrice,
       response_time_ms: responseTimeMs,
-      message: `Qiymət fərqi aşkarlandı: Əvvəlki: ${formatNumberSpacing(expectedPrice)} AZN -> bina.az-da: ${formatNumberSpacing(portalPrice)} AZN (${deltaPct > 0 ? "+" : ""}${deltaPct}%).`,
+      message: `Qiymət fərqi aşkarlandı: Əvvəlki: ${formatNumberSpacing(
+        expectedPrice
+      )} AZN -> Cari: ${formatNumberSpacing(portalPrice)} AZN (${
+        deltaPct > 0 ? "+" : ""
+      }${deltaPct}%).`,
     });
   }
 
-  // 7. On Verification PASS
+  // 7. Verification PASS
   await supabase.from("preflight_checks").insert({
     listing_id: listing.id,
-    bina_id: numericBinaId,
-    result: bypass_live_check ? "PASSED_WITH_DB_FALLBACK" : "PASSED",
+    agency_id: operator.agencyId,
+    bina_id: parsedBinaInt,
+    result:
+      isOffMarket || bypass_live_check ? "PASSED_WITH_DB_FALLBACK" : "PASSED",
     portal_price: portalPrice,
     video_price: expectedPrice,
     price_delta_pct: 0,
     response_time_ms: responseTimeMs,
   });
 
-  // 8. Telegram Dispatch (if requested)
-  let telegramMsgId: number | null = null;
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  const mockDispatch =
-    process.env.TELEGRAM_MOCK_DISPATCH === "true" || !botToken || !chatId;
-
+  // 8. Two-phase leased Telegram dispatch
   if (dispatch_to_telegram) {
-    // Anti-spam cooldown: Check if this listing was already dispatched to Telegram within the last 30 seconds
-    if (publication?.telegram_dispatched_at && publication?.telegram_message_id) {
-      const lastDispatched = new Date(publication.telegram_dispatched_at).getTime();
-      const now = Date.now();
-      if (now - lastDispatched < 30_000) {
-        console.warn(
-          `[ANTI-SPAM] Duplicate Telegram dispatch suppressed for listing #${numericBinaId}. Last dispatched ${Math.round((now - lastDispatched) / 1000)}s ago.`
-        );
-        return NextResponse.json({
-          ok: true,
-          reason: "PASSED",
-          already_dispatched: true,
-          portal_price: portalPrice,
-          video_price: expectedPrice,
-          old_price: expectedPrice,
-          new_price: portalPrice,
-          delta_pct: 0,
-          response_time_ms: responseTimeMs,
-          telegram_dispatched: true,
-          telegram_message_id: publication.telegram_message_id,
-          message: "Elan artıq Telegram-a yenicə göndərilib (təkrar göndəriş qoruyucusu aktivdir).",
-        });
-      }
+    if (
+      renderVersion?.storage_pruned_at !== null &&
+      renderVersion?.storage_pruned_at !== undefined
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          telegram_dispatched: false,
+          message: "Video faylı saxlancdan silinib (storage_pruned_at).",
+        },
+        { status: 410 }
+      );
     }
 
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = agencySettings?.telegram_chat_id || process.env.TELEGRAM_CHAT_ID;
+    if (
+      !botToken ||
+      botToken.startsWith("mock") ||
+      botToken === "test" ||
+      !chatId
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          telegram_dispatched: false,
+          message:
+            "Telegram bot konfiqurasiyası (TELEGRAM_BOT_TOKEN / telegram_chat_id) təyin edilməyib.",
+        },
+        { status: 503 }
+      );
+    }
+
+    const videoUrl = renderVersion?.video_cdn_url as string | undefined;
+    if (!videoUrl) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          telegram_dispatched: false,
+          message: "Paylaşım üçün hazır video URL (video_cdn_url) tapılmadı.",
+        },
+        { status: 404 }
+      );
+    }
+
+    // Ensure publication row exists for atomic slot leasing
+    let pubId = existingPublication?.id as string | undefined;
+    if (!pubId) {
+      const { data: createdPub, error: pubInsertErr } = await supabase
+        .from("publications")
+        .insert({
+          agency_id: operator.agencyId,
+          listing_id: listing.id,
+          render_version_id: renderVersion?.id || null,
+          channel: "INSTAGRAM_REELS",
+          status: "DRAFT_READY",
+          preflight_status: "PASSED",
+          assigned_agent_id: operator.operatorId,
+          created_by: operator.operatorId,
+        })
+        .select("id")
+        .single();
+
+      if (pubInsertErr || !createdPub?.id) {
+        return NextResponse.json(
+          {
+            ok: false,
+            reason: "ERROR",
+            telegram_dispatched: false,
+            message: "Nəşr qeydi yaradıla bilmədi.",
+          },
+          { status: 500 }
+        );
+      }
+      pubId = createdPub.id;
+    }
+
+    // Phase 1: Acquire 60s atomic Telegram dispatch lease
+    const { data: claimRaw, error: claimErr } = await supabase.rpc(
+      "claim_telegram_dispatch_slot",
+      {
+        p_publication_id: pubId,
+        p_cooldown_seconds: 300,
+      }
+    );
+    const slot = Array.isArray(claimRaw) ? claimRaw[0] : claimRaw;
+
+    if (claimErr || !slot?.acquired || !slot?.lock_token) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          already_dispatched: true,
+          telegram_dispatched: false,
+          portal_price: portalPrice,
+          video_price: expectedPrice,
+          message:
+            "Elan artıq Telegram-a göndərilir və ya cooldown qoruyucusu aktivdir.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const lockToken = String(slot.lock_token);
+    const displayRef = effectiveBinaId || listing.id.slice(0, 8);
     const formattedPrice = formatNumberSpacing(portalPrice);
     const loc = listing.location || listing.address || "Bakı";
     const roomsStr = listing.rooms ? `${listing.rooms} otaqlı` : "";
@@ -634,21 +734,23 @@ export async function POST(
       : "";
     const kupchaBadge = listing.has_bill_of_sale
       ? "Dövlət Çıxarışı (Kupça) var"
-      : "Müqaviləli";
+      : "Sənəd dəqiqləşdirilir / Müqavilə";
 
     const title =
       listing.title ||
-      `Təcili Kupçalı ${roomsStr ? roomsStr + " " : ""}Mənzil Satılır!`;
+      `${listing.has_bill_of_sale ? "Kupçalı " : ""}${
+        roomsStr ? roomsStr + " " : ""
+      }Mənzil Satılır!`;
 
     const highlights = listing.description
       ? listing.description.slice(0, 240).trim() +
         (listing.description.length > 240 ? "..." : "")
-      : "Mənzil əla təmirlidir, geniş otaqları və şəhərə gözəl mənzərəsi var. Bütün infrastruktur piyada məsafəsindədir.";
+      : "Mənzil əla təmirlidir, geniş otaqları var. Bütün infrastruktur piyada məsafəsindədir.";
 
+    const agencyPhone = agencySettings?.public_phone || "";
     const hashtags =
       "#baku #azerbaijan #emlak #binaaz #dasinmazemlak #menzil #evler #bakuapartments";
 
-    // 1-Tap Copyable standalone caption inside <code>...</code>
     const copyableCaptionText = [
       `📍 ${title}`,
       ``,
@@ -658,216 +760,179 @@ export async function POST(
       `📄 Sənəd: ${kupchaBadge}`,
       ``,
       highlights,
-      ``,
-      `📞 Əlaqə & Ətraflı Məlumat: +994 50 200 21 69`,
+      ...(agencyPhone ? [``, `📞 Əlaqə & Ətraflı Məlumat: ${agencyPhone}`] : []),
       ``,
       hashtags,
     ].join("\n");
 
     const copyableCodeMessage = `<code>${escapeHtml(copyableCaptionText)}</code>`;
 
-    // Interactive Inline Keyboard
-    const rawPhone =
-      listing.owner_phone_raw || listing.owner_phone_normalized || "";
-    const digits = cleanDigits(rawPhone);
+    const digits = cleanDigits(ownerPhoneRaw);
     const waDigits = digits.startsWith("994")
       ? digits
       : digits
       ? `994${digits}`
       : "";
     const waText = encodeURIComponent(
-      `Salam, bina.az-dakı ${numericBinaId} nömrəli mənzil elanınızla bağlı yazıram.`
+      `Salam, #${displayRef} nömrəli mənzil elanınızla bağlı yazıram.`
     );
-    const waUrl = waDigits
-      ? `https://wa.me/${waDigits}?text=${waText}`
-      : `https://bina.az/items/${numericBinaId}`;
-    const binaUrl = `https://bina.az/items/${numericBinaId}`;
+    const binaUrl = effectiveBinaId
+      ? `https://bina.az/items/${effectiveBinaId}`
+      : undefined;
+    const waUrl = waDigits ? `https://wa.me/${waDigits}?text=${waText}` : binaUrl;
+
+    const actionRow: Array<Record<string, string>> = [];
+    if (waUrl) {
+      actionRow.push({ text: "💬 WhatsApp Sahibinə", url: waUrl });
+    }
+    if (binaUrl) {
+      actionRow.push({ text: "🌐 Bina.az Elanı", url: binaUrl });
+    }
 
     const replyMarkup = {
       inline_keyboard: [
         [
           {
             text: "🔄 Yenidən Render Et",
-            callback_data: `rerender_${numericBinaId}`,
+            callback_data: `rerender_${displayRef}`,
           },
           {
             text: "✍️ Ssenarini Dəyiş",
-            callback_data: `scriptmenu_${numericBinaId}`,
+            callback_data: `scriptmenu_${displayRef}`,
           },
         ],
         [
           {
             text: "🎙️ Səsi Dəyiş",
-            callback_data: `voicemenu_${numericBinaId}`,
+            callback_data: `voicemenu_${displayRef}`,
           },
           {
             text: "📊 Keenable Hesabatı",
-            callback_data: `keenable_${numericBinaId}`,
+            callback_data: `keenable_${displayRef}`,
           },
         ],
-        [
-          { text: "💬 WhatsApp Sahibinə", url: waUrl },
-          { text: "🌐 Bina.az Elanı", url: binaUrl },
-        ],
+        ...(actionRow.length > 0 ? [actionRow] : []),
         [
           {
             text: "🚀 Təsdiqlə və Paylaş",
-            callback_data: `publish_${numericBinaId}`,
+            callback_data: `publish_${displayRef}`,
           },
-          { text: "❌ Arxivlə", callback_data: `archive_${numericBinaId}` },
+          { text: "❌ Arxivlə", callback_data: `archive_${displayRef}` },
         ],
       ],
     };
 
     const crmVideoCaption = [
-      `🎬 <b>BakuEstate-AI | Yoxlanılmış Elan #${numericBinaId}</b>`,
-      `📍 <b>Ünvan:</b> ${loc}`,
+      `🎬 <b>BakuEstate-AI | Yoxlanılmış Elan #${displayRef}</b>`,
+      `📍 <b>Ünvan:</b> ${escapeHtml(String(loc))}`,
       `💰 <b>Qiymət:</b> ${formattedPrice} AZN`,
-      `📐 <b>Parametrlər:</b> ${[roomsStr, areaStr, floorStr].filter(Boolean).join(" | ")}`,
+      `📐 <b>Parametrlər:</b> ${[roomsStr, areaStr, floorStr]
+        .filter(Boolean)
+        .join(" | ")}`,
       `📜 <b>Sənəd:</b> ${kupchaBadge}`,
-      `✅ <i>bina.az statusu və qiyməti canlı təsdiqləndi!</i>`,
+      isOffMarket
+        ? `✅ <i>Eksklüziv oflayn elan (broker təsdiqli).</i>`
+        : `✅ <i>bina.az statusu və qiyməti canlı təsdiqləndi!</i>`,
     ].join("\n");
 
-    if (mockDispatch) {
-      telegramMsgId = 1000 + Math.floor(Math.random() * 9000);
-      console.log(
-        `[MOCK TELEGRAM] Dispatched video & copyable caption for listing #${numericBinaId}. Simulated Msg ID: ${telegramMsgId}`
-      );
-    } else {
-      try {
-        let videoSent = false;
+    let telegramMsgId: number | null = null;
 
-        // Check local video file on disk
-        if (
-          renderVersion?.local_video_path &&
-          fs.existsSync(renderVersion.local_video_path)
-        ) {
-          const form = new FormData();
-          form.append("chat_id", chatId);
-          form.append("caption", crmVideoCaption);
-          form.append("parse_mode", "HTML");
-          form.append("supports_streaming", "true");
-          form.append("reply_markup", JSON.stringify(replyMarkup));
-
-          const fileBuffer = fs.readFileSync(renderVersion.local_video_path);
-          const blob = new Blob([fileBuffer], { type: "video/mp4" });
-          form.append("video", blob, `video_${numericBinaId}.mp4`);
-
-          const videoRes = await fetch(
-            `https://api.telegram.org/bot${botToken}/sendVideo`,
-            {
-              method: "POST",
-              body: form,
-            }
-          );
-          const videoJson = await videoRes.json();
-          if (videoJson.ok) {
-            telegramMsgId = videoJson.result?.message_id ?? null;
-            videoSent = true;
-          }
-        }
-
-        // If not sent via local file, try CDN/storage URL
-        if (!videoSent) {
-          let videoUrl = renderVersion?.video_cdn_url;
-          if (!videoUrl && renderVersion?.storage_object_path) {
-            const bucket = process.env.SUPABASE_BUCKET || "baku-estate-media";
-            const { data: storageData } = supabase.storage
-              .from(bucket)
-              .getPublicUrl(renderVersion.storage_object_path);
-            videoUrl = storageData?.publicUrl;
-          }
-
-          if (videoUrl) {
-            const videoRes = await fetch(
-              `https://api.telegram.org/bot${botToken}/sendVideo`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  video: videoUrl,
-                  caption: crmVideoCaption,
-                  parse_mode: "HTML",
-                  supports_streaming: true,
-                  reply_markup: replyMarkup,
-                }),
-              }
-            );
-            const videoJson = await videoRes.json();
-            if (videoJson.ok) {
-              telegramMsgId = videoJson.result?.message_id ?? null;
-              videoSent = true;
-            }
-          }
-        }
-
-        // Message 2: Standalone 1-tap copyable caption block in <code>...</code>
-        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    try {
+      const videoRes = await fetch(
+        `https://api.telegram.org/bot${botToken}/sendVideo`,
+        {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: copyableCodeMessage,
+            video: videoUrl,
+            caption: crmVideoCaption,
             parse_mode: "HTML",
+            supports_streaming: true,
+            reply_markup: replyMarkup,
           }),
-        });
-      } catch (telegramErr: unknown) {
-        console.warn(
-          "Telegram dispatch warning:",
-          telegramErr instanceof Error
-            ? telegramErr.message
-            : String(telegramErr)
-        );
-      }
-    }
+        }
+      );
 
-    // Update publications record:
-    // status='READY_TO_PUBLISH', verified_at=NOW(), telegram_dispatched_at=NOW(), preflight_status='PASSED'
-    const nowIso = new Date().toISOString();
-    if (publication) {
+      const videoJson = (await videoRes.json()) as {
+        ok?: boolean;
+        description?: string;
+        result?: { message_id?: number };
+      };
+
+      if (!videoRes.ok || !videoJson.ok || !videoJson.result?.message_id) {
+        throw new Error(videoJson.description || "Telegram sendVideo uğursuz oldu");
+      }
+
+      telegramMsgId = videoJson.result.message_id;
+
+      // Phase 2: Confirm Telegram dispatch only after sendVideo succeeded
+      await supabase.rpc("confirm_telegram_dispatch", {
+        p_publication_id: pubId,
+        p_lock_token: lockToken,
+        p_message_id: telegramMsgId,
+      });
+
+      const nowIso = new Date().toISOString();
       await supabase
         .from("publications")
         .update({
           status: "READY_TO_PUBLISH",
           verified_at: nowIso,
-          telegram_dispatched_at: nowIso,
           preflight_status: "PASSED",
           last_preflight_error: null,
-          telegram_message_id: telegramMsgId,
         })
-        .eq("id", publication.id);
-    } else {
-      await supabase.from("publications").insert({
-        listing_id: listing.id,
-        render_version_id: renderVersion?.id || null,
-        channel: "INSTAGRAM_REELS",
-        status: "READY_TO_PUBLISH",
-        verified_at: nowIso,
-        telegram_dispatched_at: nowIso,
-        preflight_status: "PASSED",
+        .eq("id", pubId);
+
+      // Send copyable caption block as follow-up message
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: copyableCodeMessage,
+          parse_mode: "HTML",
+        }),
+      }).catch(() => undefined);
+
+      return NextResponse.json({
+        ok: true,
+        reason: "PASSED",
+        message: "Elan uğurla təsdiqləndi və Telegram-a göndərildi.",
+        portal_price: portalPrice,
+        video_price: expectedPrice,
+        old_price: expectedPrice,
+        new_price: portalPrice,
+        delta_pct: 0,
+        response_time_ms: responseTimeMs,
+        telegram_dispatched: true,
         telegram_message_id: telegramMsgId,
       });
-    }
+    } catch (telegramErr: unknown) {
+      // Release atomic lease slot without setting telegram_dispatched_at
+      await supabase.rpc("release_telegram_dispatch_slot", {
+        p_publication_id: pubId,
+        p_lock_token: lockToken,
+      });
 
-    return NextResponse.json({
-      ok: true,
-      reason: "PASSED",
-      message: "Elan uğurla təsdiqləndi və Telegram-a göndərildi.",
-      portal_price: portalPrice,
-      video_price: expectedPrice,
-      old_price: expectedPrice,
-      new_price: portalPrice,
-      delta_pct: 0,
-      response_time_ms: responseTimeMs,
-      telegram_dispatched: true,
-      telegram_message_id: telegramMsgId,
-    });
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ERROR",
+          telegram_dispatched: false,
+          message:
+            telegramErr instanceof Error
+              ? telegramErr.message
+              : "Telegram sendVideo göndərişi uğursuz oldu.",
+        },
+        { status: 502 }
+      );
+    }
   }
 
-  // PASS without Telegram dispatch (verification check only)
+  // PASS without Telegram dispatch
   const nowIso = new Date().toISOString();
-  if (publication) {
+  if (existingPublication) {
     await supabase
       .from("publications")
       .update({
@@ -875,7 +940,7 @@ export async function POST(
         preflight_status: "PASSED",
         last_preflight_error: null,
       })
-      .eq("id", publication.id);
+      .eq("id", existingPublication.id);
   }
 
   return NextResponse.json({

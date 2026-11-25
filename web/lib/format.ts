@@ -331,6 +331,7 @@ export const JOB_STATUS_META: Record<
   SUCCEEDED: { label: "Uğurlu", tone: "emerald" },
   FAILED: { label: "Xətalı", tone: "rose" },
   EXPIRED: { label: "Müddəti bitib", tone: "neutral" },
+  CANCELLED: { label: "Ləğv edilib", tone: "neutral" },
 };
 
 export const JOB_TYPE_LABELS: Record<JobType, string> = {

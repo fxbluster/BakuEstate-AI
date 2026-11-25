@@ -75,19 +75,28 @@ def _is_valid_uuid(val: Any) -> bool:
         return False
 
 
-def _normalize_card_priority(raw_priority: Any) -> int:
+def _normalize_card_priority(raw_priority: Any) -> str:
     if isinstance(raw_priority, (int, float)):
-        return max(1, min(100, int(raw_priority)))
+        val = int(raw_priority)
+        if val >= 90:
+            return "URGENT"
+        if val >= 70:
+            return "HIGH"
+        if val <= 35:
+            return "LOW"
+        return "NORMAL"
     s = str(raw_priority or "NORMAL").strip().upper()
+    if s.isdigit():
+        return _normalize_card_priority(int(s))
     priority_map = {
-        "LOW": 30,
-        "NORMAL": 50,
-        "MEDIUM": 50,
-        "HIGH": 80,
-        "URGENT": 95,
-        "CRITICAL": 100,
+        "LOW": "LOW",
+        "NORMAL": "NORMAL",
+        "MEDIUM": "NORMAL",
+        "HIGH": "HIGH",
+        "URGENT": "URGENT",
+        "CRITICAL": "URGENT",
     }
-    return priority_map.get(s, 50)
+    return priority_map.get(s, "NORMAL")
 
 
 def _normalize_currency(raw_currency: Optional[str]) -> str:
@@ -657,6 +666,29 @@ class SupabaseRepo:
             logger.error("get_latest_render_version failed (%s): %s", resp.status_code, resp.text[:300])
         except Exception as exc:
             logger.error("Exception in get_latest_render_version: %s", exc)
+        return None
+
+    def get_render_version_by_id(self, render_version_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches a single render_version row from public.render_versions by UUID primary key."""
+        if not self.enabled or not render_version_id:
+            return None
+        try:
+            resp = self.session.get(
+                self._rest_url("render_versions"),
+                headers=self._headers(),
+                params={
+                    "id": f"eq.{str(render_version_id).strip()}",
+                    "select": "*",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                return rows[0] if rows else None
+            logger.error("get_render_version_by_id failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in get_render_version_by_id: %s", exc)
         return None
 
     def get_next_render_version_num(self, listing_id: str) -> int:
@@ -1733,6 +1765,35 @@ class SupabaseRepo:
             logger.error("Exception in complete_pipeline_job: %s", exc)
         return None
 
+    def is_job_cancel_requested(self, job_id: str) -> bool:
+        """Checks if a pipeline_job has cancel_requested_at set or status='CANCELLED'."""
+        if not self.enabled or not job_id:
+            return False
+        try:
+            resp = self.session.get(
+                self._rest_url("pipeline_jobs"),
+                headers=self._headers(),
+                params={
+                    "id": f"eq.{str(job_id).strip()}",
+                    "select": "id,status,cancel_requested_at",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                if not rows:
+                    return False
+                row = rows[0]
+                return (
+                    bool(row.get("cancel_requested_at"))
+                    or str(row.get("status") or "").strip().upper() == "CANCELLED"
+                )
+            logger.error("is_job_cancel_requested failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in is_job_cancel_requested: %s", exc)
+        return False
+
     def count_today_auto_renders_baku(self) -> int:
         """Calls public.count_today_auto_renders_baku() RPC to enforce daily Rejim 3 cap."""
         if not self.enabled:
@@ -1887,10 +1948,10 @@ class SupabaseRepo:
     # Cockpit Cards & Lead Timeline Events (AI Advisor & Sales Squad)
     # ------------------------------------------------------------------
 
-    def get_default_operator_uid(self) -> str:
+    def get_default_operator_uid(self) -> Optional[str]:
         """
-        Resolves default CRM operator user UUID from environment,
-        baku_estate_config, or safe fallback.
+        Resolves default CRM operator user UUID from environment or baku_estate_config.
+        Fail-closed: returns None when unconfigured (zero hardcoded fallback UUIDs).
         """
         cached = getattr(self, "_cached_operator_uid", None)
         if cached:
@@ -1914,9 +1975,7 @@ class SupabaseRepo:
                         return self._cached_operator_uid
             except Exception as exc:
                 logger.debug("Failed to query operator_uid config: %s", exc)
-        fallback_uid = "083d8ea3-4a73-4b85-8479-0c532ce939f0"
-        self._cached_operator_uid = fallback_uid
-        return fallback_uid
+        return None
 
     def append_lead_timeline_event(
         self,
@@ -2022,22 +2081,23 @@ class SupabaseRepo:
         self,
         lead_id: Optional[str] = None,
         listing_id: Optional[str] = None,
-        channel: str = "whatsapp",
-        priority: Any = 50,
+        channel: str = "WHATSAPP",
+        priority: Any = "NORMAL",
         headline: str = "",
         draft_text: str = "",
         target_uri: Optional[str] = None,
         strategic_rationale: Optional[str] = None,
         owner_id: Optional[str] = None,
         *,
+        agency_id: Optional[str] = None,
+        assigned_agent_id: Optional[str] = None,
         reason: Optional[str] = None,
         sentinel_warning: Optional[str] = None,
         bina_id: Optional[Any] = None,
         buyer_lead_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Creates an actionable high-priority advisory card in public.cockpit_cards.
-        Supports operator quick actions, WhatsApp templates, and Sentinel objection shields.
+        Creates an actionable advisory card in public.cockpit_cards using the v2 uppercase schema.
         """
         if not self.enabled:
             logger.debug("queue_cockpit_card skipped (cloud repo disabled)")
@@ -2045,11 +2105,14 @@ class SupabaseRepo:
 
         # Resolve lead_id
         actual_lead = lead_id or buyer_lead_id
-        clean_lead_id = str(actual_lead).strip() if actual_lead else None
+        clean_lead_id = str(actual_lead).strip() if actual_lead and _is_valid_uuid(actual_lead) else None
 
-        # Resolve listing_id
+        # Resolve listing_id and optional agency_id
         actual_listing = listing_id or bina_id
         clean_listing_id: Optional[str] = None
+        resolved_agency_id: Optional[str] = (
+            str(agency_id).strip() if agency_id and _is_valid_uuid(agency_id) else None
+        )
         if actual_listing:
             s_lst = str(actual_listing).strip()
             if _is_valid_uuid(s_lst):
@@ -2058,32 +2121,46 @@ class SupabaseRepo:
                 lst = self.get_listing_by_bina_id(s_lst)
                 if lst and lst.get("id"):
                     clean_listing_id = lst["id"]
+                    if not resolved_agency_id and lst.get("agency_id") and _is_valid_uuid(lst["agency_id"]):
+                        resolved_agency_id = str(lst["agency_id"]).strip()
 
-        # Resolve owner_id
-        if owner_id and _is_valid_uuid(owner_id):
-            resolved_owner_id = str(owner_id).strip()
-        else:
-            resolved_owner_id = self.get_default_operator_uid()
+        if not resolved_agency_id:
+            env_agency = os.getenv("DEFAULT_AGENCY_ID") or os.getenv("AGENCY_ID")
+            if env_agency and _is_valid_uuid(env_agency):
+                resolved_agency_id = env_agency.strip()
 
-        clean_channel = str(channel or "whatsapp").strip().lower()
+        # Resolve assigned_agent_id
+        candidate_agent = assigned_agent_id or owner_id or self.get_default_operator_uid()
+        resolved_agent_id = (
+            str(candidate_agent).strip()
+            if candidate_agent and _is_valid_uuid(candidate_agent)
+            else None
+        )
+
+        clean_channel = str(channel or "WHATSAPP").strip().upper()
         norm_priority = _normalize_card_priority(priority)
         clean_headline = str(headline or "Cockpit Task").strip()[:180]
         actual_reason = strategic_rationale or reason or clean_headline
         clean_reason = str(actual_reason).strip()[:500]
+        clean_rationale = str(strategic_rationale or actual_reason).strip()[:500]
         clean_draft = str(draft_text or "").strip()[:2000]
         clean_warning = str(sentinel_warning or "").strip()[:500]
         clean_uri = str(target_uri).strip() if target_uri else None
 
         payload: Dict[str, Any] = {
-            "owner_id": resolved_owner_id,
             "channel": clean_channel,
             "priority": norm_priority,
             "headline": clean_headline,
             "reason": clean_reason,
-            "draft_text": clean_draft,
-            "sentinel_warning": clean_warning,
-            "status": "pending",
+            "strategic_rationale": clean_rationale,
+            "draft_text": clean_draft or None,
+            "sentinel_warning": clean_warning or None,
+            "status": "PENDING",
         }
+        if resolved_agency_id:
+            payload["agency_id"] = resolved_agency_id
+        if resolved_agent_id:
+            payload["assigned_agent_id"] = resolved_agent_id
         if clean_lead_id:
             payload["lead_id"] = clean_lead_id
         if clean_listing_id:
@@ -2106,22 +2183,29 @@ class SupabaseRepo:
             logger.error("Exception in queue_cockpit_card: %s", exc)
         return None
 
-    def get_pending_cockpit_cards(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_pending_cockpit_cards(
+        self,
+        limit: int = 10,
+        agency_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Queries all actionable pending cards in public.cockpit_cards ordered by priority DESC, created_at DESC.
+        Queries all actionable PENDING cards in public.cockpit_cards ordered by created_at DESC.
         """
         if not self.enabled:
             return []
+        params: Dict[str, str] = {
+            "status": "eq.PENDING",
+            "order": "created_at.desc",
+            "limit": str(max(1, int(limit))),
+            "select": "*",
+        }
+        if agency_id and _is_valid_uuid(agency_id):
+            params["agency_id"] = f"eq.{str(agency_id).strip()}"
         try:
             resp = self.session.get(
                 self._rest_url("cockpit_cards"),
                 headers=self._headers(),
-                params={
-                    "status": "in.(pending,PENDING)",
-                    "order": "priority.desc,created_at.desc",
-                    "limit": str(max(1, int(limit))),
-                    "select": "*",
-                },
+                params=params,
                 timeout=self.timeout,
             )
             if resp.status_code == 200:
@@ -2141,20 +2225,24 @@ class SupabaseRepo:
         status: str,
     ) -> Optional[Dict[str, Any]]:
         """
-        Updates the status of a cockpit card (e.g. 'executed', 'dismissed', 'snoozed').
-        Sets acted_at timestamp when transitioning away from pending.
+        Updates the status of a cockpit card using uppercase v2 enum values
+        ('PENDING', 'EXECUTED', 'DISMISSED', 'SNOOZED').
         """
         if not self.enabled or not card_id:
             return None
 
         clean_id = str(card_id).strip()
-        clean_status = str(status).strip().lower()
+        raw_status = str(status).strip().upper()
+        if raw_status == "SENT":
+            raw_status = "EXECUTED"
+        if raw_status not in ("PENDING", "EXECUTED", "DISMISSED", "SNOOZED"):
+            raw_status = "DISMISSED"
 
         patch_data: Dict[str, Any] = {
-            "status": clean_status,
+            "status": raw_status,
             "updated_at": _utc_now_iso(),
         }
-        if clean_status in ("executed", "dismissed", "sent"):
+        if raw_status in ("EXECUTED", "DISMISSED"):
             patch_data["acted_at"] = _utc_now_iso()
 
         if not _is_valid_uuid(clean_id):

@@ -94,11 +94,65 @@ export type PreflightStatus =
 
 export type ChannelNiche = "LUXURY" | "AFFORDABLE" | "GENERAL" | "TIKTOK";
 
+export type AgencyRole = "ADMIN" | "BROKER" | "SMM";
+
+export interface AgencyMember {
+  user_id: string;
+  agency_id: string;
+  role: AgencyRole;
+  display_name: string;
+  whatsapp_phone: string | null;
+  telegram_chat_id: string | null;
+  commission_split_pct: number;
+  is_active: boolean;
+  created_at: string;
+  email?: string | null;
+}
+
+export interface AgencySettings {
+  agency_id: string;
+  public_phone: string;
+  telegram_chat_id: string | null;
+  niche_rules_json: {
+    luxury_min_azn: number;
+    affordable_max_azn: number;
+    viral_drop_pct: number;
+    [key: string]: unknown;
+  };
+  social_api_mode: "OFFICIAL" | "TELEGRAM_FALLBACK";
+  watermark_preset_json: Record<string, unknown>;
+  monthly_ai_budget_usd: number;
+  ai_rate_limit_rpm: number;
+  updated_at: string;
+}
+
+export interface AgentMessage {
+  id: string;
+  conversation_id: string;
+  agency_id: string;
+  operator_id: string;
+  sender_type: "USER" | "AGENT" | "SYSTEM";
+  sender_name: string;
+  content: string;
+  action_payload: Record<string, unknown>;
+  seq_num: number;
+  created_at: string;
+}
+
+export interface PaginatedResult<T> {
+  items: T[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  hasNextPage: boolean;
+}
+
 export type CockpitPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
-export type CockpitStatus = "PENDING" | "EXECUTED" | "DISMISSED";
+export type CockpitStatus = "PENDING" | "EXECUTED" | "DISMISSED" | "SNOOZED";
 
 export interface CockpitCard {
   id: string;
+  agency_id?: string;
   lead_id: string | null;
   listing_id: string | null;
   channel: string;
@@ -111,6 +165,9 @@ export interface CockpitCard {
   created_at: string;
   target_uri: string | null;
   strategic_rationale?: string | null;
+  assigned_agent_id?: string | null;
+  created_by?: string | null;
+  expires_at?: string | null;
   owner_id?: string | null;
 }
 
@@ -204,7 +261,8 @@ export type JobStatus =
   | "RUNNING"
   | "SUCCEEDED"
   | "FAILED"
-  | "EXPIRED";
+  | "EXPIRED"
+  | "CANCELLED";
 
 export interface Listing {
   id: string;
@@ -441,6 +499,7 @@ export interface FollowUpTask {
 
 export interface PipelineJob {
   id: string;
+  agency_id?: string;
   idempotency_key: string;
   job_type: JobType;
   listing_id: string | null;
@@ -452,7 +511,10 @@ export interface PipelineJob {
   locked_by: string | null;
   lease_expires_at: string | null;
   expires_at: string | null;
+  cancel_requested_at?: string | null;
   error_message: string | null;
+  assigned_agent_id?: string | null;
+  created_by?: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

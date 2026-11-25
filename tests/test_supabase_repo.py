@@ -429,15 +429,15 @@ class TestSupabaseRepo(unittest.TestCase):
         resp_post.status_code = 201
         resp_post.json.return_value = [{
             "id": "card-uuid-1",
-            "priority": 95,
-            "channel": "whatsapp",
+            "priority": "URGENT",
+            "channel": "WHATSAPP",
             "headline": "Təcili Qiymət Endirimi",
-            "status": "pending",
+            "status": "PENDING",
         }]
         self.mock_session.post.return_value = resp_post
 
         card = self.repo.queue_cockpit_card(
-            lead_id="lead-123",
+            lead_id="11111111-1111-1111-1111-111111111111",
             listing_id="8581f8be-82ca-466f-a02c-a978b9ec9220",
             channel="WHATSAPP",
             priority="URGENT",
@@ -450,18 +450,20 @@ class TestSupabaseRepo(unittest.TestCase):
         post_args, post_kwargs = self.mock_session.post.call_args
         self.assertTrue(post_args[0].endswith("/rest/v1/cockpit_cards"))
         payload = post_kwargs["json"][0]
-        self.assertEqual(payload["priority"], 95)
-        self.assertEqual(payload["channel"], "whatsapp")
+        self.assertEqual(payload["priority"], "URGENT")
+        self.assertEqual(payload["channel"], "WHATSAPP")
+        self.assertEqual(payload["status"], "PENDING")
         self.assertEqual(payload["headline"], "Təcili Qiymət Endirimi")
         self.assertEqual(payload["reason"], "Bina.az qiyməti 10% düşdü")
+        self.assertEqual(payload["strategic_rationale"], "Bina.az qiyməti 10% düşdü")
         self.assertEqual(payload["target_uri"], "https://wa.me/994501234567")
 
     def test_get_pending_cockpit_cards(self):
         resp_get = MagicMock()
         resp_get.status_code = 200
         resp_get.json.return_value = [
-            {"id": "card-1", "priority": 90, "status": "pending"},
-            {"id": "card-2", "priority": 50, "status": "pending"},
+            {"id": "card-1", "priority": "URGENT", "status": "PENDING"},
+            {"id": "card-2", "priority": "NORMAL", "status": "PENDING"},
         ]
         self.mock_session.get.return_value = resp_get
 
@@ -469,14 +471,14 @@ class TestSupabaseRepo(unittest.TestCase):
         self.assertEqual(len(cards), 2)
         get_args, get_kwargs = self.mock_session.get.call_args
         self.assertTrue(get_args[0].endswith("/rest/v1/cockpit_cards"))
-        self.assertEqual(get_kwargs["params"]["status"], "in.(pending,PENDING)")
+        self.assertEqual(get_kwargs["params"]["status"], "eq.PENDING")
         self.assertEqual(get_kwargs["params"]["limit"], "5")
 
     def test_update_cockpit_card_status(self):
         card_uuid = "11111111-1111-1111-1111-111111111111"
         resp_patch = MagicMock()
         resp_patch.status_code = 200
-        resp_patch.json.return_value = [{"id": card_uuid, "status": "executed"}]
+        resp_patch.json.return_value = [{"id": card_uuid, "status": "EXECUTED"}]
         self.mock_session.patch.return_value = resp_patch
 
         updated = self.repo.update_cockpit_card_status(card_uuid, "EXECUTED")
@@ -484,7 +486,7 @@ class TestSupabaseRepo(unittest.TestCase):
         patch_args, patch_kwargs = self.mock_session.patch.call_args
         self.assertTrue(patch_args[0].endswith("/rest/v1/cockpit_cards"))
         self.assertEqual(patch_kwargs["params"]["id"], f"eq.{card_uuid}")
-        self.assertEqual(patch_kwargs["json"]["status"], "executed")
+        self.assertEqual(patch_kwargs["json"]["status"], "EXECUTED")
         self.assertIn("acted_at", patch_kwargs["json"])
 
 

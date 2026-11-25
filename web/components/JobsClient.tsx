@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
   AlertCircle,
+  Ban,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -39,16 +40,25 @@ interface JobsClientProps {
   initialJobs: PipelineJob[];
   initialWorkers: WorkerStatusRow[];
   initialTab?: JobsCenterTab;
+  agencyId?: string | null;
 }
 
-const STATUS_TABS: Array<JobStatus | "ALL"> = [
+type ExtendedJobStatus = JobStatus | "CANCELLED";
+
+const STATUS_TABS: Array<ExtendedJobStatus | "ALL"> = [
   "ALL",
   "QUEUED",
   "RUNNING",
   "SUCCEEDED",
   "FAILED",
   "EXPIRED",
+  "CANCELLED",
 ];
+
+function getJobStatusMeta(status: string) {
+  const map = JOB_STATUS_META as Record<string, { label: string; tone: "amber" | "violet" | "emerald" | "rose" | "neutral" }>;
+  return map[status] ?? { label: status === "CANCELLED" ? "Ləğv edilib" : status, tone: "neutral" as const };
+}
 
 function extractReadableParams(
   job: PipelineJob
@@ -88,12 +98,14 @@ export function JobsClient({
   initialJobs,
   initialWorkers,
   initialTab = "jobs",
+  agencyId,
 }: JobsClientProps) {
   const [activeTab, setActiveTab] = useState<JobsCenterTab>(initialTab);
   const [jobs, setJobs] = useState<PipelineJob[]>(initialJobs);
   const [workers, setWorkers] = useState<WorkerStatusRow[]>(initialWorkers);
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "ALL">("ALL");
+  const [statusFilter, setStatusFilter] = useState<ExtendedJobStatus | "ALL">("ALL");
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [isRealtimeSubscribed, setIsRealtimeSubscribed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedTechIds, setExpandedTechIds] = useState<Record<string, boolean>>({});
@@ -101,6 +113,7 @@ export function JobsClient({
     type: "ok" | "err" | "warn";
     text: string;
   } | null>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchAll = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
@@ -127,41 +140,58 @@ export function JobsClient({
   }, []);
 
   useEffect(() => {
-    if (!autoRefresh || !isSupabaseConfigured()) return;
+    if (!autoRefresh || !isSupabaseConfigured() || isRealtimeSubscribed) return;
     const intervalMs = activeTab === "worker" ? 5_000 : 10_000;
     const timer = setInterval(fetchAll, intervalMs);
     return () => clearInterval(timer);
-  }, [autoRefresh, activeTab, fetchAll]);
+  }, [autoRefresh, activeTab, isRealtimeSubscribed, fetchAll]);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    const scheduleDebouncedRefresh = () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(() => {
+        fetchAll();
+      }, 1500);
+    };
+
     try {
       const supabase = createClient();
+      const jobsFilter = agencyId
+        ? {
+            event: "*" as const,
+            schema: "public",
+            table: "pipeline_jobs",
+            filter: `agency_id=eq.${agencyId}`,
+          }
+        : { event: "*" as const, schema: "public", table: "pipeline_jobs" };
+
+      const hbFilter = agencyId
+        ? {
+            event: "*" as const,
+            schema: "public",
+            table: "worker_heartbeats",
+            filter: `agency_id=eq.${agencyId}`,
+          }
+        : { event: "*" as const, schema: "public", table: "worker_heartbeats" };
+
       const channel = supabase
         .channel("jobs_and_worker_realtime")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "pipeline_jobs" },
-          () => {
-            fetchAll();
-          }
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "worker_heartbeats" },
-          () => {
-            fetchAll();
-          }
-        )
-        .subscribe();
+        .on("postgres_changes", jobsFilter, scheduleDebouncedRefresh)
+        .on("postgres_changes", hbFilter, scheduleDebouncedRefresh)
+        .subscribe((status: string) => {
+          setIsRealtimeSubscribed(status === "SUBSCRIBED");
+        });
 
       return () => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        setIsRealtimeSubscribed(false);
         supabase.removeChannel(channel);
       };
     } catch {
       // Polling remains active
     }
-  }, [fetchAll]);
+  }, [fetchAll, agencyId]);
 
   const counts = useMemo(() => {
     const map: Record<string, number> = { ALL: jobs.length };
@@ -176,30 +206,37 @@ export function JobsClient({
 
   const filtered = useMemo(() => {
     if (statusFilter === "ALL") return jobs;
-    return jobs.filter((j) => j.status === statusFilter);
+    return jobs.filter((j) => (j.status as string) === statusFilter);
   }, [jobs, statusFilter]);
 
   async function handleRetry(job: PipelineJob) {
+    if (job.status !== "FAILED" && job.status !== "EXPIRED") {
+      setFeedback({
+        type: "warn",
+        text: "Yalnız xətalı (FAILED) və ya müddəti bitmiş (EXPIRED) işlər yenidən başladıla bilər.",
+      });
+      return;
+    }
+
     setBusyId(job.id);
     setFeedback(null);
     const supabase = createClient();
 
     try {
-      const { error } = await supabase
-        .from("pipeline_jobs")
-        .update({
-          status: "QUEUED",
-          attempts: 0,
-          locked_by: null,
-          lease_expires_at: null,
-          error_message: null,
-          started_at: null,
-          finished_at: null,
-          expires_at: null,
-        })
-        .eq("id", job.id);
+      const { data, error } = await supabase.rpc("retry_or_cancel_pipeline_job", {
+        p_job_id: job.id,
+        p_action: "RETRY",
+      });
 
       if (error) throw error;
+      if (data && typeof data === "object" && "ok" in data && data.ok === false) {
+        const errCode = (data as { error?: string }).error;
+        throw new Error(
+          errCode === "JOB_STILL_RUNNING"
+            ? "İş hələ icradadır (409 Conflict)."
+            : errCode || "Yenidən cəhd rədd edildi."
+        );
+      }
 
       setJobs((prev) =>
         prev.map((j) =>
@@ -233,6 +270,51 @@ export function JobsClient({
     }
   }
 
+  async function handleCancel(job: PipelineJob) {
+    if (job.status !== "QUEUED" && job.status !== "RUNNING") return;
+
+    setBusyId(job.id);
+    setFeedback(null);
+    const supabase = createClient();
+
+    try {
+      const { data, error } = await supabase.rpc("retry_or_cancel_pipeline_job", {
+        p_job_id: job.id,
+        p_action: "CANCEL",
+      });
+
+      if (error) throw error;
+      if (data && typeof data === "object" && "ok" in data && data.ok === false) {
+        throw new Error((data as { error?: string }).error || "İş ləğv edilə bilmədi.");
+      }
+
+      const wasQueued = job.status === "QUEUED" || (data as { status?: string } | null)?.status === "CANCELLED";
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === job.id
+            ? wasQueued
+              ? { ...j, status: "CANCELLED" as JobStatus, finished_at: new Date().toISOString() }
+              : ({ ...j, cancel_requested_at: new Date().toISOString() } as PipelineJob)
+            : j
+        )
+      );
+      const label = JOB_TYPE_LABELS[job.job_type] ?? job.job_type;
+      setFeedback({
+        type: "ok",
+        text: wasQueued
+          ? `${label} işi ləğv edildi.`
+          : `${label} işinin dayandırılması tələb edildi.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: "err",
+        text: `Ləğv xətası: ${extractErrorMessage(err)}`,
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function enqueueUtilityJob(jobType: "SCRAPE_NEW" | "LIVENESS_CHECK") {
     const label = JOB_TYPE_LABELS[jobType] ?? jobType;
     const alreadyActive = jobs.find(
@@ -253,25 +335,61 @@ export function JobsClient({
     const supabase = createClient();
 
     try {
-      const { data, error } = await supabase
-        .from("pipeline_jobs")
-        .insert({
-          idempotency_key: `web_manual:${jobType}:${Date.now()}`,
+      const paramsJson =
+        jobType === "SCRAPE_NEW"
+          ? { pages: 2, limit: 3, enqueue_render_jobs: false }
+          : { limit: 30 };
+
+      const { data, error } = await supabase.rpc("enqueue_utility_job_atomic", {
+        p_job_type: jobType,
+        p_params_json: paramsJson,
+      });
+
+      if (error) {
+        if ((error as { code?: string }).code === "23505") {
+          setFeedback({
+            type: "warn",
+            text: `${label} artıq aktiv növbədədir.`,
+          });
+          return;
+        }
+        throw error;
+      }
+
+      const rpcRes = data as { ok?: boolean; already_queued?: boolean; job_id?: string; error?: string } | null;
+      if (rpcRes?.ok === false) {
+        throw new Error(rpcRes.error || "İş yaradıla bilmədi.");
+      }
+
+      if (rpcRes?.already_queued) {
+        setFeedback({
+          type: "warn",
+          text: `${label} artıq aktiv növbədədir.`,
+        });
+        return;
+      }
+
+      if (rpcRes?.job_id) {
+        const newJob: PipelineJob = {
+          id: rpcRes.job_id,
+          idempotency_key: `web_manual:${jobType}:${rpcRes.job_id}`,
           job_type: jobType,
           listing_id: null,
           trigger_source: "WEB_UI",
-          params_json:
-            jobType === "SCRAPE_NEW"
-              ? { pages: 2, limit: 3, enqueue_render_jobs: false }
-              : { limit: 30 },
+          params_json: paramsJson,
           status: "QUEUED",
-        })
-        .select("*, listings(id, bina_id, title)")
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        setJobs((prev) => [data as PipelineJob, ...prev]);
+          attempts: 0,
+          max_attempts: 3,
+          locked_by: null,
+          lease_expires_at: null,
+          expires_at: null,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          started_at: null,
+          finished_at: null,
+          listings: null,
+        };
+        setJobs((prev) => [newJob, ...prev]);
       }
       setFeedback({
         type: "ok",
@@ -427,7 +545,7 @@ export function JobsClient({
                     : "border-slate-800 bg-obsidian-950 text-slate-400 hover:text-slate-200"
                 }`}
               >
-                {tab === "ALL" ? "Hamısı" : JOB_STATUS_META[tab].label} (
+                {tab === "ALL" ? "Hamısı" : getJobStatusMeta(tab).label} (
                 {counts[tab] ?? 0})
               </button>
             ))}
@@ -443,9 +561,15 @@ export function JobsClient({
           ) : (
             <div className="space-y-3">
               {filtered.map((job) => {
-                const stMeta = JOB_STATUS_META[job.status];
+                const stMeta = getJobStatusMeta(job.status);
                 const canRetry =
                   job.status === "FAILED" || job.status === "EXPIRED";
+                const canCancel =
+                  job.status === "QUEUED" || job.status === "RUNNING";
+                const cancelRequested = Boolean(
+                  (job as PipelineJob & { cancel_requested_at?: string | null })
+                    .cancel_requested_at
+                );
                 const readableChips = extractReadableParams(job);
                 const binaId =
                   job.listings?.bina_id ||
@@ -526,6 +650,24 @@ export function JobsClient({
                               {busyId === job.id
                                 ? "Göndərilir..."
                                 : "Yenidən Cəhd"}
+                            </span>
+                          </button>
+                        )}
+
+                        {canCancel && (
+                          <button
+                            type="button"
+                            disabled={busyId === job.id || cancelRequested}
+                            onClick={() => handleCancel(job)}
+                            className="exec-btn-danger text-xs py-2 shrink-0"
+                          >
+                            <Ban className="h-3.5 w-3.5" />
+                            <span>
+                              {cancelRequested
+                                ? "Ləğv gözlənilir..."
+                                : busyId === job.id
+                                  ? "Ləğv edilir..."
+                                  : "Ləğv Et"}
                             </span>
                           </button>
                         )}

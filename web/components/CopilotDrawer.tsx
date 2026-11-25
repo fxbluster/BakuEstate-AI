@@ -91,6 +91,7 @@ export function CopilotDrawer() {
   // Tab 1: Shield State
   const [shieldInput, setShieldInput] = useState("");
   const [shieldLoading, setShieldLoading] = useState(false);
+  const [shieldError, setShieldError] = useState<string | null>(null);
   const [sentinelResult, setSentinelResult] = useState<SentinelAuditResult | null>(null);
   const [scribeResult, setScribeResult] = useState<ScribeTemplateResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -139,11 +140,11 @@ export function CopilotDrawer() {
         const supabase = createClient();
         const { data } = await supabase
           .from("buyer_leads")
-          .select("phone_normalized, phone_raw")
+          .select("phone_normalized")
           .eq("id", selectedLeadId)
           .maybeSingle();
         if (data) {
-          setPhoneForWa(data.phone_normalized || data.phone_raw || "");
+          setPhoneForWa(data.phone_normalized || "");
         }
       } catch {
         // Ignore
@@ -189,6 +190,7 @@ export function CopilotDrawer() {
   const handleRunShieldAudit = async () => {
     if (!shieldInput.trim()) return;
     setShieldLoading(true);
+    setShieldError(null);
     setSentinelResult(null);
     setScribeResult(null);
 
@@ -202,6 +204,8 @@ export function CopilotDrawer() {
 
       if (auditRes.ok && auditRes.data) {
         setSentinelResult(auditRes.data);
+      } else if (!auditRes.ok) {
+        setShieldError(auditRes.error || "Sentinel təhlili zamanı xəta baş verdi.");
       }
 
       // 2. Scribe Response Draft
@@ -215,9 +219,12 @@ export function CopilotDrawer() {
 
       if (scribeRes.ok && scribeRes.data) {
         setScribeResult(scribeRes.data);
+      } else if (!scribeRes.ok) {
+        setShieldError((prev) => prev || scribeRes.error || "Scribe cavabı alınarkən xəta baş verdi.");
       }
     } catch (err) {
       console.error("Shield audit error:", err);
+      setShieldError(err instanceof Error ? err.message : "Şəbəkə xətası baş verdi.");
     } finally {
       setShieldLoading(false);
     }
@@ -379,7 +386,7 @@ export function CopilotDrawer() {
       const supabase = createClient();
 
       // 1. Append to lead_timeline_events
-      await supabase.from("lead_timeline_events").insert({
+      const { error: timelineErr } = await supabase.from("lead_timeline_events").insert({
         lead_id: selectedLeadId || null,
         listing_id: selectedListingId || null,
         actor: "AI_JANITOR",
@@ -393,6 +400,7 @@ export function CopilotDrawer() {
           next_action: editNextAction,
         },
       });
+      if (timelineErr) throw timelineErr;
 
       // 2. Update buyer_leads if leadId is present
       if (selectedLeadId) {
@@ -406,10 +414,11 @@ export function CopilotDrawer() {
           updatePayload.notes = editTranscript;
         }
 
-        await supabase
+        const { error: leadErr } = await supabase
           .from("buyer_leads")
           .update(updatePayload)
           .eq("id", selectedLeadId);
+        if (leadErr) throw leadErr;
       }
 
       setSaveSuccess(true);
@@ -428,10 +437,9 @@ export function CopilotDrawer() {
 
   if (!isOpen) return null;
 
-  const waTargetUrl = buildWhatsAppUrl(
-    phoneForWa || "994501234567",
-    scribeResult?.draft_text || ""
-  );
+  const waTargetUrl = phoneForWa
+    ? buildWhatsAppUrl(phoneForWa, scribeResult?.draft_text || "")
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-sm transition-opacity animate-in fade-in duration-200">
@@ -606,6 +614,12 @@ export function CopilotDrawer() {
                     </span>
                   )}
                 </button>
+
+                {shieldError && (
+                  <div className="rounded-xl border border-rose-500/40 bg-rose-950/40 p-3 text-xs text-rose-300">
+                    {shieldError}
+                  </div>
+                )}
 
                 {/* Sentinel AI Rebuttal Card */}
                 {sentinelResult && (

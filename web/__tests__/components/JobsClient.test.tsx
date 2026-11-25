@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { JobsClient } from "@/components/JobsClient";
 import type { PipelineJob, WorkerStatusRow } from "@/lib/types";
 
-const mockInsert = vi.fn();
+const mockRpc = vi.fn();
 
 vi.mock("@/lib/supabase/env", () => ({
   isSupabaseConfigured: () => true,
@@ -12,20 +12,19 @@ vi.mock("@/lib/supabase/env", () => ({
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
+    rpc: (...args: unknown[]) => {
+      mockRpc(...args);
+      return Promise.resolve({
+        data: { ok: true, already_queued: false, job_id: "job-rpc-1" },
+        error: null,
+      });
+    },
     from: () => ({
       select: () => ({
         order: () => ({
           limit: async () => ({ data: [], error: null }),
         }),
       }),
-      insert: (row: unknown) => {
-        mockInsert(row);
-        return {
-          select: () => ({
-            single: async () => ({ data: null, error: null }),
-          }),
-        };
-      },
       update: () => ({
         eq: async () => ({ error: null }),
       }),
@@ -141,7 +140,7 @@ describe("JobsClient UI Cleanup & Formatting", () => {
     const btn = screen.getByRole("button", { name: /bina\.az-dan Elan Yığ/i });
     fireEvent.click(btn);
 
-    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
     expect(screen.getByText(/artıq aktiv növbədədir/i)).not.toBeNull();
   });
 
@@ -151,19 +150,15 @@ describe("JobsClient UI Cleanup & Formatting", () => {
     const btn = screen.getByRole("button", { name: /bina\.az-dan Elan Yığ/i });
     fireEvent.click(btn);
 
-    expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(mockInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        job_type: "SCRAPE_NEW",
-        trigger_source: "WEB_UI",
-        status: "QUEUED",
-        params_json: {
-          pages: 2,
-          limit: 3,
-          enqueue_render_jobs: false,
-        },
-      })
-    );
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith("enqueue_utility_job_atomic", {
+      p_job_type: "SCRAPE_NEW",
+      p_params_json: {
+        pages: 2,
+        limit: 3,
+        enqueue_render_jobs: false,
+      },
+    });
   });
 
   it("switches cleanly to Kompüter Monitoru tab without duplicating jobs filter list", () => {

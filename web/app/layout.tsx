@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
+import type React from "react";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
+import { getServerSessionMember } from "@/lib/supabase/server";
+import type { AgencyMember } from "@/lib/types";
 
 export const metadata: Metadata = {
   title: "BakuEstate-AI — 24/7 Veb CRM",
@@ -14,15 +17,22 @@ export const viewport: Viewport = {
   themeColor: "#090B10",
 };
 
-export default function RootLayout({
+const AppShellWithMember = AppShell as React.ComponentType<{
+  children: React.ReactNode;
+  member?: AgencyMember | null;
+}>;
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const member = await getServerSessionMember();
+
   return (
     <html lang="az" className="dark">
       <body className="font-sans">
-        <AppShell>{children}</AppShell>
+        <AppShellWithMember member={member}>{children}</AppShellWithMember>
       </body>
     </html>
   );

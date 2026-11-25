@@ -1,12 +1,140 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { ArrowRight, Cpu } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { formatRelativeAz, JOB_TYPE_LABELS } from "@/lib/format";
 import type { WorkerStatusRow } from "@/lib/types";
+
+interface WorkerStatusContextValue {
+  workers: WorkerStatusRow[];
+  loaded: boolean;
+  refresh: () => Promise<void>;
+}
+
+const WorkerStatusContext = createContext<WorkerStatusContextValue | null>(null);
+
+export function useWorkerStatus(): WorkerStatusContextValue | null {
+  return useContext(WorkerStatusContext);
+}
+
+export function WorkerStatusProvider({
+  children,
+  agencyId,
+  initialWorkers,
+}: {
+  children: React.ReactNode;
+  agencyId?: string | null;
+  initialWorkers?: WorkerStatusRow[];
+}) {
+  const [workers, setWorkers] = useState<WorkerStatusRow[]>(initialWorkers ?? []);
+  const [loaded, setLoaded] = useState(Boolean(initialWorkers));
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!isSupabaseConfigured()) return;
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("worker_status")
+        .select("*")
+        .order("last_seen_at", { ascending: false })
+        .limit(5);
+      setWorkers((data as WorkerStatusRow[] | null) ?? []);
+    } catch {
+      // ignore transient status errors
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let active = true;
+    let fallbackTimer: NodeJS.Timeout | null = null;
+
+    if (!initialWorkers) {
+      refresh();
+    }
+
+    const supabase = createClient();
+    const changeFilter = agencyId
+      ? {
+          event: "*" as const,
+          schema: "public",
+          table: "worker_heartbeats",
+          filter: `agency_id=eq.${agencyId}`,
+        }
+      : {
+          event: "*" as const,
+          schema: "public",
+          table: "worker_heartbeats",
+        };
+
+    const startFallbackPolling = () => {
+      if (fallbackTimer) return;
+      fallbackTimer = setInterval(() => {
+        if (active) refresh();
+      }, 30_000);
+    };
+
+    const stopFallbackPolling = () => {
+      if (fallbackTimer) {
+        clearInterval(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      channel = supabase
+        .channel("shared_worker_status_realtime")
+        .on("postgres_changes", changeFilter, () => {
+          if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+          debounceTimerRef.current = setTimeout(() => {
+            if (active) refresh();
+          }, 1500);
+        })
+        .subscribe((status: string) => {
+          if (status === "SUBSCRIBED") {
+            stopFallbackPolling();
+          } else if (
+            status === "CHANNEL_ERROR" ||
+            status === "TIMED_OUT" ||
+            status === "CLOSED"
+          ) {
+            startFallbackPolling();
+          }
+        });
+    } catch {
+      startFallbackPolling();
+    }
+
+    return () => {
+      active = false;
+      stopFallbackPolling();
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [agencyId, initialWorkers, refresh]);
+
+  return (
+    <WorkerStatusContext.Provider value={{ workers, loaded, refresh }}>
+      {children}
+    </WorkerStatusContext.Provider>
+  );
+}
 
 interface WorkerStatusBadgeProps {
   initialWorkers?: WorkerStatusRow[];
@@ -21,45 +149,48 @@ export function WorkerStatusBadge({
   showMonitorLink = false,
   onOpenMonitor,
 }: WorkerStatusBadgeProps) {
-  const [workers, setWorkers] = useState<WorkerStatusRow[]>(
+  const sharedCtx = useWorkerStatus();
+  const [localWorkers, setLocalWorkers] = useState<WorkerStatusRow[]>(
     initialWorkers ?? []
   );
-  const [loaded, setLoaded] = useState(Boolean(initialWorkers));
+  const [localLoaded, setLocalLoaded] = useState(Boolean(initialWorkers));
 
   useEffect(() => {
     if (initialWorkers) {
-      setWorkers(initialWorkers);
-      setLoaded(true);
+      setLocalWorkers(initialWorkers);
+      setLocalLoaded(true);
     }
   }, [initialWorkers]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+    if (initialWorkers || sharedCtx || !isSupabaseConfigured()) return;
     let active = true;
     const supabase = createClient();
 
-    async function fetchStatus() {
-      const { data } = await supabase
-        .from("worker_status")
-        .select("*")
-        .order("last_seen_at", { ascending: false })
-        .limit(5);
-      if (active) {
-        setWorkers((data as WorkerStatusRow[] | null) ?? []);
-        setLoaded(true);
+    async function fetchOnce() {
+      try {
+        const { data } = await supabase
+          .from("worker_status")
+          .select("*")
+          .order("last_seen_at", { ascending: false })
+          .limit(5);
+        if (active) {
+          setLocalWorkers((data as WorkerStatusRow[] | null) ?? []);
+          setLocalLoaded(true);
+        }
+      } catch {
+        if (active) setLocalLoaded(true);
       }
     }
 
-    if (!initialWorkers) {
-      fetchStatus();
-    }
-
-    const timer = setInterval(fetchStatus, 15_000);
+    fetchOnce();
     return () => {
       active = false;
-      clearInterval(timer);
     };
-  }, [initialWorkers]);
+  }, [initialWorkers, sharedCtx]);
+
+  const workers = initialWorkers ? localWorkers : (sharedCtx?.workers ?? localWorkers);
+  const loaded = initialWorkers ? localLoaded : (sharedCtx?.loaded ?? localLoaded);
 
   const primary = workers[0] ?? null;
   const metaState = String(primary?.metadata_json?.state || "").toUpperCase();

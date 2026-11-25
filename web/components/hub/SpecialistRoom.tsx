@@ -16,6 +16,10 @@ import { useCopilot } from "@/lib/copilot-context";
 import { ChatStream } from "./ChatStream";
 import { SpecialistRoomPills } from "./SpecialistRoomPills";
 
+type LocalChatMessage = AgentChatMessage & {
+  delivery_status?: "SENDING" | "SENT" | "FAILED";
+};
+
 interface SpecialistRoomProps {
   persona: AgentPersonaId;
   onSwitchPersona?: (newPersona: AgentPersonaId) => void;
@@ -28,14 +32,18 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
   const storageMsgKey = `bakuestate_hub_${persona}_messages`;
   const storageConvKey = `bakuestate_hub_${persona}_conv_id`;
 
-  // Initialize messages from localStorage for instant retention across toggles/reloads
-  const [messages, setMessages] = useState<AgentChatMessage[]>(() => {
+  // Initialize confirmed messages from localStorage for instant retention across toggles/reloads
+  const [messages, setMessages] = useState<LocalChatMessage[]>(() => {
     if (typeof window !== "undefined") {
       try {
         const saved = localStorage.getItem(storageMsgKey);
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed.filter(
+              (m: LocalChatMessage) => m.delivery_status !== "FAILED"
+            );
+          }
         }
       } catch {
         // ignore
@@ -58,15 +66,21 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
     return undefined;
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [failedTurn, setFailedTurn] = useState<{ id: string; text: string } | null>(null);
 
   const personaConfig = AGENT_PERSONAS[persona] || AGENT_PERSONAS.farabi;
   const initialPromptHandledRef = useRef(false);
 
-  // Synchronize messages to localStorage
+  // Synchronize only confirmed (non-failed, non-sending) messages to localStorage
   useEffect(() => {
-    if (typeof window !== "undefined" && messages.length > 0) {
+    if (typeof window !== "undefined") {
       try {
-        localStorage.setItem(storageMsgKey, JSON.stringify(messages));
+        const confirmed = messages.filter(
+          (m) => m.delivery_status !== "FAILED" && m.delivery_status !== "SENDING"
+        );
+        if (confirmed.length > 0) {
+          localStorage.setItem(storageMsgKey, JSON.stringify(confirmed));
+        }
       } catch {
         // ignore
       }
@@ -84,7 +98,7 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
     }
   }, [conversationId, storageConvKey]);
 
-  // Load latest conversation thread from server / Supabase via copilot API
+  // Load latest conversation thread from server (agent_messages) via copilot API
   const loadConversation = useCallback(async () => {
     try {
       const res = await getAgentConversation(persona);
@@ -92,7 +106,7 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
         setConversationId(res.conversation_id);
       }
       if (Array.isArray(res.messages) && res.messages.length > 0) {
-        setMessages(res.messages);
+        setMessages(res.messages.map((m) => ({ ...m, delivery_status: "SENT" })));
       }
     } catch (err) {
       console.debug("Notice loading conversation thread:", err);
@@ -113,23 +127,30 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
   }, [initialPrompt, setInitialPrompt]);
 
   // Send message to API
-  const handleSendMessage = async (textToSend?: string) => {
+  const handleSendMessage = async (textToSend?: string, retryId?: string) => {
     const text = (textToSend || inputText).trim();
     if (!text || isLoading) return;
 
-    setInputText("");
+    if (!retryId) {
+      setInputText("");
+    }
     setErrorMessage(null);
+    setFailedTurn(null);
 
-    // Optimistic user message
-    const userMsg: AgentChatMessage = {
-      id: `user-${Date.now()}`,
+    const msgId = retryId || `user-${Date.now()}`;
+    const userMsg: LocalChatMessage = {
+      id: msgId,
       sender_type: "USER",
       sender_name: "Operator",
       content: text,
       created_at: new Date().toISOString(),
+      delivery_status: "SENDING",
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [
+      ...prev.filter((m) => m.id !== msgId),
+      userMsg,
+    ]);
     setIsLoading(true);
 
     try {
@@ -149,7 +170,17 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
       });
 
       if (!res.ok) {
-        setErrorMessage(res.error || "AI cavabı alınarkən xəta baş verdi.");
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId ? { ...m, delivery_status: "FAILED" } : m
+          )
+        );
+        setFailedTurn({ id: msgId, text });
+        const errMsg =
+          (res.code as string) === "UPSTREAM_UNAVAILABLE"
+            ? res.error || "AI xidməti müvəqqəti əlçatan deyil (503)."
+            : res.error || "AI cavabı alınarkən xəta baş verdi.";
+        setErrorMessage(errMsg);
         return;
       }
 
@@ -157,11 +188,23 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
         setConversationId(res.data.conversation_id);
       }
 
-      if (res.data?.message) {
-        setMessages((prev) => [...prev, res.data.message!]);
-      }
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
+          m.id === msgId ? { ...m, delivery_status: "SENT" as const } : m
+        );
+        if (res.data?.message) {
+          updated.push({ ...res.data.message, delivery_status: "SENT" });
+        }
+        return updated;
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId ? { ...m, delivery_status: "FAILED" } : m
+        )
+      );
+      setFailedTurn({ id: msgId, text });
       setErrorMessage(msg || "Şəbəkə xətası baş verdi.");
     } finally {
       setIsLoading(false);
@@ -220,11 +263,28 @@ export function SpecialistRoom({ persona, onSwitchPersona }: SpecialistRoomProps
         onSelectAgent={onSwitchPersona}
       />
 
-      {/* Error Banner */}
+      {/* Error Banner with FAILED state + retry */}
       {errorMessage && (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-950/40 p-2 text-xs text-rose-300">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-400" />
-          <span className="flex-1">{errorMessage}</span>
+        <div className="mx-4 mb-2 flex items-center justify-between gap-2 rounded-lg border border-rose-500/40 bg-rose-950/40 p-2 text-xs text-rose-300">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-400" />
+            {failedTurn && (
+              <span className="rounded bg-rose-500/20 border border-rose-500/40 px-1.5 py-0.5 text-[10px] font-bold uppercase text-rose-200">
+                FAILED
+              </span>
+            )}
+            <span className="flex-1 truncate">{errorMessage}</span>
+          </div>
+          {failedTurn && (
+            <button
+              type="button"
+              onClick={() => handleSendMessage(failedTurn.text, failedTurn.id)}
+              disabled={isLoading}
+              className="shrink-0 rounded-md border border-rose-400/50 bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/30 transition"
+            >
+              Yenidən Göndər
+            </button>
+          )}
         </div>
       )}
 

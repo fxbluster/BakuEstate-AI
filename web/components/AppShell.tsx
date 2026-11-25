@@ -1,21 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   Building2,
   Cpu,
   LayoutDashboard,
+  LogOut,
   Users,
   Sparkles,
   Zap,
 } from "lucide-react";
-import { WorkerStatusBadge } from "./WorkerStatusBadge";
+import { WorkerStatusBadge, WorkerStatusProvider } from "./WorkerStatusBadge";
 import { CockpitCardHUD } from "./CockpitCardHUD";
 import { CopilotProvider, useCopilot } from "@/lib/copilot-context";
+import { createClient } from "@/lib/supabase/client";
 import { AgentHubDrawer } from "./hub/AgentHubDrawer";
 import { FloatingCardStage } from "./hub/stage/FloatingCardStage";
+
+export interface AppShellMember {
+  user_id?: string;
+  agency_id?: string;
+  role: "ADMIN" | "BROKER" | "SMM" | string;
+  display_name: string;
+  is_active?: boolean;
+}
 
 const NAV_ITEMS = [
   { href: "/", label: "İcmal", shortLabel: "İcmal", icon: LayoutDashboard },
@@ -93,14 +103,48 @@ function CopilotFloatingTrigger() {
 function AppShellContent({
   children,
   pathname,
+  member,
 }: {
   children: React.ReactNode;
   pathname: string;
+  member: AppShellMember | null;
 }) {
+  const router = useRouter();
+
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
     if (href === "/jobs" && pathname.startsWith("/worker")) return true;
     return pathname === href || pathname.startsWith(`${href}/`);
+  }
+
+  async function handleSignOut() {
+    if (typeof window !== "undefined") {
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith("bakuestate_")) {
+            keysToRemove.push(key);
+          }
+        }
+        for (const k of keysToRemove) {
+          localStorage.removeItem(k);
+        }
+        localStorage.removeItem("last_cockpit_generated_at");
+      } catch {
+        // ignore storage errors
+      }
+    }
+
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+    } catch {
+      // ignore signOut network error and proceed to login
+    }
+
+    router.push("/login");
+    router.refresh();
   }
 
   return (
@@ -148,9 +192,25 @@ function AppShellContent({
 
         <div className="space-y-3 border-t border-slate-800/80 p-4">
           <WorkerStatusBadge compact />
-          <div className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-800/70 bg-obsidian-950/50 px-3 py-2 text-xs font-medium text-emerald-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Birbaşa Giriş • Aktiv</span>
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-slate-800/70 bg-obsidian-950/50 px-3 py-2 text-xs">
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-slate-200">
+                {member?.display_name || "Operator"}
+              </p>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-gold-400">
+                {member?.role || "BROKER"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700/80 bg-obsidian-900 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-rose-500/40 hover:text-rose-200 transition"
+              title="Çıxış (Sign Out)"
+              aria-label="Sign Out"
+            >
+              <LogOut className="h-3 w-3" />
+              <span>Çıxış</span>
+            </button>
           </div>
         </div>
       </aside>
@@ -166,7 +226,7 @@ function AppShellContent({
               BakuEstate-AI
             </p>
             <p className="mt-0.5 text-[10px] uppercase tracking-wider text-gold-400">
-              Veb CRM
+              {member?.role || "Veb CRM"}
             </p>
           </div>
         </Link>
@@ -179,7 +239,7 @@ function AppShellContent({
       {/* Main Content Area */}
       <main className="flex-1 md:pl-64 pb-20 md:pb-8">
         <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-          <CockpitCardHUD hideWhenEmpty={pathname !== "/"} />
+          {pathname === "/" && <CockpitCardHUD agencyId={member?.agency_id} />}
           {children}
         </div>
       </main>
@@ -216,8 +276,17 @@ function AppShellContent({
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  member,
+  initialMember,
+}: {
+  children: React.ReactNode;
+  member?: AppShellMember | null;
+  initialMember?: AppShellMember | null;
+}) {
   const pathname = usePathname();
+  const activeMember = member ?? initialMember ?? null;
 
   if (pathname === "/login") {
     return <>{children}</>;
@@ -225,7 +294,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <CopilotProvider>
-      <AppShellContent pathname={pathname}>{children}</AppShellContent>
+      <WorkerStatusProvider agencyId={activeMember?.agency_id}>
+        <AppShellContent pathname={pathname} member={activeMember}>
+          {children}
+        </AppShellContent>
+      </WorkerStatusProvider>
     </CopilotProvider>
   );
 }

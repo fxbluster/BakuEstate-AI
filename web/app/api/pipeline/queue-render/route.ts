@@ -1,73 +1,18 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { requireOperator } from "@/lib/auth/resolve-operator";
 import type { QueueRenderPayload, QueueRenderResponse } from "@/lib/ai-client";
 import { extractErrorMessage } from "@/lib/errors";
 
-// Resolve operator identity
-async function resolveOperator(
-  request: Request
-): Promise<{ operatorId: string; email?: string } | null> {
-  const authHeader = request.headers.get("Authorization");
-
-  if (authHeader) {
-    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-    if (
-      token === "<TEST_SUPABASE_JWT>" ||
-      token === "TEST_SUPABASE_JWT" ||
-      token.startsWith("test-jwt")
-    ) {
-      return {
-        operatorId: "083d8ea3-4a73-4b85-8479-0c532ce939f0",
-        email: "operator@bakuestate.az",
-      };
-    }
-
-    try {
-      const supabaseAdmin = createAdminClient();
-      const {
-        data: { user },
-        error,
-      } = await supabaseAdmin.auth.getUser(token);
-      if (!error && user?.id) {
-        return { operatorId: user.id, email: user.email };
-      }
-    } catch {
-      // Fallback
-    }
-  }
-
-  try {
-    const supabaseServer = await createClient();
-    const {
-      data: { user },
-      error,
-    } = await supabaseServer.auth.getUser();
-    if (!error && user?.id) {
-      return { operatorId: user.id, email: user.email };
-    }
-  } catch {
-    // Cookie fallback
-  }
-
-  // Default frictionless single-operator ID
-  return {
-    operatorId: "083d8ea3-4a73-4b85-8479-0c532ce939f0",
-    email: "operator@bakuestate.az",
-  };
-}
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(request: Request) {
-  const operator = await resolveOperator(request);
-  if (!operator) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: "İstifadəçi autentifikasiyadan keçməyib (Unauthorized).",
-      } as QueueRenderResponse,
-      { status: 401 }
-    );
+  const auth = await requireOperator(request);
+  if (!auth.ok) {
+    return auth.response;
   }
+  const { operator } = auth;
 
   let body: QueueRenderPayload;
   try {
@@ -82,8 +27,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const { listing_id, voice_preset } = body;
+  const { listing_id, voice_preset, selected_photo_urls, custom_script_text } =
+    body;
   const target_account = body.target_account || "@bakuestate.premium";
+  const jobType = body.job_type || "RENDER_INITIAL";
 
   if (!listing_id) {
     return NextResponse.json(
@@ -95,106 +42,115 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabaseAdmin = createAdminClient();
+  if (jobType !== "RENDER_INITIAL" && jobType !== "RERENDER") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "job_type yalnız RENDER_INITIAL və ya RERENDER ola bilər.",
+      } as QueueRenderResponse,
+      { status: 400 }
+    );
+  }
 
-  // Resolve listing details safely avoiding Postgres UUID cast syntax error on 7-digit bina_id
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const supabaseAdmin = createAdminClient();
   const isUuid = UUID_REGEX.test(listing_id);
 
+  let resolvedListingUuid: string | null = null;
   let binaId = body.bina_id;
-  let resolvedListingUuid: string | null = isUuid ? listing_id : null;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adminAny = supabaseAdmin as any;
-    let query = adminAny.from("listings").select("id, bina_id");
+    let query = supabaseAdmin
+      .from("listings")
+      .select("id, bina_id")
+      .eq("agency_id", operator.agencyId);
+
     if (isUuid) {
       query = query.eq("id", listing_id);
     } else {
       query = query.eq("bina_id", String(listing_id));
     }
+
     const { data: listing } = await query.maybeSingle();
-
-    if (listing) {
-      resolvedListingUuid = listing.id ?? null;
-      binaId = binaId || listing.bina_id;
+    if (!listing?.id) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Elan tapılmadı və ya bu agentliyə aid deyil.",
+        } as QueueRenderResponse,
+        { status: 404 }
+      );
     }
+
+    resolvedListingUuid = listing.id;
+    binaId = binaId || listing.bina_id || undefined;
   } catch (lookupErr) {
-    console.warn("[QUEUE_RENDER] Listing lookup notice:", lookupErr);
-  }
-
-  binaId = binaId || (isUuid ? "unknown" : listing_id);
-
-  // Deduplication guard: avoid queuing duplicate RENDER_INITIAL while one is already QUEUED or RUNNING
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pipelineJobsTable = (supabaseAdmin as any).from("pipeline_jobs");
-    if (pipelineJobsTable && typeof pipelineJobsTable.select === "function") {
-      const cleanBinaId = String(binaId).replace(/[,()]/g, "");
-      const orFilter = resolvedListingUuid
-        ? `listing_id.eq.${resolvedListingUuid},params_json->>bina_id.eq.${cleanBinaId}`
-        : `params_json->>bina_id.eq.${cleanBinaId}`;
-
-      const { data: existingJobs } = await pipelineJobsTable
-        .select("id, status")
-        .eq("job_type", "RENDER_INITIAL")
-        .in("status", ["QUEUED", "RUNNING"])
-        .or(orFilter)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      if (Array.isArray(existingJobs) && existingJobs.length > 0 && existingJobs[0]?.id) {
-        return NextResponse.json({
-          success: true,
-          job_id: existingJobs[0].id,
-          already_queued: true,
-          message: `Elan #${binaId} artıq montaj növbəsindədir (${existingJobs[0].status === "RUNNING" ? "Hazırda render gedir" : "Növbədə gözləyir"}).`,
-        } as QueueRenderResponse);
-      }
-    }
-  } catch (dedupErr) {
-    console.warn("[QUEUE_RENDER] Active job dedup check notice:", dedupErr);
+    return NextResponse.json(
+      {
+        success: false,
+        error: extractErrorMessage(lookupErr),
+      } as QueueRenderResponse,
+      { status: 500 }
+    );
   }
 
   try {
-    const { data: job, error: jobErr } = await supabaseAdmin
-      .from("pipeline_jobs")
-      .insert({
-        idempotency_key: `initial_render:${binaId}:${Date.now()}`,
-        job_type: "RENDER_INITIAL",
-        listing_id: resolvedListingUuid,
-        trigger_source: "WEB_UI",
-        params_json: {
-          bina_id: binaId,
-          target_account: target_account,
-          voice_preset: voice_preset || "Arif",
-        },
-        status: "QUEUED",
-      })
-      .select("id")
-      .single();
-
-    if (jobErr) {
-      throw jobErr;
+    const paramsJson: Record<string, unknown> = {
+      bina_id: binaId ?? null,
+      target_account,
+      voice_preset: voice_preset || "Arif",
+      requested_by: operator.operatorId,
+    };
+    if (Array.isArray(selected_photo_urls)) {
+      paramsJson.selected_photo_urls = selected_photo_urls;
+    }
+    if (typeof custom_script_text === "string" && custom_script_text.trim()) {
+      paramsJson.custom_script_text = custom_script_text.trim();
     }
 
-    // Record audit event in listing_events
-    if (resolvedListingUuid) {
-      try {
-        await supabaseAdmin.from("listing_events").insert({
-          listing_id: resolvedListingUuid,
-          event_type: "STATUS_CHANGED",
-          actor: "web_user",
-          notes: `Montaj boru xəttinə göndərildi (job_id: ${job?.id}, voice: ${voice_preset || "Arif"})`,
-        });
-      } catch {
-        // Non-fatal audit log
+    const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
+      "enqueue_listing_render_atomic",
+      {
+        p_listing_id: resolvedListingUuid,
+        p_job_type: jobType,
+        p_target_account: target_account,
+        p_voice_preset: voice_preset || "Arif",
+        p_params_json: paramsJson,
       }
+    );
+
+    if (rpcErr) {
+      throw rpcErr;
+    }
+
+    const payload = (rpcResult || {}) as {
+      ok?: boolean;
+      already_queued?: boolean;
+      job_id?: string;
+      error?: string;
+    };
+
+    if (payload.ok === false) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: payload.error || "Montaj işi növbəyə yazıla bilmədi.",
+        } as QueueRenderResponse,
+        { status: 400 }
+      );
+    }
+
+    if (payload.already_queued) {
+      return NextResponse.json({
+        success: true,
+        job_id: payload.job_id,
+        already_queued: true,
+        message: `Elan #${binaId || resolvedListingUuid} artıq montaj növbəsindədir.`,
+      } as QueueRenderResponse);
     }
 
     return NextResponse.json({
       success: true,
-      job_id: job?.id,
+      job_id: payload.job_id,
     } as QueueRenderResponse);
   } catch (err: unknown) {
     const message = extractErrorMessage(err);
