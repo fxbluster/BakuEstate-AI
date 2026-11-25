@@ -3,13 +3,17 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   Archive,
   ArrowLeft,
+  ArrowRight,
+  Check,
   CheckCircle2,
   ExternalLink,
   FileCheck2,
   Film,
   History,
+  Image as ImageIcon,
   MessageCircle,
   Phone,
   Plus,
@@ -17,6 +21,7 @@ import {
   Save,
   Share2,
   Sliders,
+  Sparkles,
   Video,
   X,
 } from "lucide-react";
@@ -39,7 +44,10 @@ import {
   SOURCE_AVAILABILITY_META,
 } from "@/lib/format";
 import type {
+  AgencyRole,
+  ChannelNiche,
   CommissionType,
+  HookType,
   Listing,
   ListingEvent,
   OwnerOutreachStatus,
@@ -54,6 +62,8 @@ interface ListingDetailClientProps {
   initialEvents: ListingEvent[];
   initialRenders: RenderVersion[];
   initialPublications: Publication[];
+  memberRole?: AgencyRole;
+  agencyId?: string | null;
 }
 
 const SCRIPT_ANGLES = [
@@ -65,18 +75,73 @@ const SCRIPT_ANGLES = [
 ];
 
 const VOICE_OPTIONS = [
-  { engine: "elevenlabs_v4", voiceId: "arif", label: "ElevenLabs v4 — Arif (Kişi, Premium)" },
-  { engine: "elevenlabs_v4", voiceId: "leyla", label: "ElevenLabs v4 — Leyla (Qadın, Səmimi)" },
-  { engine: "elevenlabs_v4", voiceId: "kamran", label: "ElevenLabs v4 — Kamran (Dinamik)" },
-  { engine: "openai", voiceId: "nova", label: "OpenAI TTS — Nova (Ehtiyat)" },
-  { engine: "openai", voiceId: "onyx", label: "OpenAI TTS — Onyx (Ehtiyat)" },
+  {
+    engine: "elevenlabs_v4",
+    voiceId: "arif",
+    preset: "Arif",
+    label: "ElevenLabs v4 — Arif (Kişi, Premium)",
+  },
+  {
+    engine: "elevenlabs_v4",
+    voiceId: "leyla",
+    preset: "Leyla",
+    label: "ElevenLabs v4 — Leyla (Qadın, Səmimi)",
+  },
+  {
+    engine: "elevenlabs_v4",
+    voiceId: "kamran",
+    preset: "Kamran",
+    label: "ElevenLabs v4 — Kamran (Dinamik)",
+  },
+  {
+    engine: "openai",
+    voiceId: "nova",
+    preset: "Nova",
+    label: "OpenAI TTS — Nova (Ehtiyat)",
+  },
+  {
+    engine: "openai",
+    voiceId: "onyx",
+    preset: "Onyx",
+    label: "OpenAI TTS — Onyx (Ehtiyat)",
+  },
 ];
+
+const TARGET_ACCOUNTS: Array<{
+  handle: string;
+  niche: ChannelNiche;
+  label: string;
+}> = [
+  {
+    handle: "@bakuestate.official",
+    niche: "GENERAL",
+    label: "🏢 @bakuestate.official (Ümumi)",
+  },
+  {
+    handle: "@bakuestate.premium",
+    niche: "LUXURY",
+    label: "💎 @bakuestate.premium (Lüks)",
+  },
+  {
+    handle: "@baku.serfeli.evler",
+    niche: "AFFORDABLE",
+    label: "🏠 @baku.serfeli.evler (Sərfəli)",
+  },
+  {
+    handle: "@baku_emlak_ai",
+    niche: "TIKTOK",
+    label: "🔥 @baku_emlak_ai (TikTok / Viral)",
+  },
+];
+
+const MIN_STUDIO_PHOTOS = 4;
+const MAX_STUDIO_PHOTOS = 10;
+const MAX_SCRIPT_CHARS = 1000;
 
 function toLocalDateTimeInput(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  // Format in Asia/Baku (+04:00) for datetime-local input
   const bakuMs = d.getTime() + 4 * 60 * 60 * 1000;
   return new Date(bakuMs).toISOString().slice(0, 16);
 }
@@ -88,17 +153,63 @@ function bakuLocalInputToIso(localValue: string): string | null {
   return parsed.toISOString();
 }
 
+async function getBearerHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  try {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      headers.Authorization = `Bearer ${session.access_token}`;
+    }
+  } catch {
+    // Cookie fallback
+  }
+  return headers;
+}
+
+function inferNicheFromListing(listing: Listing): {
+  niche: ChannelNiche;
+  handle: string;
+} {
+  const canonical = (listing as Listing & { canonical_niche?: ChannelNiche })
+    .canonical_niche;
+  if (canonical === "LUXURY")
+    return { niche: "LUXURY", handle: "@bakuestate.premium" };
+  if (canonical === "AFFORDABLE")
+    return { niche: "AFFORDABLE", handle: "@baku.serfeli.evler" };
+  if (canonical === "TIKTOK")
+    return { niche: "TIKTOK", handle: "@baku_emlak_ai" };
+  if (canonical === "GENERAL")
+    return { niche: "GENERAL", handle: "@bakuestate.official" };
+
+  const price = listing.price_azn_normalized || 0;
+  if (price >= 250000)
+    return { niche: "LUXURY", handle: "@bakuestate.premium" };
+  if (price > 0 && price <= 120000)
+    return { niche: "AFFORDABLE", handle: "@baku.serfeli.evler" };
+  return { niche: "GENERAL", handle: "@bakuestate.official" };
+}
+
 export function ListingDetailClient({
   initialListing,
   initialEvents,
   initialRenders,
   initialPublications,
+  memberRole = "BROKER",
+  agencyId = null,
 }: ListingDetailClientProps) {
   const [listing, setListing] = useState<Listing>(initialListing);
   const [events, setEvents] = useState<ListingEvent[]>(initialEvents);
   const [renders] = useState<RenderVersion[]>(initialRenders);
   const [publications, setPublications] =
     useState<Publication[]>(initialPublications);
+
+  const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
+  const defaultNiche = inferNicheFromListing(initialListing);
 
   const playableDefault =
     initialRenders.find((r) => r.video_cdn_url && !r.storage_pruned_at) ??
@@ -113,6 +224,19 @@ export function ListingDetailClient({
     type: "ok" | "err";
     text: string;
   } | null>(null);
+
+  // Pre-Render Studio State
+  const [selectedPhotos, setSelectedPhotos] = useState<string[]>(() =>
+    photos.slice(0, Math.min(photos.length, MAX_STUDIO_PHOTOS))
+  );
+  const [customScriptText, setCustomScriptText] = useState<string>("");
+  const [studioHookType, setStudioHookType] =
+    useState<HookType>("PRICE_FIRST");
+  const [studioTargetAccount, setStudioTargetAccount] = useState<string>(
+    defaultNiche.handle
+  );
+  const [studioVoiceIdx, setStudioVoiceIdx] = useState<number>(0);
+  const [generatingScript, setGeneratingScript] = useState(false);
 
   // Script/Voice Rerender Modal
   const [rerenderModalOpen, setRerenderModalOpen] = useState(false);
@@ -153,77 +277,155 @@ export function ListingDetailClient({
   );
   const [pubNotes, setPubNotes] = useState("");
 
+  const isOffMarket =
+    !listing.bina_id ||
+    (listing as Listing & { source_type?: string }).source_type ===
+      "OFF_MARKET";
+  const displayCode = listing.bina_id ? `#${listing.bina_id}` : "OFF-MARKET";
+
   const selectedRender =
     renders.find((r) => r.id === selectedRenderId) ?? renders[0] ?? null;
 
-  const waUrl = buildWhatsAppUrl(
-    listing.owner_phone_normalized || listing.owner_phone_raw,
-    `Salam! bina.az-dakı #${listing.bina_id} nömrəli elanınız (${listing.location || "Bakı"}, ${formatAzn(listing.price_azn_normalized)}) ilə bağlı əlaqə saxlayıram. Mənzil hələ aktualdırmı?`
-  );
+  const waUrl =
+    memberRole !== "SMM"
+      ? buildWhatsAppUrl(
+          listing.owner_phone_normalized || listing.owner_phone_raw,
+          listing.bina_id
+            ? `Salam! bina.az-dakı #${listing.bina_id} nömrəli elanınız (${listing.location || "Bakı"}, ${formatAzn(listing.price_azn_normalized)}) ilə bağlı əlaqə saxlayıram. Mənzil hələ aktualdırmı?`
+            : `Salam! Eksklüziv elanınız (${listing.title || listing.location || "Bakı"}, ${formatAzn(listing.price_azn_normalized)}) ilə bağlı əlaqə saxlayıram.`
+        )
+      : null;
 
-  async function enqueueRenderJob(params: Record<string, unknown>, label: string) {
-    setBusyAction(label);
+  const hasEnoughPhotos =
+    photos.length >= MIN_STUDIO_PHOTOS &&
+    selectedPhotos.length >= MIN_STUDIO_PHOTOS &&
+    selectedPhotos.length <= MAX_STUDIO_PHOTOS;
+  const scriptTooLong = customScriptText.length > MAX_SCRIPT_CHARS;
+
+  function togglePhotoSelection(url: string) {
+    setSelectedPhotos((prev) => {
+      if (prev.includes(url)) {
+        return prev.filter((u) => u !== url);
+      }
+      if (prev.length >= MAX_STUDIO_PHOTOS) {
+        return prev;
+      }
+      return [...prev, url];
+    });
+  }
+
+  function moveSelectedPhoto(index: number, direction: -1 | 1) {
+    setSelectedPhotos((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const copy = [...prev];
+      const temp = copy[index];
+      copy[index] = copy[target];
+      copy[target] = temp;
+      return copy;
+    });
+  }
+
+  async function handleGenerateRenderScript() {
+    setGeneratingScript(true);
     setFeedback(null);
-    const supabase = createClient();
 
     try {
-      const idempotencyKey = `web_rerender:${listing.bina_id}:${Date.now()}`;
-      const { data: job, error: jobErr } = await supabase
-        .from("pipeline_jobs")
-        .insert({
-          idempotency_key: idempotencyKey,
-          job_type: "RERENDER",
+      const headers = await getBearerHeaders();
+      const res = await fetch("/api/ai/copilot", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "generate_render_script",
           listing_id: listing.id,
-          trigger_source: "WEB_UI",
-          params_json: params,
-          status: "QUEUED",
-        })
-        .select("id")
-        .single();
+          hook_type: studioHookType,
+          target_account: studioTargetAccount,
+        }),
+      });
 
-      if (jobErr) throw jobErr;
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.ok === false) {
+        throw new Error(
+          payload?.error || `AI ssenari yaradıla bilmədi (HTTP ${res.status})`
+        );
+      }
 
-      await supabase
-        .from("listings")
-        .update({
-          pipeline_status: "QUEUED",
-          editorial_status: "NEEDS_RERENDER",
-        })
-        .eq("id", listing.id);
+      const draft =
+        payload?.data?.draft_script ||
+        payload?.data?.script ||
+        payload?.draft_script ||
+        "";
 
-      const { data: ev } = await supabase
-        .from("listing_events")
-        .insert({
+      if (payload?.data?.hook_type) {
+        setStudioHookType(payload.data.hook_type as HookType);
+      }
+
+      setCustomScriptText(String(draft).slice(0, MAX_SCRIPT_CHARS));
+      setFeedback({
+        type: "ok",
+        text: "AI video ssenari qaralaması yaradıldı. İstəsəniz redaktə edib renderə göndərə bilərsiniz.",
+      });
+    } catch (err) {
+      setFeedback({
+        type: "err",
+        text: `Ssenari xətası: ${err instanceof Error ? err.message : "Naməlum xəta"}`,
+      });
+    } finally {
+      setGeneratingScript(false);
+    }
+  }
+
+  async function enqueueRenderJob(
+    options: {
+      jobType?: "RENDER_INITIAL" | "RERENDER";
+      targetAccount?: string;
+      voicePreset?: string;
+      selectedPhotoUrls?: string[];
+      customScript?: string;
+    },
+    label: string
+  ) {
+    setBusyAction(label);
+    setFeedback(null);
+
+    try {
+      const headers = await getBearerHeaders();
+      const res = await fetch("/api/pipeline/queue-render", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
           listing_id: listing.id,
-          event_type: "STATUS_CHANGED",
-          old_value_json: {
-            pipeline_status: listing.pipeline_status,
-            editorial_status: listing.editorial_status,
-          },
-          new_value_json: {
-            pipeline_status: "QUEUED",
-            editorial_status: "NEEDS_RERENDER",
-            ...params,
-          },
-          triggered_job_id: job?.id ?? null,
-          actor: "web_user",
-        })
-        .select("*")
-        .single();
+          bina_id: listing.bina_id || undefined,
+          job_type: options.jobType ?? (renders.length > 0 ? "RERENDER" : "RENDER_INITIAL"),
+          target_account: options.targetAccount ?? studioTargetAccount,
+          voice_preset:
+            options.voicePreset ?? VOICE_OPTIONS[studioVoiceIdx]?.preset,
+          selected_photo_urls: options.selectedPhotoUrls,
+          custom_script_text: options.customScript?.trim() || undefined,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false || data?.ok === false) {
+        throw new Error(
+          data?.error || `Render növbə xətası (HTTP ${res.status})`
+        );
+      }
 
       setListing((prev) => ({
         ...prev,
         pipeline_status: "QUEUED",
-        editorial_status: "NEEDS_RERENDER",
+        editorial_status:
+          options.jobType === "RERENDER"
+            ? "NEEDS_RERENDER"
+            : prev.editorial_status,
       }));
-      if (ev) {
-        setEvents((prev) => [ev as ListingEvent, ...prev]);
-      }
-
       setRerenderModalOpen(false);
       setFeedback({
         type: "ok",
-        text: "Render işi pipeline_jobs növbəsinə əlavə edildi. Lokal worker aktiv olan kimi icra olunacaq.",
+        text: data?.already_queued
+          ? "Bu elan artıq bulud render növbəsindədir (dublikat bloklandı)."
+          : "Render işi atomik olaraq bulud növbəsinə salındı. Railway worker icra edəcək.",
       });
     } catch (err) {
       setFeedback({
@@ -235,6 +437,34 @@ export function ListingDetailClient({
     }
   }
 
+  async function handleStudioRenderSubmit() {
+    if (!hasEnoughPhotos) {
+      setFeedback({
+        type: "err",
+        text: `Render üçün ən azı ${MIN_STUDIO_PHOTOS}, ən çox ${MAX_STUDIO_PHOTOS} foto seçilməlidir.`,
+      });
+      return;
+    }
+    if (scriptTooLong) {
+      setFeedback({
+        type: "err",
+        text: `Ssenari maksimum ${MAX_SCRIPT_CHARS} simvol ola bilər.`,
+      });
+      return;
+    }
+
+    await enqueueRenderJob(
+      {
+        jobType: renders.length > 0 ? "RERENDER" : "RENDER_INITIAL",
+        targetAccount: studioTargetAccount,
+        voicePreset: VOICE_OPTIONS[studioVoiceIdx]?.preset,
+        selectedPhotoUrls: selectedPhotos,
+        customScript: customScriptText,
+      },
+      "studio_render"
+    );
+  }
+
   async function handleQuickStatus(mode: "publish" | "sold_archive") {
     setBusyAction(mode);
     setFeedback(null);
@@ -242,32 +472,52 @@ export function ListingDetailClient({
 
     try {
       if (mode === "publish") {
-        const { error } = await supabase
-          .from("listings")
-          .update({ editorial_status: "PUBLISHED" })
-          .eq("id", listing.id);
-        if (error) throw error;
+        const latestPub = publications[0];
+        const { data: rpcData, error: rpcErr } = await supabase.rpc(
+          "confirm_publication_atomic",
+          {
+            p_listing_id: listing.id,
+            p_channel: latestPub?.channel ?? pubChannel,
+            p_post_url: latestPub?.post_url ?? null,
+            p_render_version_id: playableDefault?.id ?? null,
+            p_published_at: new Date().toISOString(),
+            p_notes: "Sürətli paylaşım statusu",
+            p_target_account_handle: studioTargetAccount,
+            p_channel_niche: defaultNiche.niche,
+          }
+        );
 
-        const { data: ev } = await supabase
-          .from("listing_events")
-          .insert({
-            listing_id: listing.id,
-            event_type: "STATUS_CHANGED",
-            old_value_json: { editorial_status: listing.editorial_status },
-            new_value_json: { editorial_status: "PUBLISHED" },
-            actor: "web_user",
-          })
-          .select("*")
-          .single();
+        if (rpcErr) throw rpcErr;
+        if (
+          rpcData &&
+          typeof rpcData === "object" &&
+          "ok" in rpcData &&
+          (rpcData as { ok?: boolean }).ok === false
+        ) {
+          throw new Error(
+            (rpcData as { error?: string }).error ||
+              "Paylaşım statusu yenilənə bilmədi."
+          );
+        }
+
+        const pubRow =
+          rpcData && typeof rpcData === "object" && "publication" in rpcData
+            ? ((rpcData as { publication?: Publication }).publication ?? null)
+            : null;
 
         setListing((prev) => ({ ...prev, editorial_status: "PUBLISHED" }));
-        if (ev) setEvents((prev) => [ev as ListingEvent, ...prev]);
+        if (pubRow) {
+          setPublications((prev) => [
+            pubRow,
+            ...prev.filter((p) => p.id !== pubRow.id),
+          ]);
+        }
         setFeedback({
           type: "ok",
-          text: "Elan statusu PAYLAŞILDI olaraq yeniləndi.",
+          text: "Elan statusu atomik RPC ilə PAYLAŞILDI olaraq yeniləndi.",
         });
       } else {
-        const { error } = await supabase
+        const { error: updateErr } = await supabase
           .from("listings")
           .update({
             editorial_status: "ARCHIVED",
@@ -275,27 +525,31 @@ export function ListingDetailClient({
             source_availability: "CONFIRMED_SOLD",
           })
           .eq("id", listing.id);
-        if (error) throw error;
+        if (updateErr) throw updateErr;
 
-        const { data: ev } = await supabase
+        const eventInsert: Record<string, unknown> = {
+          listing_id: listing.id,
+          event_type: "STATUS_CHANGED",
+          old_value_json: {
+            editorial_status: listing.editorial_status,
+            owner_outreach_status: listing.owner_outreach_status,
+            source_availability: listing.source_availability,
+          },
+          new_value_json: {
+            editorial_status: "ARCHIVED",
+            owner_outreach_status: "OWNER_SOLD",
+            source_availability: "CONFIRMED_SOLD",
+          },
+          actor: "web_user",
+        };
+        if (agencyId) eventInsert.agency_id = agencyId;
+
+        const { data: ev, error: evErr } = await supabase
           .from("listing_events")
-          .insert({
-            listing_id: listing.id,
-            event_type: "STATUS_CHANGED",
-            old_value_json: {
-              editorial_status: listing.editorial_status,
-              owner_outreach_status: listing.owner_outreach_status,
-              source_availability: listing.source_availability,
-            },
-            new_value_json: {
-              editorial_status: "ARCHIVED",
-              owner_outreach_status: "OWNER_SOLD",
-              source_availability: "CONFIRMED_SOLD",
-            },
-            actor: "web_user",
-          })
+          .insert(eventInsert)
           .select("*")
           .single();
+        if (evErr) throw evErr;
 
         setListing((prev) => ({
           ...prev,
@@ -344,7 +598,9 @@ export function ListingDetailClient({
           ? null
           : parsedMinPrice,
         owner_last_contacted_at:
-          ownerStatus !== "NOT_CONTACTED" ? nowIso : listing.owner_last_contacted_at,
+          ownerStatus !== "NOT_CONTACTED"
+            ? nowIso
+            : listing.owner_last_contacted_at,
         owner_next_checkin_at: nextCheckinIso,
         owner_notes: ownerNotes.trim() || null,
       };
@@ -355,37 +611,46 @@ export function ListingDetailClient({
         .eq("id", listing.id);
       if (error) throw error;
 
-      const { data: ev } = await supabase
+      const eventPayload: Record<string, unknown> = {
+        listing_id: listing.id,
+        event_type: "OWNER_UPDATED",
+        old_value_json: {
+          owner_outreach_status: listing.owner_outreach_status,
+          commission_type: listing.commission_type,
+          commission_value: listing.commission_value,
+        },
+        new_value_json: {
+          owner_outreach_status: patch.owner_outreach_status,
+          commission_type: patch.commission_type,
+          commission_value: patch.commission_value,
+          owner_min_price_azn: patch.owner_min_price_azn,
+        },
+        actor: "web_user",
+      };
+      if (agencyId) eventPayload.agency_id = agencyId;
+
+      const { data: ev, error: evErr } = await supabase
         .from("listing_events")
-        .insert({
-          listing_id: listing.id,
-          event_type: "OWNER_UPDATED",
-          old_value_json: {
-            owner_outreach_status: listing.owner_outreach_status,
-            commission_type: listing.commission_type,
-            commission_value: listing.commission_value,
-          },
-          new_value_json: {
-            owner_outreach_status: patch.owner_outreach_status,
-            commission_type: patch.commission_type,
-            commission_value: patch.commission_value,
-            owner_min_price_azn: patch.owner_min_price_azn,
-          },
-          actor: "web_user",
-        })
+        .insert(eventPayload)
         .select("*")
         .single();
+      if (evErr) throw evErr;
 
-      // Create an OWNER_OUTREACH follow-up task if next check-in was set
       if (nextCheckinIso && nextCheckinIso !== listing.owner_next_checkin_at) {
-        await supabase.from("follow_up_tasks").insert({
+        const taskPayload: Record<string, unknown> = {
           entity_type: "OWNER_OUTREACH",
           listing_id: listing.id,
-          title: `Mülkiyyətçi yoxlaması — #${listing.bina_id} (${listing.contact_name || listing.owner_phone_raw || "Elan"})`,
+          title: `Mülkiyyətçi yoxlaması — ${displayCode} (${listing.contact_name || listing.owner_phone_raw || "Elan"})`,
           due_at: nextCheckinIso,
           priority: "NORMAL",
           status: "OPEN",
-        });
+        };
+        if (agencyId) taskPayload.agency_id = agencyId;
+
+        const { error: taskErr } = await supabase
+          .from("follow_up_tasks")
+          .insert(taskPayload);
+        if (taskErr) throw taskErr;
       }
 
       setListing((prev) => ({ ...prev, ...patch }));
@@ -414,42 +679,56 @@ export function ListingDetailClient({
       const publishedAtIso =
         bakuLocalInputToIso(pubPublishedAt) ?? new Date().toISOString();
 
-      const { data: pub, error } = await supabase
-        .from("publications")
-        .insert({
-          listing_id: listing.id,
-          render_version_id: pubRenderId || null,
-          channel: pubChannel,
-          post_url: pubUrl.trim() || null,
-          status: "PUBLISHED",
-          published_at: publishedAtIso,
-          notes: pubNotes.trim() || null,
-        })
-        .select("*")
-        .single();
+      const { data: rpcData, error: rpcErr } = await supabase.rpc(
+        "confirm_publication_atomic",
+        {
+          p_listing_id: listing.id,
+          p_channel: pubChannel,
+          p_post_url: pubUrl.trim() || null,
+          p_render_version_id: pubRenderId || null,
+          p_published_at: publishedAtIso,
+          p_notes: pubNotes.trim() || null,
+          p_target_account_handle: studioTargetAccount,
+          p_channel_niche: defaultNiche.niche,
+        }
+      );
 
-      if (error) throw error;
+      if (rpcErr) throw rpcErr;
 
-      // Also advance editorial_status to PUBLISHED if not archived
+      if (
+        rpcData &&
+        typeof rpcData === "object" &&
+        "ok" in rpcData &&
+        (rpcData as { ok?: boolean }).ok === false
+      ) {
+        throw new Error(
+          (rpcData as { error?: string }).error || "Paylaşım qeyd edilə bilmədi."
+        );
+      }
+
+      const pub =
+        rpcData && typeof rpcData === "object" && "publication" in rpcData
+          ? ((rpcData as { publication?: Publication }).publication ?? null)
+          : null;
+
       if (
         listing.editorial_status !== "PUBLISHED" &&
         listing.editorial_status !== "ARCHIVED"
       ) {
-        await supabase
-          .from("listings")
-          .update({ editorial_status: "PUBLISHED" })
-          .eq("id", listing.id);
         setListing((prev) => ({ ...prev, editorial_status: "PUBLISHED" }));
       }
 
       if (pub) {
-        setPublications((prev) => [pub as Publication, ...prev]);
+        setPublications((prev) => [
+          pub,
+          ...prev.filter((item) => item.id !== pub.id),
+        ]);
       }
       setPubUrl("");
       setPubNotes("");
       setFeedback({
         type: "ok",
-        text: `${PUBLICATION_CHANNEL_LABELS[pubChannel]} paylaşımı qeydə alındı.`,
+        text: `${PUBLICATION_CHANNEL_LABELS[pubChannel]} paylaşımı atomik olaraq qeydə alındı.`,
       });
     } catch (err) {
       setFeedback({
@@ -482,8 +761,6 @@ export function ListingDetailClient({
     tone: "neutral" as BadgeTone,
   };
 
-  const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
-
   return (
     <div className="space-y-6">
       {/* Back + Title */}
@@ -500,8 +777,11 @@ export function ListingDetailClient({
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-lg border border-gold-500/40 bg-gold-500/15 px-2.5 py-0.5 font-mono text-xs font-semibold text-gold-300">
-                #{listing.bina_id}
+                {displayCode}
               </span>
+              {isOffMarket && (
+                <StatusBadge label="Eksklüziv Portfel" tone="gold" />
+              )}
               <StatusBadge label={edMeta.label} tone={edMeta.tone} />
               <StatusBadge label={avMeta.label} tone={avMeta.tone} />
               <StatusBadge label={pipeMeta.label} tone={pipeMeta.tone} />
@@ -512,7 +792,7 @@ export function ListingDetailClient({
             </div>
 
             <h1 className="text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
-              {listing.title || listing.address || `Elan #${listing.bina_id}`}
+              {listing.title || listing.address || `Elan ${displayCode}`}
             </h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-300">
@@ -524,7 +804,9 @@ export function ListingDetailClient({
                   ({formatPrice(listing.price, listing.currency)})
                 </span>
               )}
-              <span>• {listing.location || listing.district_normalized || "Bakı"}</span>
+              <span>
+                • {listing.location || listing.district_normalized || "Bakı"}
+              </span>
               <span>• {listing.rooms ?? "?"} otaq</span>
               <span>• {listing.area ?? "?"} m²</span>
               {listing.floor !== null && (
@@ -542,15 +824,17 @@ export function ListingDetailClient({
             </div>
           </div>
 
-          <a
-            href={listing.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="exec-btn-secondary shrink-0 text-xs"
-          >
-            <span>bina.az-da Aç</span>
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
+          {listing.url && (
+            <a
+              href={listing.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="exec-btn-secondary shrink-0 text-xs"
+            >
+              <span>bina.az-da Aç</span>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
         </div>
       </div>
 
@@ -558,10 +842,14 @@ export function ListingDetailClient({
       <div className="exec-card flex flex-wrap items-center gap-2.5 p-4">
         <button
           type="button"
-          disabled={busyAction !== null}
+          disabled={busyAction !== null || !hasEnoughPhotos}
           onClick={() =>
             enqueueRenderJob(
-              { trigger_reason: "MANUAL_RERENDER" },
+              {
+                jobType: "RERENDER",
+                selectedPhotoUrls: hasEnoughPhotos ? selectedPhotos : undefined,
+                customScript: customScriptText || undefined,
+              },
               "rerender"
             )
           }
@@ -624,9 +912,244 @@ export function ListingDetailClient({
         </div>
       )}
 
+      {/* Pre-Render Media & Script Studio */}
+      <section className="exec-card p-5 space-y-4 border-gold-500/30">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-gold-400" />
+            <div>
+              <h2 className="text-base font-semibold text-slate-100">
+                Pre-Render Media &amp; Ssenari Studiyası
+              </h2>
+              <p className="text-xs text-slate-400">
+                4–10 foto seçib sıralayın, AI ssenari yaradın (&lt;= 1,000
+                simvol) və bulud Railway worker-ə göndərin.
+              </p>
+            </div>
+          </div>
+          <span
+            className={`rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${
+              hasEnoughPhotos
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+            }`}
+          >
+            {selectedPhotos.length} / {MAX_STUDIO_PHOTOS} foto seçilib
+          </span>
+        </div>
+
+        {!hasEnoughPhotos && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+            <div>
+              <p className="font-semibold">
+                Render üçün ən azı 4 foto tələb olunur (min 4, maks 10).
+              </p>
+              <p className="mt-0.5 text-amber-100/80">
+                Hazırda elanda {photos.length} foto var, {selectedPhotos.length}{" "}
+                ədəd seçilib.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Photo Selector Grid */}
+        {photos.length > 0 && (
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+              <ImageIcon className="h-3.5 w-3.5 text-gold-400" />
+              <span>Foto Seçimi və Sıralama</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-5">
+              {photos.map((src, idx) => {
+                const selectedIdx = selectedPhotos.indexOf(src);
+                const isSelected = selectedIdx !== -1;
+
+                return (
+                  <div
+                    key={`${src}-${idx}`}
+                    className={`rounded-xl border overflow-hidden transition ${
+                      isSelected
+                        ? "border-gold-400/70 bg-gold-500/10"
+                        : "border-slate-800 bg-obsidian-950/70 opacity-75 hover:opacity-100"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => togglePhotoSelection(src)}
+                      className="relative block w-full aspect-[4/3] bg-obsidian-950"
+                    >
+                      <img
+                        src={src}
+                        alt={`Foto ${idx + 1}`}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                      <span
+                        className={`absolute top-1.5 left-1.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${
+                          isSelected
+                            ? "bg-gold-400 text-obsidian-950"
+                            : "bg-obsidian-950/80 text-slate-300 border border-slate-700"
+                        }`}
+                      >
+                        {isSelected ? (
+                          <span className="inline-flex items-center gap-0.5">
+                            <Check className="h-3 w-3" />
+                            {selectedIdx + 1}
+                          </span>
+                        ) : (
+                          "+"
+                        )}
+                      </span>
+                    </button>
+
+                    {isSelected && (
+                      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-obsidian-950/90 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          aria-label={`Foto ${selectedIdx + 1} sola`}
+                          disabled={selectedIdx === 0}
+                          onClick={() => moveSelectedPhoto(selectedIdx, -1)}
+                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
+                        >
+                          <ArrowLeft className="h-3 w-3" />
+                        </button>
+                        <span className="font-mono text-[10px] text-gold-300">
+                          #{selectedIdx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Foto ${selectedIdx + 1} sağa`}
+                          disabled={selectedIdx === selectedPhotos.length - 1}
+                          onClick={() => moveSelectedPhoto(selectedIdx, 1)}
+                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
+                        >
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Script Editor + Target Account + Voice Preset */}
+        <div className="grid gap-4 lg:grid-cols-12">
+          <div className="space-y-2 lg:col-span-8">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="studio-script-textarea"
+                className="text-xs font-semibold text-slate-300"
+              >
+                Video Ssenarisi (İxtiyari / Redaktə Oluna Bilən)
+              </label>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`font-mono text-[11px] ${
+                    scriptTooLong ? "text-rose-400 font-bold" : "text-slate-400"
+                  }`}
+                >
+                  {customScriptText.length} / {MAX_SCRIPT_CHARS}
+                </span>
+                <button
+                  type="button"
+                  disabled={generatingScript}
+                  onClick={handleGenerateRenderScript}
+                  className="exec-btn-secondary py-1 px-2.5 text-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-gold-400" />
+                  <span>
+                    {generatingScript ? "Yaradılır..." : "AI Ssenari Yarat"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              id="studio-script-textarea"
+              rows={4}
+              value={customScriptText}
+              onChange={(e) => setCustomScriptText(e.target.value)}
+              placeholder="AI Ssenari Yarat düyməsini sıxın və ya öz ssenarinizi yazın (maksimum 1,000 simvol)..."
+              className={`exec-input text-xs ${
+                scriptTooLong ? "border-rose-500/70" : ""
+              }`}
+            />
+            {scriptTooLong && (
+              <p className="text-[11px] text-rose-400">
+                Ssenari 1,000 simvol limitini aşır. Zəhmət olmasa qısaldın.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-3 lg:col-span-4">
+            <div className="space-y-1">
+              <label
+                htmlFor="studio-target-account"
+                className="text-xs font-medium text-slate-300"
+              >
+                Hədəf Kanal / Hesab
+              </label>
+              <select
+                id="studio-target-account"
+                value={studioTargetAccount}
+                onChange={(e) => setStudioTargetAccount(e.target.value)}
+                className="exec-select w-full text-xs"
+              >
+                {TARGET_ACCOUNTS.map((acc) => (
+                  <option key={acc.handle} value={acc.handle}>
+                    {acc.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label
+                htmlFor="studio-voice-select"
+                className="text-xs font-medium text-slate-300"
+              >
+                Diktor Səsi
+              </label>
+              <select
+                id="studio-voice-select"
+                value={studioVoiceIdx}
+                onChange={(e) => setStudioVoiceIdx(Number(e.target.value))}
+                className="exec-select w-full text-xs"
+              >
+                {VOICE_OPTIONS.map((v, idx) => (
+                  <option key={v.label} value={idx}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              disabled={
+                busyAction !== null || !hasEnoughPhotos || scriptTooLong
+              }
+              onClick={handleStudioRenderSubmit}
+              className="exec-btn-primary w-full text-xs"
+            >
+              <Film className="h-3.5 w-3.5" />
+              <span>
+                {busyAction === "studio_render"
+                  ? "Növbəyə salınır..."
+                  : "Renderə Göndər"}
+              </span>
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Main 2-column Layout */}
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* Left 7 cols: Video Player + Render Versions + Publications + Photos */}
+        {/* Left 7 cols: Video Player + Render Versions + Publications */}
         <div className="space-y-6 lg:col-span-7">
           {/* Render Versions + HTML5 MP4 Video Player */}
           <section className="exec-card p-5 space-y-4">
@@ -638,7 +1161,13 @@ export function ListingDetailClient({
               {selectedRender && (
                 <StatusBadge
                   label={`v${selectedRender.version_num} • ${(RENDER_STATUS_META[selectedRender.status] ?? { label: selectedRender.status }).label}`}
-                  tone={(RENDER_STATUS_META[selectedRender.status] ?? { tone: "neutral" as BadgeTone }).tone}
+                  tone={
+                    (
+                      RENDER_STATUS_META[selectedRender.status] ?? {
+                        tone: "neutral" as BadgeTone,
+                      }
+                    ).tone
+                  }
                 />
               )}
             </div>
@@ -664,7 +1193,7 @@ export function ListingDetailClient({
                       <Video className="h-8 w-8 text-slate-600" />
                       <p className="mt-2 text-xs font-medium text-slate-300">
                         {selectedRender.storage_pruned_at
-                          ? "Bu versiyanın MP4 faylı buluddan təmizlənib (14 gün qaydası)"
+                          ? "Bu versiyanın MP4 faylı buluddan təmizlənib"
                           : "Video CDN linki hələ hazır deyil"}
                       </p>
                       {selectedRender.local_video_path && (
@@ -706,7 +1235,8 @@ export function ListingDetailClient({
                             />
                           </div>
                           <p className="mt-1 text-[11px] text-slate-400">
-                            {RENDER_TRIGGER_LABELS[ver.trigger_reason] ?? ver.trigger_reason}
+                            {RENDER_TRIGGER_LABELS[ver.trigger_reason] ??
+                              ver.trigger_reason}
                             {ver.voice_id ? ` • ${ver.voice_id}` : ""}
                             {ver.duration_seconds
                               ? ` • ${Math.round(ver.duration_seconds)}s`
@@ -741,7 +1271,7 @@ export function ListingDetailClient({
             ) : (
               <div className="rounded-xl border border-dashed border-slate-800 p-8 text-center text-xs text-slate-400">
                 Bu elan üçün hələ video render versiyası yaradılmayıb. Yuxarıdakı
-                &ldquo;Yeni Render&rdquo; düyməsi ilə növbəyə sala bilərsiniz.
+                Pre-Render Studiyasından növbəyə sala bilərsiniz.
               </div>
             )}
           </section>
@@ -841,7 +1371,9 @@ export function ListingDetailClient({
                           tone="gold"
                         />
                         <span className="text-slate-400">
-                          {formatBakuDateTime(pub.published_at || pub.created_at)}
+                          {formatBakuDateTime(
+                            pub.published_at || pub.created_at
+                          )}
                         </span>
                       </div>
                       {pub.notes && (
@@ -864,177 +1396,154 @@ export function ListingDetailClient({
               </div>
             )}
           </section>
-
-          {/* Photo Gallery Strip */}
-          {photos.length > 0 && (
-            <section className="exec-card p-5 space-y-3">
-              <h2 className="text-sm font-semibold text-slate-200">
-                Elan Fotoları ({photos.length})
-              </h2>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                {photos.slice(0, 8).map((src, idx) => (
-                  <a
-                    key={`${src}-${idx}`}
-                    href={src}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block overflow-hidden rounded-lg border border-slate-800 aspect-[4/3] bg-obsidian-950"
-                  >
-                    <img
-                      src={src}
-                      alt={`Foto ${idx + 1}`}
-                      loading="lazy"
-                      className="h-full w-full object-cover hover:scale-105 transition"
-                    />
-                  </a>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
 
         {/* Right 5 cols: Owner Outreach & Commission + Event Timeline */}
         <div className="space-y-6 lg:col-span-5">
-          {/* Owner Outreach & Commission Editor */}
-          <section className="exec-card p-5 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-100">
-                  <Phone className="h-4 w-4 text-gold-400" />
-                  <span>Mülkiyyətçi &amp; Komissiya</span>
-                </h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  {listing.contact_name || "Ad qeyd edilməyib"} •{" "}
-                  <span className="font-mono text-slate-200">
-                    {listing.owner_phone_raw ||
-                      listing.owner_phone_normalized ||
-                      "Nömrə yoxdur"}
-                  </span>
-                </p>
+          {/* Owner Outreach & Commission Editor (hidden PII for SMM) */}
+          {memberRole !== "SMM" && (
+            <section className="exec-card p-5 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-semibold text-slate-100">
+                    <Phone className="h-4 w-4 text-gold-400" />
+                    <span>Mülkiyyətçi &amp; Komissiya</span>
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {listing.contact_name || "Ad qeyd edilməyib"} •{" "}
+                    <span className="font-mono text-slate-200">
+                      {listing.owner_phone_raw ||
+                        listing.owner_phone_normalized ||
+                        "Nömrə yoxdur"}
+                    </span>
+                  </p>
+                </div>
+
+                {waUrl && (
+                  <a
+                    href={waUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/25 shrink-0"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    <span>WhatsApp</span>
+                  </a>
+                )}
               </div>
 
-              {waUrl && (
-                <a
-                  href={waUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/25 shrink-0"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  <span>WhatsApp</span>
-                </a>
-              )}
-            </div>
-
-            <form onSubmit={handleSaveOwner} className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                  Əlaqə Statusu
-                </label>
-                <select
-                  value={ownerStatus}
-                  onChange={(e) =>
-                    setOwnerStatus(e.target.value as OwnerOutreachStatus)
-                  }
-                  className="exec-select w-full text-xs"
-                >
-                  {Object.entries(OWNER_OUTREACH_META).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
+              <form onSubmit={handleSaveOwner} className="space-y-3">
                 <div className="space-y-1">
                   <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                    Komissiya Növü
+                    Əlaqə Statusu
                   </label>
                   <select
-                    value={commissionType}
+                    value={ownerStatus}
                     onChange={(e) =>
-                      setCommissionType(e.target.value as CommissionType)
+                      setOwnerStatus(e.target.value as OwnerOutreachStatus)
                     }
                     className="exec-select w-full text-xs"
                   >
-                    <option value="PERCENT">Faiz (%)</option>
-                    <option value="FIXED_AZN">Sabit (AZN)</option>
-                    <option value="NONE">Komissiyasız</option>
+                    {Object.entries(OWNER_OUTREACH_META).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                      Komissiya Növü
+                    </label>
+                    <select
+                      value={commissionType}
+                      onChange={(e) =>
+                        setCommissionType(e.target.value as CommissionType)
+                      }
+                      className="exec-select w-full text-xs"
+                    >
+                      <option value="PERCENT">Faiz (%)</option>
+                      <option value="FIXED_AZN">Sabit (AZN)</option>
+                      <option value="NONE">Komissiyasız</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                      Komissiya Dəyəri
+                    </label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={commissionValue}
+                      onChange={(e) => setCommissionValue(e.target.value)}
+                      placeholder={
+                        commissionType === "PERCENT" ? "1.5" : "2000"
+                      }
+                      className="exec-input text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                      Son Qiymət (AZN)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={ownerMinPrice}
+                      onChange={(e) => setOwnerMinPrice(e.target.value)}
+                      placeholder="160000"
+                      className="exec-input text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                      Növbəti Yoxlama (Bakı)
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={ownerNextCheckin}
+                      onChange={(e) => setOwnerNextCheckin(e.target.value)}
+                      className="exec-input text-xs"
+                    />
+                  </div>
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                    Komissiya Dəyəri
+                    Mülkiyyətçi Qeydləri
                   </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={commissionValue}
-                    onChange={(e) => setCommissionValue(e.target.value)}
-                    placeholder={commissionType === "PERCENT" ? "1.5" : "2000"}
+                  <textarea
+                    rows={3}
+                    value={ownerNotes}
+                    onChange={(e) => setOwnerNotes(e.target.value)}
+                    placeholder="Mülkiyyətçi ilə danışığın nəticəsi, baxış saatları, endirim şərtləri..."
                     className="exec-input text-xs"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                    Son Qiymət (AZN)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={ownerMinPrice}
-                    onChange={(e) => setOwnerMinPrice(e.target.value)}
-                    placeholder="160000"
-                    className="exec-input text-xs"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                    Növbəti Yoxlama (Bakı)
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={ownerNextCheckin}
-                    onChange={(e) => setOwnerNextCheckin(e.target.value)}
-                    className="exec-input text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                  Mülkiyyətçi Qeydləri
-                </label>
-                <textarea
-                  rows={3}
-                  value={ownerNotes}
-                  onChange={(e) => setOwnerNotes(e.target.value)}
-                  placeholder="Mülkiyyətçi ilə danışığın nəticəsi, baxış saatları, endirim şərtləri..."
-                  className="exec-input text-xs"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={busyAction === "owner"}
-                className="exec-btn-primary w-full text-xs"
-              >
-                <Save className="h-3.5 w-3.5" />
-                <span>
-                  {busyAction === "owner"
-                    ? "Yadda saxlanır..."
-                    : "Mülkiyyətçi Məlumatını Saxla"}
-                </span>
-              </button>
-            </form>
-          </section>
+                <button
+                  type="submit"
+                  disabled={busyAction === "owner"}
+                  className="exec-btn-primary w-full text-xs"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>
+                    {busyAction === "owner"
+                      ? "Yadda saxlanır..."
+                      : "Mülkiyyətçi Məlumatını Saxla"}
+                  </span>
+                </button>
+              </form>
+            </section>
+          )}
 
           {/* Listing Events Audit Timeline */}
           <section className="exec-card p-5 space-y-4">
@@ -1167,10 +1676,13 @@ export function ListingDetailClient({
                   const chosen = VOICE_OPTIONS[voiceChoiceIdx];
                   enqueueRenderJob(
                     {
-                      trigger_reason: "SCRIPT_ANGLE",
-                      script_angle: scriptAngle,
-                      voice_engine: chosen.engine,
-                      voice_id: chosen.voiceId,
+                      jobType: "RERENDER",
+                      targetAccount: studioTargetAccount,
+                      voicePreset: chosen?.preset ?? "Arif",
+                      selectedPhotoUrls: hasEnoughPhotos
+                        ? selectedPhotos
+                        : undefined,
+                      customScript: customScriptText || undefined,
                     },
                     "custom_rerender"
                   );

@@ -1,0 +1,33 @@
+# BakuEstate-AI v2 Railway Cloud Media Worker
+# Multi-replica stateless worker running --no-scheduler (pg_cron schedules periodic jobs)
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    WORKER_MODE=railway \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    fonts-dejavu-core \
+    fonts-noto-core \
+    fontconfig \
+    ca-certificates \
+    && fc-cache -fv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY config/ /app/config/
+COPY src/ /app/src/
+COPY assets/ /app/assets/
+COPY run_pipeline.py /app/run_pipeline.py
+
+RUN mkdir -p /app/data/downloads /app/data/output /app/data/profiles
+
+STOPSIGNAL SIGTERM
+
+CMD ["python", "-m", "src.worker.local_worker", "--no-scheduler"]

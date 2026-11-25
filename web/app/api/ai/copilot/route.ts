@@ -15,6 +15,28 @@ import type {
   AgentChatMessage,
   AgentChatResult,
 } from "@/lib/ai-client";
+import type { HookType } from "@/lib/types";
+
+interface GenerateRenderScriptResult {
+  draft_script: string;
+  hook_type: HookType;
+}
+
+type ExtendedCopilotActionPayload =
+  | CopilotActionPayload
+  | {
+      action: "generate_render_script";
+      listing_id: string;
+      hook_type?: HookType;
+      target_account?: string;
+    };
+
+const VALID_HOOK_TYPES: HookType[] = [
+  "PRICE_FIRST",
+  "LOCATION_FIRST",
+  "LUXURY_LIFESTYLE",
+];
+const MAX_RENDER_SCRIPT_CHARS = 1000;
 import {
   buildAgentSystemInstruction,
   getAgentPersona,
@@ -169,7 +191,7 @@ export async function POST(request: Request) {
   const { operator } = auth;
 
   // 2. Parse request body
-  let payload: CopilotActionPayload;
+  let payload: ExtendedCopilotActionPayload;
   try {
     payload = await request.json();
   } catch {
@@ -357,6 +379,20 @@ export async function POST(request: Request) {
     }
   }
 
+  if (payload.action === "generate_render_script") {
+    if (!payload.listing_id || typeof payload.listing_id !== "string") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "generate_render_script üçün listing_id tələb olunur.",
+          code: "UPSTREAM_ERROR",
+          fallback_available: false,
+        } as CopilotApiResponse,
+        { status: 400, headers: { "X-BakuEstate-Run-Id": runId } }
+      );
+    }
+  }
+
   // 4. Fail-closed serialized budget & rate limit reservation RPC
   const { data: budgetRaw, error: budgetErr } = await supabaseAdmin.rpc(
     "check_and_reserve_ai_budget",
@@ -462,12 +498,119 @@ export async function POST(request: Request) {
     | VoiceDebriefResult
     | StrategistCockpitResult
     | AgentChatResult
+    | GenerateRenderScriptResult
     | null = null;
 
   try {
     const ai = new GoogleGenAI({ apiKey });
 
-    if (payload.action === "scribe_response") {
+    if (payload.action === "generate_render_script") {
+      let listingQuery = supabaseAdmin
+        .from("listings")
+        .select(
+          "id, bina_id, title, price, price_azn_normalized, district_normalized, location, address, rooms, area, floor, floors, has_bill_of_sale, description"
+        )
+        .eq("agency_id", operator.agencyId);
+
+      if (UUID_REGEX.test(payload.listing_id)) {
+        listingQuery = listingQuery.eq("id", payload.listing_id);
+      } else {
+        listingQuery = listingQuery.eq("bina_id", String(payload.listing_id));
+      }
+
+      const { data: listing } = await listingQuery.maybeSingle();
+      if (!listing) {
+        await reconcileBudgetRunSafe(supabaseAdmin, {
+          runId: budgetRunId,
+          promptTokens: 0,
+          outputTokens: 0,
+          audioSeconds: 0,
+          actualUsd: 0,
+          status: "FAILED",
+        });
+
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Elan tapılmadı və ya bu agentliyə aid deyil.",
+            code: "UPSTREAM_ERROR",
+            fallback_available: false,
+          } as CopilotApiResponse,
+          { status: 404, headers: { "X-BakuEstate-Run-Id": budgetRunId } }
+        );
+      }
+
+      const priceAzn = Number(listing.price_azn_normalized ?? listing.price ?? 0);
+      const preferredHook: HookType =
+        payload.hook_type && VALID_HOOK_TYPES.includes(payload.hook_type)
+          ? payload.hook_type
+          : priceAzn >= 250_000
+          ? "LUXURY_LIFESTYLE"
+          : "PRICE_FIRST";
+
+      const kupcaRule = listing.has_bill_of_sale
+        ? "Kupça (Dövlət Çıxarışı) VAR — qeyd edə bilərsən."
+        : "Kupça qeyd edilməyib — QƏTİYYƏN 'Kupçalı' və ya 'Çıxarışlı' ifadəsini işlətmə!";
+
+      const promptText = `
+Sən BakuEstate-AI agentliyinin peşəkar şaquli video (Reels/TikTok) ssenari müəllifisən.
+Məqsəd: Aşağıdakı əmlak üçün 25–40 saniyəlik, yüksək saxlanma (retention) və satış konversiyalı Azərbaycan dilində səsləndirmə ssenarisi yazmaq.
+
+Əmlak məlumatları:
+- Başlıq: ${listing.title || "Mənzil"}
+- Qiymət: ${priceAzn} AZN
+- Rayon / Ünvan: ${listing.district_normalized || listing.location || "Bakı"}, ${listing.address || ""}
+- Otaq / Sahə: ${listing.rooms || "—"} otaq, ${listing.area || "—"} m²
+- Mərtəbə: ${listing.floor || "—"}/${listing.floors || "—"}
+- Sənəd qaydası: ${kupcaRule}
+- Təsvir: ${String(listing.description || "").slice(0, 400)}
+- Hədəf hesab: ${payload.target_account || "@bakuestate.official"}
+- Tövsiyə olunan hook növü: ${preferredHook}
+
+QAYDALAR:
+1. Ssenari səlis, enerjili Bakı Azərbaycan dilində yalnız danışıq mətni olsun (səhnə göstərişi, mötərizə və emoji yazma).
+2. Dəqiq bina/mənzil nömrəsini açıqlama.
+3. Mətn MÜTLƏQ maksimum ${MAX_RENDER_SCRIPT_CHARS} simvol daxilində olmalıdır.
+4. Çıxış yalnız təmiz JSON formatında olmalıdır:
+{
+  "draft_script": "səsləndirmə mətni (<= ${MAX_RENDER_SCRIPT_CHARS} simvol)",
+  "hook_type": "PRICE_FIRST" | "LOCATION_FIRST" | "LUXURY_LIFESTYLE"
+}
+`;
+
+      const response = await ai.models.generateContent({
+        model: COPILOT_FAST_MODEL,
+        contents: [{ text: promptText }],
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
+
+      promptTokens = response.usageMetadata?.promptTokenCount ?? 0;
+      outputTokens = response.usageMetadata?.candidatesTokenCount ?? 0;
+
+      const parsed = extractJson<{ draft_script?: string; hook_type?: string }>(
+        response.text || ""
+      );
+      const rawScript =
+        typeof parsed?.draft_script === "string"
+          ? parsed.draft_script.trim()
+          : "";
+      if (!rawScript) {
+        throw new Error("Invalid model response for generate_render_script");
+      }
+
+      const resolvedHook: HookType =
+        parsed?.hook_type &&
+        VALID_HOOK_TYPES.includes(parsed.hook_type as HookType)
+          ? (parsed.hook_type as HookType)
+          : preferredHook;
+
+      resultData = {
+        draft_script: rawScript.slice(0, MAX_RENDER_SCRIPT_CHARS),
+        hook_type: resolvedHook,
+      };
+    } else if (payload.action === "scribe_response") {
       let listingInfo = "";
       let binaId = payload.listing_id || "";
       let ownerPhone = "";

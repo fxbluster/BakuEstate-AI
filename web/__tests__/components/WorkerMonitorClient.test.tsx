@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { WorkerMonitorClient } from "@/components/WorkerMonitorClient";
 import type { PipelineJob, WorkerStatusRow } from "@/lib/types";
 
@@ -27,8 +27,8 @@ vi.mock("@/lib/supabase/client", () => ({
   }),
 }));
 
-const onlineProcessingWorker: WorkerStatusRow = {
-  worker_id: "DESKTOP-6UBPFU0",
+const railwayReplica1: WorkerStatusRow = {
+  worker_id: "railway-worker-1",
   last_seen_at: new Date().toISOString(),
   current_job_id: "job-running-1",
   current_job_type: "RENDER_INITIAL",
@@ -38,7 +38,7 @@ const onlineProcessingWorker: WorkerStatusRow = {
   current_listing_title: "İnşaatçılar m., 3 otaqlı, 95 m²",
   metadata_json: {
     state: "PROCESSING",
-    pid: 14820,
+    pid: 101,
     started_at: new Date(Date.now() - 3_720_000).toISOString(),
     jobs_processed_session: 4,
     current_phase: "Video montaj və TTS səs sintezi aparılır",
@@ -46,12 +46,12 @@ const onlineProcessingWorker: WorkerStatusRow = {
     next_schedule_baku: "19:30",
     recent_logs: [
       {
-        ts: "2026-11-24T15:39:05Z",
+        ts: "2026-11-25T15:39:05Z",
         level: "INFO",
-        msg: "ElevenLabs synthesized 556KB speech -> video_6588858.mp4",
+        msg: "R2 upload completed -> videos/ag1/list1/v1.mp4",
       },
       {
-        ts: "2026-11-24T15:39:25Z",
+        ts: "2026-11-25T15:39:25Z",
         level: "WARNING",
         msg: "Rate limit backoff test message",
       },
@@ -61,8 +61,32 @@ const onlineProcessingWorker: WorkerStatusRow = {
   seconds_since_heartbeat: 4,
 };
 
-const offlineWorker: WorkerStatusRow = {
-  worker_id: "DESKTOP-6UBPFU0",
+const railwayReplica2: WorkerStatusRow = {
+  worker_id: "railway-worker-2",
+  last_seen_at: new Date().toISOString(),
+  current_job_id: null,
+  current_job_type: null,
+  current_job_status: null,
+  metadata_json: {
+    state: "IDLE",
+    pid: 202,
+    started_at: new Date(Date.now() - 1_800_000).toISOString(),
+    jobs_processed_session: 7,
+    current_phase: "Hazır — bulud növbəsi dinlənilir",
+    recent_logs: [
+      {
+        ts: "2026-11-25T15:40:00Z",
+        level: "INFO",
+        msg: "Replica 2 heartbeat OK",
+      },
+    ],
+  },
+  is_online: true,
+  seconds_since_heartbeat: 2,
+};
+
+const offlineReplica: WorkerStatusRow = {
+  worker_id: "railway-worker-offline",
   last_seen_at: "2026-11-24T18:06:36Z",
   current_job_id: null,
   current_job_type: null,
@@ -90,7 +114,7 @@ const sampleRecentJobs: PipelineJob[] = [
     status: "RUNNING",
     attempts: 1,
     max_attempts: 2,
-    locked_by: "DESKTOP-6UBPFU0",
+    locked_by: "railway-worker-1",
     lease_expires_at: null,
     expires_at: null,
     error_message: null,
@@ -105,32 +129,50 @@ const sampleRecentJobs: PipelineJob[] = [
   },
 ];
 
-describe("WorkerMonitorClient Live Tracking Page", () => {
+describe("WorkerMonitorClient Multi-Replica Railway Cloud Monitor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("displays live active job phase, PID, next Baku schedule, and console logs when online", () => {
+  it("renders all active Railway container replicas simultaneously with live job phase, PID, and per-replica console logs", () => {
     render(
       <WorkerMonitorClient
-        initialWorkers={[onlineProcessingWorker]}
+        initialWorkers={[railwayReplica1, railwayReplica2]}
         initialJobs={sampleRecentJobs}
       />
     );
 
-    expect(screen.getByText("DESKTOP-6UBPFU0")).not.toBeNull();
-    expect(screen.getByText(/İŞLƏYİR/i)).not.toBeNull();
-    expect(screen.getByText(/Video montaj və TTS səs sintezi aparılır/)).not.toBeNull();
-    expect(screen.getByText(/PID 14820/)).not.toBeNull();
-    expect(screen.getByText("19:30")).not.toBeNull();
-    expect(screen.getByText(/ElevenLabs synthesized 556KB speech/)).not.toBeNull();
+    expect(screen.getAllByText("railway-worker-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("railway-worker-2").length).toBeGreaterThan(0);
+    expect(screen.getByText(/2 \/ 2 Replika Onlayn/i)).not.toBeNull();
+    expect(screen.getByText("İŞLƏYİR")).not.toBeNull();
+    expect(screen.getByText("ONLAYN")).not.toBeNull();
+    expect(
+      screen.getByText(/Video montaj və TTS səs sintezi aparılır/)
+    ).not.toBeNull();
+    expect(screen.getByText(/PID 101/)).not.toBeNull();
+    expect(screen.getByText(/PID 202/)).not.toBeNull();
+    expect(screen.getByText(/R2 upload completed/)).not.toBeNull();
     expect(screen.getAllByText(/#6588858/).length).toBeGreaterThan(0);
+
+    // Switch console view to replica 2
+    fireEvent.click(screen.getByRole("button", { name: /railway-worker-2/i }));
+    expect(screen.getByText(/Replica 2 heartbeat OK/)).not.toBeNull();
   });
 
-  it("displays offline diagnostic guidance and startup script command when worker is offline", () => {
-    render(<WorkerMonitorClient initialWorkers={[offlineWorker]} initialJobs={[]} />);
+  it("displays Railway cloud diagnostic guidance when all replicas are offline and never renders Windows PowerShell startup script", () => {
+    render(
+      <WorkerMonitorClient
+        initialWorkers={[offlineReplica]}
+        initialJobs={[]}
+      />
+    );
 
-    expect(screen.getByText("OFLAYN")).not.toBeNull();
-    expect(screen.getByText(/setup_worker_service\.ps1 -Start/)).not.toBeNull();
+    expect(screen.getAllByText(/OFLAYN/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Railway bulud worker replikaları hazırda oflayndır/i)
+    ).not.toBeNull();
+    expect(screen.queryByText(/setup_worker_service\.ps1/i)).toBeNull();
+    expect(screen.queryByText(/powershell/i)).toBeNull();
   });
 });
