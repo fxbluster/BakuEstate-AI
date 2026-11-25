@@ -475,6 +475,7 @@ class BakuLocalWorker:
         )
 
         self._stop_event = threading.Event()
+        self._sigterm_received = threading.Event()
         self._last_idle_heartbeat_mono = 0.0
         self._enqueued_schedule_keys: set[str] = set()
         self._consecutive_social_rate_limits: int = 0
@@ -502,6 +503,28 @@ class BakuLocalWorker:
     def stop(self) -> None:
         logger.info("Local worker '%s' received stop request.", self.worker_id)
         self._stop_event.set()
+
+    def handle_sigterm(self, signum: Optional[int] = None, frame: Any = None) -> None:
+        """
+        Graceful SIGTERM handler (Railway container draining):
+        Sets stop/sigterm flags and immediately interrupts any active FFmpeg subprocess
+        so the running job cleans up and releases its lease back to QUEUED (or CANCELLED).
+        """
+        logger.warning(
+            "Worker '%s' received SIGTERM (sig=%s); interrupting active FFmpeg subprocesses...",
+            self.worker_id,
+            signum,
+        )
+        self._sigterm_received.set()
+        self._stop_event.set()
+        try:
+            from run_pipeline import terminate_active_ffmpeg_processes
+
+            terminated = terminate_active_ffmpeg_processes()
+            if terminated:
+                logger.info("Interrupted %d active FFmpeg subprocess(es) on SIGTERM.", terminated)
+        except Exception as exc:
+            logger.warning("Error interrupting active FFmpeg subprocesses on SIGTERM: %s", exc)
 
     @property
     def is_running(self) -> bool:
@@ -873,6 +896,35 @@ class BakuLocalWorker:
             except Exception as exc:
                 logger.warning("Failed to insert/upsert DRAFT_READY publication: %s", exc)
 
+    def _resolve_agency_settings_for_render(
+        self,
+        listing: Dict[str, Any],
+        params: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if isinstance(params.get("agency_settings"), dict):
+            return params["agency_settings"]
+        agency_id = str(listing.get("agency_id") or "").strip()
+        if agency_id and self.repo.is_configured() and hasattr(self.repo, "get_agency_settings"):
+            try:
+                settings_row = self.repo.get_agency_settings(agency_id)
+                if isinstance(settings_row, dict):
+                    return settings_row
+            except Exception as exc:
+                logger.warning("Could not load agency_settings for %s: %s", agency_id, exc)
+        return None
+
+    def _build_cancel_check_cb(self, job: Dict[str, Any]) -> Callable[[], bool]:
+        job_id = str(job.get("id") or "").strip()
+
+        def _is_cancelled() -> bool:
+            return bool(
+                job_id
+                and hasattr(self.repo, "is_job_cancel_requested")
+                and self.repo.is_job_cancel_requested(job_id) is True
+            )
+
+        return _is_cancelled
+
     def _handle_render_initial(self, job: Dict[str, Any]) -> Dict[str, Any]:
         listing = self._resolve_listing_for_job(job)
         params = job.get("params_json") or {}
@@ -890,6 +942,8 @@ class BakuLocalWorker:
         route_info = route_listing_to_channel(listing)
         voice_engine = params.get("voice_engine") or route_info.get("voice_engine")
         voice_id = params.get("voice_id") or route_info.get("voice_id")
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        cancel_check_cb = self._build_cancel_check_cb(job)
 
         listing_id = str(listing.get("id") or "").strip()
         render_version = None
@@ -917,7 +971,13 @@ class BakuLocalWorker:
             trigger_reason="AUTO_INITIAL",
             skip_telegram_dispatch=True,
             existing_render_version=render_version,
+            selected_photo_urls=params.get("selected_photo_urls"),
+            custom_script_text=params.get("custom_script_text"),
+            agency_settings=agency_settings,
+            cancel_check_cb=cancel_check_cb,
         )
+        if res.get("status") == "CANCELLED":
+            return res
         if res.get("status") == "FAILED":
             raise RuntimeError(res.get("error") or res.get("reason") or "RENDER_INITIAL failed")
 
@@ -955,6 +1015,8 @@ class BakuLocalWorker:
         route_info = route_listing_to_channel(routing_listing)
         voice_engine = params.get("voice_engine") or route_info.get("voice_engine")
         voice_id = params.get("voice_id") or route_info.get("voice_id")
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        cancel_check_cb = self._build_cancel_check_cb(job)
 
         listing_id = str(listing.get("id") or "").strip()
         render_version = None
@@ -983,7 +1045,13 @@ class BakuLocalWorker:
             price_drop_info=params.get("price_drop_info"),
             skip_telegram_dispatch=True,
             existing_render_version=render_version,
+            selected_photo_urls=params.get("selected_photo_urls"),
+            custom_script_text=params.get("custom_script_text"),
+            agency_settings=agency_settings,
+            cancel_check_cb=cancel_check_cb,
         )
+        if res.get("status") == "CANCELLED":
+            return res
         if res.get("status") == "FAILED":
             raise RuntimeError(res.get("error") or res.get("reason") or "RENDER_PRICE_DROP failed")
 
@@ -1035,6 +1103,8 @@ class BakuLocalWorker:
         # Support both telegram-webhook (`telegram_message_id`) and direct (`update_telegram_message_id`)
         update_msg_id = params.get("update_telegram_message_id") or params.get("telegram_message_id")
         tg_chat_id = params.get("telegram_chat_id") or params.get("chat_id")
+        agency_settings = self._resolve_agency_settings_for_render(listing, params)
+        cancel_check_cb = self._build_cancel_check_cb(job)
 
         res = self.pipeline.process_listing_video_and_dispatch(
             listing,
@@ -1046,7 +1116,13 @@ class BakuLocalWorker:
             price_drop_info=params.get("price_drop_info"),
             update_telegram_message_id=update_msg_id,
             telegram_chat_id=tg_chat_id,
+            selected_photo_urls=params.get("selected_photo_urls"),
+            custom_script_text=params.get("custom_script_text"),
+            agency_settings=agency_settings,
+            cancel_check_cb=cancel_check_cb,
         )
+        if res.get("status") == "CANCELLED":
+            return res
         if res.get("status") == "FAILED":
             raise RuntimeError(res.get("error") or res.get("reason") or "RERENDER failed")
         return res
@@ -1880,8 +1956,30 @@ class BakuLocalWorker:
                 }
 
             result = handler(job)
-            if job_id and hasattr(self.repo, "is_job_cancel_requested") and self.repo.is_job_cancel_requested(job_id) is True:
+            result_cancelled = (
+                isinstance(result, dict)
+                and str(result.get("status") or "").strip().upper() == "CANCELLED"
+            )
+            cancel_requested_after = bool(
+                job_id
+                and hasattr(self.repo, "is_job_cancel_requested")
+                and self.repo.is_job_cancel_requested(job_id) is True
+            )
+            if result_cancelled or cancel_requested_after:
                 logger.info("Job %s (%s) cancel requested during execution; marking CANCELLED.", job_id, job_type)
+                if (
+                    isinstance(result, dict)
+                    and result.get("storage_object_path")
+                    and not result.get("cleaned_storage_object")
+                    and hasattr(self.repo, "delete_storage_object")
+                ):
+                    try:
+                        self.repo.delete_storage_object(
+                            result["storage_object_path"],
+                            storage_provider=result.get("storage_provider"),
+                        )
+                    except Exception as cleanup_exc:
+                        logger.warning("Failed partial storage cleanup for cancelled job %s: %s", job_id, cleanup_exc)
                 job_outcome_status = "CANCELLED"
                 self.repo.complete_pipeline_job(
                     job_id,
@@ -1945,6 +2043,36 @@ class BakuLocalWorker:
             }
         except Exception as exc:
             job_outcome_error = str(exc)[:240]
+            if self._sigterm_received.is_set():
+                sigterm_target = (
+                    "CANCELLED"
+                    if (
+                        job_id
+                        and hasattr(self.repo, "is_job_cancel_requested")
+                        and self.repo.is_job_cancel_requested(job_id) is True
+                    )
+                    else "QUEUED"
+                )
+                logger.warning(
+                    "Job %s (%s) interrupted by graceful SIGTERM; releasing status=%s.",
+                    job_id,
+                    job_type,
+                    sigterm_target,
+                )
+                job_outcome_status = sigterm_target
+                self.repo.complete_pipeline_job(
+                    job_id,
+                    status=sigterm_target,
+                    error_message=f"Worker interrupted by SIGTERM: {exc}",
+                    worker_id=self.worker_id,
+                )
+                return {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "status": sigterm_target,
+                    "error": str(exc),
+                    "heartbeats_sent": hb_thread.heartbeat_count,
+                }
             logger.error("Job %s (%s) error: %s", job_id, job_type, exc, exc_info=True)
             try:
                 import sentry_sdk
@@ -2083,6 +2211,7 @@ class BakuLocalWorker:
     def start(self, max_polls: Optional[int] = None) -> None:
         """Starts the continuous polling loop with graceful Ctrl+C / SIGTERM shutdown."""
         self._stop_event.clear()
+        self._sigterm_received.clear()
         self._started_at_iso = _utc_now().isoformat()
 
         root_logger = logging.getLogger()
@@ -2090,7 +2219,7 @@ class BakuLocalWorker:
 
         try:
             signal.signal(signal.SIGINT, lambda sig, frame: self.stop())
-            signal.signal(signal.SIGTERM, lambda sig, frame: self.stop())
+            signal.signal(signal.SIGTERM, self.handle_sigterm)
         except (ValueError, AttributeError):
             pass
 

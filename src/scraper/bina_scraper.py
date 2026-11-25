@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 
 from config.settings import (
     BINA_BASE_URL,
+    BINA_PROXY_URL,
     SCRAPE_CITY_ID,
     SCRAPE_CATEGORY_ID,
     SCRAPE_HAS_BILL_OF_SALE,
@@ -130,7 +131,8 @@ class BinaScraper:
         owner_only: bool = FILTER_DIRECT_OWNER_ONLY,
         min_price: int = MIN_PRICE,
         max_price: int = MAX_PRICE,
-        session: Optional[requests.Session] = None
+        session: Optional[requests.Session] = None,
+        proxy_url: Optional[str] = None,
     ):
         self.city_id = city_id
         self.category_id = category_id
@@ -140,6 +142,19 @@ class BinaScraper:
         self.max_price = max_price
         self.session = session or requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
+        resolved_proxy = (
+            proxy_url
+            if proxy_url is not None
+            else (os.getenv("BINA_PROXY_URL") or BINA_PROXY_URL or "")
+        ).strip()
+        self.proxy_url = resolved_proxy
+        if resolved_proxy and hasattr(self.session, "proxies") and isinstance(self.session.proxies, dict):
+            self.session.proxies.update({
+                "http": resolved_proxy,
+                "https": resolved_proxy,
+            })
+            redacted = re.sub(r"://[^/@]+@", "://***@", resolved_proxy)
+            logger.info("BinaScraper configured with proxy: %s", redacted)
 
     def build_listings_url(self, page: int = 1) -> str:
         """Constructs search URL with query parameters."""
@@ -466,17 +481,19 @@ class BinaScraper:
         self,
         bina_id: str,
         photo_urls: List[str],
-        max_photos: int = 8,
+        max_photos: int = 10,
         photo_urls_hash: Optional[str] = None,
         force_refresh: bool = False,
+        target_dir: Optional[Path] = None,
     ) -> List[str]:
         """
-        Downloads Full HD images to data/downloads/{bina_id}/
+        Downloads Full HD images to data/downloads/{bina_id}/ (or explicit target_dir).
         Refreshes cached photos automatically when photo_urls_hash changes or force_refresh=True.
-        Returns list of downloaded file paths.
+        Returns list of downloaded file paths (up to max_photos=10 by default).
         """
-        target_dir = DOWNLOADS_DIR / str(bina_id)
-        target_dir.mkdir(parents=True, exist_ok=True)
+        resolved_dir = Path(target_dir) if target_dir is not None else (DOWNLOADS_DIR / str(bina_id))
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+        target_dir = resolved_dir
 
         current_hash = (photo_urls_hash or _hash_photo_urls(photo_urls) or "").strip()
         hash_marker = target_dir / ".photo_urls_hash"

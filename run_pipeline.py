@@ -31,11 +31,18 @@ if sys.platform == "win32":
         pass
 
 import argparse
+import ipaddress
 import json
 import logging
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import urllib.parse
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import requests
 
@@ -53,6 +60,7 @@ from config.settings import (
     OUTPUT_DIR,
     PRICE_DROP_TRIGGER_PCT,
     PROFILES_DIR,
+    R2_MEDIA_BASE_URL,
     SUPABASE_ENABLED,
     TELEGRAM_MOCK_DISPATCH,
     USD_TO_AZN_RATE,
@@ -95,6 +103,330 @@ logger = logging.getLogger("estate_pipeline")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 AUTO_TRIGGER_REASONS = frozenset({"AUTO_INITIAL", "AUTO_PRICE_DROP"})
+MAX_CUSTOM_SCRIPT_LENGTH = 1000
+MIN_STUDIO_PHOTOS = 4
+MAX_STUDIO_PHOTOS = 10
+MAX_TELEGRAM_VIDEO_BYTES = 18 * 1024 * 1024
+DEFAULT_R2_MEDIA_BASE_URL = "https://media.bakuestate.az"
+
+
+class PipelineCancelledError(Exception):
+    """Raised when cooperative job cancellation is requested mid-pipeline."""
+
+
+class WorkerShutdownError(Exception):
+    """Raised when an active FFmpeg render is interrupted by graceful SIGTERM."""
+
+
+_ACTIVE_FFMPEG_LOCK = threading.Lock()
+_ACTIVE_FFMPEG_PROCS: set[Any] = set()
+
+
+def register_active_ffmpeg_process(proc: Any) -> None:
+    """Registers an active FFmpeg subprocess so SIGTERM can interrupt it promptly."""
+    with _ACTIVE_FFMPEG_LOCK:
+        _ACTIVE_FFMPEG_PROCS.add(proc)
+
+
+def unregister_active_ffmpeg_process(proc: Any) -> None:
+    """Unregisters a finished FFmpeg subprocess."""
+    with _ACTIVE_FFMPEG_LOCK:
+        _ACTIVE_FFMPEG_PROCS.discard(proc)
+
+
+def terminate_active_ffmpeg_processes() -> int:
+    """Terminates all currently running FFmpeg subprocesses (for graceful SIGTERM)."""
+    with _ACTIVE_FFMPEG_LOCK:
+        procs = list(_ACTIVE_FFMPEG_PROCS)
+    terminated = 0
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                terminated += 1
+        except Exception:
+            pass
+    return terminated
+
+
+def _assert_safe_public_https_url(raw_url: str) -> str:
+    """SSRF guard: enforces public https:// URL with no internal/metadata IPs or traversal."""
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        raise ValueError("Photo URL must be a non-empty string.")
+    cleaned = raw_url.strip()
+    parsed = urllib.parse.urlparse(cleaned)
+    if parsed.scheme.lower() != "https":
+        raise ValueError(f"Blocked non-HTTPS photo URL (SSRF guard): {cleaned}")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"Blocked photo URL with embedded credentials: {cleaned}")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise ValueError(f"Photo URL missing hostname: {cleaned}")
+    if (
+        host in ("localhost", "localhost.localdomain", "metadata.google.internal")
+        or host.endswith(".local")
+        or host.endswith(".internal")
+    ):
+        raise ValueError(f"Blocked internal hostname in photo URL (SSRF guard): {host}")
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        ):
+            raise ValueError(f"Blocked internal/private IP in photo URL (SSRF guard): {host}")
+    except ValueError as ip_exc:
+        # Distinguish "not an IP address" (valid domain) from our explicit SSRF ValueError
+        if "Blocked internal/private IP" in str(ip_exc):
+            raise
+    if ".." in urllib.parse.unquote(parsed.path or "").split("/"):
+        raise ValueError(f"Blocked path traversal in photo URL: {cleaned}")
+    return cleaned
+
+
+def validate_selected_photo_urls(
+    selected_photo_urls: Optional[Sequence[str]],
+    listing: Dict[str, Any],
+    *,
+    agency_id: Optional[str] = None,
+    r2_media_base_url: Optional[str] = None,
+) -> Optional[List[str]]:
+    """
+    Validates Pre-Render Studio `selected_photo_urls`:
+    - Must contain between 4 and 10 URLs (inclusive).
+    - Every URL must pass HTTPS + non-private-IP SSRF checks.
+    - Every URL must be allowlisted against either the listing's own `photo_urls`
+      OR the caller's agency R2 media prefix (`https://media.bakuestate.az/staging/{agency_id}/`
+      or `.../photos/{agency_id}/`).
+    Raises ValueError on any violation.
+    """
+    if selected_photo_urls is None:
+        return None
+    if isinstance(selected_photo_urls, (str, bytes)) or not isinstance(selected_photo_urls, Sequence):
+        raise ValueError("selected_photo_urls must be a list of 4 to 10 photo URLs.")
+
+    urls = list(selected_photo_urls)
+    if len(urls) < MIN_STUDIO_PHOTOS or len(urls) > MAX_STUDIO_PHOTOS:
+        raise ValueError(
+            f"selected_photo_urls must contain between {MIN_STUDIO_PHOTOS} and "
+            f"{MAX_STUDIO_PHOTOS} photos (got {len(urls)})."
+        )
+
+    listing_allowed = {
+        str(u).strip()
+        for u in (listing.get("photo_urls") or [])
+        if isinstance(u, str) and str(u).strip()
+    }
+    resolved_agency = str(agency_id or listing.get("agency_id") or "").strip()
+    base_url = (
+        r2_media_base_url
+        or os.getenv("R2_MEDIA_BASE_URL")
+        or os.getenv("NEXT_PUBLIC_R2_MEDIA_BASE_URL")
+        or R2_MEDIA_BASE_URL
+        or DEFAULT_R2_MEDIA_BASE_URL
+    ).strip().rstrip("/")
+    allowed_r2_prefixes: Tuple[str, ...] = ()
+    if resolved_agency:
+        allowed_r2_prefixes = (
+            f"{base_url}/staging/{resolved_agency}/",
+            f"{base_url}/v/staging/{resolved_agency}/",
+            f"{base_url}/photos/{resolved_agency}/",
+            f"{base_url}/v/photos/{resolved_agency}/",
+        )
+
+    validated: List[str] = []
+    for raw_url in urls:
+        safe_url = _assert_safe_public_https_url(raw_url)
+        in_listing = safe_url in listing_allowed
+        in_agency_r2 = bool(allowed_r2_prefixes) and any(
+            safe_url.startswith(prefix) for prefix in allowed_r2_prefixes
+        )
+        if not in_listing and not in_agency_r2:
+            raise ValueError(
+                f"Photo URL is not allowlisted for this listing or agency R2 prefix (SSRF guard): {safe_url}"
+            )
+        validated.append(safe_url)
+    return validated
+
+
+def validate_custom_script_text(
+    custom_script_text: Optional[str],
+    *,
+    max_length: int = MAX_CUSTOM_SCRIPT_LENGTH,
+) -> Optional[str]:
+    """Validates Pre-Render Studio `custom_script_text` (<= 1,000 characters)."""
+    if custom_script_text is None:
+        return None
+    if not isinstance(custom_script_text, str):
+        raise ValueError("custom_script_text must be a string.")
+    cleaned = custom_script_text.strip()
+    if len(cleaned) > max_length:
+        raise ValueError(
+            f"custom_script_text exceeds maximum length of {max_length} characters ({len(cleaned)})."
+        )
+    return cleaned or None
+
+
+def calculate_two_pass_video_bitrate_kbps(
+    duration_seconds: float,
+    *,
+    max_bytes: int = MAX_TELEGRAM_VIDEO_BYTES,
+    audio_bitrate_kbps: int = 128,
+) -> int:
+    """
+    Calculates target libx264 video bitrate (kbps) for 2-pass encoding so the final MP4
+    stays strictly under `max_bytes` (default 18 MB for Telegram's 20 MB URL fetch cap).
+    """
+    safe_duration = max(1.0, float(duration_seconds or 1.0))
+    # 96% budget leaves 4% headroom for MP4 container/muxing overhead
+    total_bits = int(max_bytes * 8 * 0.96)
+    total_kbps = total_bits / (safe_duration * 1000.0)
+    video_kbps = int(total_kbps - max(64, int(audio_bitrate_kbps)))
+    return max(350, min(video_kbps, 4500))
+
+
+def _run_tracked_ffmpeg(
+    cmd: List[str],
+    *,
+    cancel_check_cb: Optional[Callable[[], bool]] = None,
+) -> int:
+    """
+    Runs an FFmpeg command via Popen with active process registration so SIGTERM
+    or cooperative cancellation interrupts FFmpeg promptly.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    register_active_ffmpeg_process(proc)
+    try:
+        while proc.poll() is None:
+            if cancel_check_cb is not None and cancel_check_cb():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=3.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                raise PipelineCancelledError("Cancelled during FFmpeg 2-pass size cap")
+            try:
+                proc.wait(timeout=0.15)
+            except subprocess.TimeoutExpired:
+                continue
+        _, stderr_bytes = proc.communicate()
+        if proc.returncode != 0:
+            err_tail = (stderr_bytes or b"").decode("utf-8", errors="replace")[-400:]
+            raise RuntimeError(f"FFmpeg 2-pass size cap failed (rc={proc.returncode}): {err_tail}")
+        return int(proc.returncode)
+    finally:
+        unregister_active_ffmpeg_process(proc)
+
+
+def enforce_video_size_cap(
+    video_path: Path,
+    duration_seconds: float,
+    *,
+    max_bytes: int = MAX_TELEGRAM_VIDEO_BYTES,
+    temp_dir: Optional[Path] = None,
+    ffmpeg_exe: Optional[str] = None,
+    cancel_check_cb: Optional[Callable[[], bool]] = None,
+) -> Path:
+    """
+    Enforces a strict `<= 18 MB` MP4 cap via 2-pass libx264 bitrate targeting
+    whenever the rendered file exceeds `max_bytes`.
+    """
+    target_path = Path(video_path)
+    if not target_path.is_file():
+        return target_path
+
+    current_size = target_path.stat().st_size
+    if current_size <= max_bytes:
+        return target_path
+
+    audio_kbps = 128
+    video_kbps = calculate_two_pass_video_bitrate_kbps(
+        duration_seconds=duration_seconds,
+        max_bytes=max_bytes,
+        audio_bitrate_kbps=audio_kbps,
+    )
+    resolved_ffmpeg = ffmpeg_exe
+    if not resolved_ffmpeg:
+        from src.media.ffmpeg_compositor import get_ffmpeg_executable
+        resolved_ffmpeg = get_ffmpeg_executable()
+
+    owned_temp = temp_dir is None
+    work_dir = Path(temp_dir) if temp_dir is not None else Path(tempfile.mkdtemp(prefix="estate_cap_"))
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        passlog_prefix = work_dir / "ffmpeg2pass"
+        capped_output = work_dir / "capped_output.mp4"
+
+        logger.info(
+            "Video %s is %.2f MB (> %.2f MB cap); running 2-pass libx264 re-encode at %dkbps...",
+            target_path.name,
+            current_size / (1024 * 1024),
+            max_bytes / (1024 * 1024),
+            video_kbps,
+        )
+
+        pass1_cmd = [
+            resolved_ffmpeg, "-y",
+            "-i", str(target_path),
+            "-c:v", "libx264",
+            "-preset", "faster",
+            "-pix_fmt", "yuv420p",
+            "-b:v", f"{video_kbps}k",
+            "-pass", "1",
+            "-passlogfile", str(passlog_prefix),
+            "-an",
+            "-f", "mp4",
+            os.devnull,
+        ]
+        _run_tracked_ffmpeg(pass1_cmd, cancel_check_cb=cancel_check_cb)
+
+        if cancel_check_cb is not None and cancel_check_cb():
+            raise PipelineCancelledError("Cancelled between FFmpeg pass 1 and pass 2")
+
+        pass2_cmd = [
+            resolved_ffmpeg, "-y",
+            "-i", str(target_path),
+            "-c:v", "libx264",
+            "-preset", "faster",
+            "-pix_fmt", "yuv420p",
+            "-b:v", f"{video_kbps}k",
+            "-maxrate", f"{int(video_kbps * 1.15)}k",
+            "-bufsize", f"{video_kbps * 2}k",
+            "-pass", "2",
+            "-passlogfile", str(passlog_prefix),
+            "-c:a", "aac",
+            "-b:a", f"{audio_kbps}k",
+            "-movflags", "+faststart",
+            str(capped_output),
+        ]
+        _run_tracked_ffmpeg(pass2_cmd, cancel_check_cb=cancel_check_cb)
+
+        if capped_output.is_file() and capped_output.stat().st_size > 0:
+            shutil.move(str(capped_output), str(target_path))
+            logger.info(
+                "2-pass size cap succeeded: %s is now %.2f MB.",
+                target_path.name,
+                target_path.stat().st_size / (1024 * 1024),
+            )
+        return target_path
+    finally:
+        if owned_temp:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _utc_now() -> datetime:
@@ -552,14 +884,38 @@ class BakuEstatePipeline:
         version_num: Optional[int] = None,
         existing_render_version: Optional[Dict[str, Any]] = None,
         skip_telegram_dispatch: bool = False,
+        selected_photo_urls: Optional[List[str]] = None,
+        custom_script_text: Optional[str] = None,
+        agency_settings: Optional[Dict[str, Any]] = None,
+        cancel_check_cb: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         """
         Runs the full pipeline for a single listing:
-        Photos -> Script & Versioned TTS -> Versioned Video Composition (video_{bina_id}_v{n}.mp4)
-        -> Versioned Supabase Storage Upload -> Idempotent Telegram Dispatch / editMessageMedia
+        Pre-Render Studio Validation -> Photos -> Script & Versioned TTS
+        -> Versioned Video Composition + Two-Pass <= 18 MB Cap
+        -> Versioned Cloud Storage Upload (Private R2 / Legacy Supabase)
+        -> Idempotent Telegram Dispatch / editMessageMedia
         -> Mark prior render_versions SUPERSEDED.
+
+        Supports cooperative cancellation via `cancel_check_cb` between every phase,
+        `try/finally` temp directory cleanup, and partial R2 object deletion on cancel.
         """
-        bina_id = str(listing.get("bina_id") or "unknown").strip()
+        # Strict Pre-Render Studio input validation BEFORE allocating DB rows or temp dirs.
+        # Raises ValueError immediately (non-transient failure / SSRF & length defense-in-depth).
+        validated_photo_urls = validate_selected_photo_urls(
+            selected_photo_urls,
+            listing,
+            agency_id=str(
+                (agency_settings or {}).get("agency_id")
+                or listing.get("agency_id")
+                or ""
+            ).strip() or None,
+        )
+        validated_custom_script = validate_custom_script_text(custom_script_text)
+
+        raw_bina_id = str(listing.get("bina_id") or "").strip()
+        raw_listing_id = str(listing.get("id") or "").strip()
+        bina_id = raw_bina_id or raw_listing_id or "unknown"
         logger.info(
             "=== Processing video pipeline for listing %s (trigger=%s, cloud=%s) ===",
             bina_id,
@@ -567,7 +923,7 @@ class BakuEstatePipeline:
             self.use_cloud_backend,
         )
 
-        # Normalize owner_phone field if coming from canonical Postgres row
+        # Normalize owner_phone field & apply agency_settings overrides
         working_listing = dict(listing)
         if not working_listing.get("owner_phone"):
             working_listing["owner_phone"] = (
@@ -575,9 +931,25 @@ class BakuEstatePipeline:
                 or working_listing.get("owner_phone_raw")
                 or ""
             )
+        if isinstance(agency_settings, dict) and agency_settings:
+            working_listing["agency_settings"] = dict(agency_settings)
+            if agency_settings.get("public_phone"):
+                working_listing["agency_public_phone"] = str(agency_settings["public_phone"]).strip()
+            if agency_settings.get("watermark_preset_json"):
+                working_listing["watermark_preset"] = agency_settings["watermark_preset_json"]
+            if telegram_chat_id is None and agency_settings.get("telegram_chat_id"):
+                telegram_chat_id = agency_settings["telegram_chat_id"]
 
         cloud_listing: Optional[Dict[str, Any]] = None
-        listing_uuid: Optional[str] = None
+        listing_uuid: Optional[str] = raw_listing_id or None
+        agency_uuid: Optional[str] = (
+            str(
+                (agency_settings or {}).get("agency_id")
+                or working_listing.get("agency_id")
+                or ""
+            ).strip()
+            or None
+        )
         render_version_row: Optional[Dict[str, Any]] = existing_render_version
         render_version_id: Optional[str] = (
             existing_render_version.get("id") if existing_render_version else None
@@ -613,14 +985,28 @@ class BakuEstatePipeline:
         )
         clean_handle = re.sub(r'[^a-zA-Z0-9_.-]', '_', target_handle.lstrip('@'))
 
+        def _check_cancelled(phase: str) -> None:
+            if cancel_check_cb is not None and cancel_check_cb() is True:
+                raise PipelineCancelledError(f"Pipeline job cancelled at phase '{phase}'")
+
+        job_temp_dir = Path(tempfile.mkdtemp(prefix=f"bakuestate_render_{re.sub(r'[^a-zA-Z0-9_-]', '_', bina_id)}_"))
+        storage_object_path: Optional[str] = None
+        video_cdn_url: Optional[str] = None
+        upload_storage_provider: Optional[str] = None
+        output_video_path: Optional[Path] = None
+
         try:
             # 0. Resolve canonical cloud listing & allocate versioned render_versions row
             if self.use_cloud_backend:
-                cloud_listing = self.supabase_repo.get_listing_by_bina_id(bina_id)
-                if cloud_listing is None:
+                if raw_listing_id and hasattr(self.supabase_repo, "get_listing_by_id"):
+                    cloud_listing = self.supabase_repo.get_listing_by_id(raw_listing_id)
+                if cloud_listing is None and raw_bina_id:
+                    cloud_listing = self.supabase_repo.get_listing_by_bina_id(raw_bina_id)
+                if cloud_listing is None and raw_bina_id:
                     cloud_listing = self.supabase_repo.upsert_listing(working_listing)
                 if cloud_listing:
-                    listing_uuid = cloud_listing.get("id")
+                    listing_uuid = cloud_listing.get("id") or listing_uuid
+                    agency_uuid = str(cloud_listing.get("agency_id") or agency_uuid or "").strip() or None
                     content_revision = int(cloud_listing.get("content_revision") or content_revision)
                     # Merge canonical phone if missing on input dict
                     if not working_listing.get("owner_phone") and cloud_listing.get("owner_phone_normalized"):
@@ -648,23 +1034,45 @@ class BakuEstatePipeline:
                     else:
                         resolved_version_num = int(render_version_row.get("version_num") or resolved_version_num)
 
-            # 1. Download photos if not already downloaded (refreshing cache if photo_urls_hash changed)
-            downloaded_photos = working_listing.get("downloaded_photos") or []
-            photo_urls = working_listing.get("photo_urls") or []
-            if not downloaded_photos and photo_urls:
-                logger.info(f"Downloading photos for {bina_id}...")
-                photo_hash = (
-                    working_listing.get("photo_urls_hash")
-                    or compute_photo_urls_hash(photo_urls)
+            # Phase boundary 1: Before photo download
+            _check_cancelled("before_photo_download")
+
+            # 1. Download photos if not already downloaded (or download exact studio-selected photos)
+            if validated_photo_urls is not None:
+                logger.info(
+                    "Downloading %d Pre-Render Studio selected photos for %s...",
+                    len(validated_photo_urls),
+                    bina_id,
                 )
+                studio_photo_dir = job_temp_dir / "studio_photos"
                 downloaded_photos = self.scraper.download_full_hd_photos(
                     bina_id,
-                    photo_urls,
-                    photo_urls_hash=photo_hash,
+                    validated_photo_urls,
+                    max_photos=MAX_STUDIO_PHOTOS,
+                    force_refresh=True,
+                    target_dir=studio_photo_dir,
                 )
                 working_listing["downloaded_photos"] = downloaded_photos
-                if not self.use_cloud_backend:
-                    update_listing_status(bina_id, "PHOTOS_READY", downloaded_photos, self.db_path)
+            else:
+                downloaded_photos = working_listing.get("downloaded_photos") or []
+                photo_urls = working_listing.get("photo_urls") or []
+                if not downloaded_photos and photo_urls:
+                    logger.info(f"Downloading photos for {bina_id}...")
+                    photo_hash = (
+                        working_listing.get("photo_urls_hash")
+                        or compute_photo_urls_hash(photo_urls)
+                    )
+                    downloaded_photos = self.scraper.download_full_hd_photos(
+                        bina_id,
+                        photo_urls,
+                        photo_urls_hash=photo_hash,
+                    )
+                    working_listing["downloaded_photos"] = downloaded_photos
+                    if not self.use_cloud_backend:
+                        update_listing_status(bina_id, "PHOTOS_READY", downloaded_photos, self.db_path)
+
+            # Phase boundary 2: After photo download / before vision & script generation
+            _check_cancelled("before_script_generation")
 
             # 1b. GPT-4o Vision analysis on locally downloaded photos
             visual_profile = None
@@ -703,14 +1111,17 @@ class BakuEstatePipeline:
                     update_listing_status(bina_id, "FAILED", db_path=self.db_path)
                 return {"bina_id": bina_id, "status": "FAILED", "reason": "No photos"}
 
+            # Phase boundary 3: Before TTS & script synthesis
+            _check_cancelled("before_tts")
+
             # 2. Generate Narration Script & Versioned TTS (no global os.environ mutation)
             logger.info(
                 "--- [Phase 2/5: SCRIPT & TTS] Generating Azerbaijani voiceover for %s (v%d) ---",
                 bina_id,
                 resolved_version_num,
             )
-            custom_script = None
-            if self.use_gemini and not price_drop_info:
+            custom_script = validated_custom_script
+            if custom_script is None and self.use_gemini and not price_drop_info:
                 if not self.gemini_client.is_connected():
                     logger.info("Google AI Pro hovuzu yoxlanılır...")
                     self.gemini_client.ensure_connected()
@@ -749,6 +1160,9 @@ class BakuEstatePipeline:
             if not self.use_cloud_backend:
                 update_listing_status(bina_id, "TTS_READY", db_path=self.db_path)
 
+            # Phase boundary 4: After TTS / before FFmpeg render
+            _check_cancelled("before_ffmpeg_render")
+
             # 3. 1080x1920 Versioned Cinematic Video Composition (video_{bina_id}_v{n}__at_{clean_handle}.mp4)
             logger.info(
                 "--- [Phase 3/5: VIDEO COMPOSITION] Rendering video_%s_v%d__at_%s.mp4 ---",
@@ -766,6 +1180,18 @@ class BakuEstatePipeline:
                 output_video_path=output_video_path,
                 bg_music_path=self.bg_music_path,
                 duration=duration,
+            )
+
+            # Phase boundary 5: After FFmpeg render / before <= 18 MB 2-pass cap
+            _check_cancelled("before_size_cap")
+
+            enforce_video_size_cap(
+                output_video_path,
+                duration_seconds=float(duration or 30.0),
+                max_bytes=MAX_TELEGRAM_VIDEO_BYTES,
+                temp_dir=job_temp_dir / "size_cap",
+                ffmpeg_exe=getattr(self.compositor, "ffmpeg_exe", None),
+                cancel_check_cb=cancel_check_cb,
             )
             resolved_video_str = str(output_video_path.resolve())
 
@@ -786,9 +1212,10 @@ class BakuEstatePipeline:
                         db_path=self.db_path,
                     )
 
-            # 4. Versioned Cloud Storage Upload (videos/{bina_id}/v{n}.mp4)
-            storage_object_path: Optional[str] = None
-            video_cdn_url: Optional[str] = None
+            # Phase boundary 6: Before cloud R2/Supabase storage upload
+            _check_cancelled("before_storage_upload")
+
+            # 4. Versioned Cloud Storage Upload (Private R2 / Legacy Supabase dual-path)
             supabase_res: Optional[Dict[str, Any]] = None
 
             if self.use_cloud_backend:
@@ -797,12 +1224,29 @@ class BakuEstatePipeline:
                     bina_id,
                     resolved_version_num,
                 )
-                storage_object_path, video_cdn_url = self.supabase_repo.upload_versioned_video(
-                    resolved_video_str,
-                    bina_id,
-                    resolved_version_num,
-                    target_account_handle=target_handle,
-                )
+                try:
+                    storage_object_path, video_cdn_url = self.supabase_repo.upload_versioned_video(
+                        resolved_video_str,
+                        bina_id,
+                        resolved_version_num,
+                        target_account_handle=target_handle,
+                        agency_id=agency_uuid,
+                        listing_id=listing_uuid,
+                    )
+                except TypeError:
+                    storage_object_path, video_cdn_url = self.supabase_repo.upload_versioned_video(
+                        resolved_video_str,
+                        bina_id,
+                        resolved_version_num,
+                        target_account_handle=target_handle,
+                    )
+                raw_provider = getattr(self.supabase_repo, "last_upload_storage_provider", None)
+                if isinstance(raw_provider, str) and raw_provider.strip().lower() in ("r2", "supabase"):
+                    upload_storage_provider = raw_provider.strip().lower()
+
+                # Phase boundary 7: Right after cloud upload (delete partial R2 object if cancelled mid-upload!)
+                _check_cancelled("after_storage_upload")
+
                 if render_version_id:
                     _vp_meta: dict = {}
                     if visual_profile is not None and not getattr(visual_profile, "is_fallback", True):
@@ -810,17 +1254,17 @@ class BakuEstatePipeline:
                             _vp_meta = visual_profile.to_dict()
                         except Exception:
                             pass
-                    self.supabase_repo.update_render_version(
-                        render_version_id,
-                        {
-                            "script_text": script_text,
-                            "local_video_path": resolved_video_str,
-                            "storage_object_path": storage_object_path,
-                            "video_cdn_url": video_cdn_url,
-                            "duration_seconds": duration,
-                            **({"ab_metadata": {"visual_profile": _vp_meta}} if _vp_meta else {}),
-                        },
-                    )
+                    rv_patch: Dict[str, Any] = {
+                        "script_text": script_text,
+                        "local_video_path": resolved_video_str,
+                        "storage_object_path": storage_object_path,
+                        "video_cdn_url": video_cdn_url,
+                        "duration_seconds": duration,
+                        **({"ab_metadata": {"visual_profile": _vp_meta}} if _vp_meta else {}),
+                    }
+                    if upload_storage_provider is not None:
+                        rv_patch["storage_provider"] = upload_storage_provider
+                    self.supabase_repo.update_render_version(render_version_id, rv_patch)
             elif self.supabase_sync and self.supabase_sync.is_configured():
                 logger.info("--- [Phase 4/5: LEGACY SUPABASE SYNC] Uploading video ---")
                 video_cdn_url = self.supabase_sync.upload_video(resolved_video_str)
@@ -943,19 +1387,22 @@ class BakuEstatePipeline:
             # Finalize render_version as COMPLETED, mark prior versions SUPERSEDED, update listing
             if self.use_cloud_backend:
                 if render_version_id:
+                    final_rv_patch: Dict[str, Any] = {
+                        "status": "COMPLETED",
+                        "script_text": script_text,
+                        "local_video_path": resolved_video_str,
+                        "storage_object_path": storage_object_path,
+                        "video_cdn_url": video_cdn_url,
+                        "duration_seconds": duration,
+                        "telegram_message_id": persisted_msg_id,
+                        "rendered_price": safe_parse_numeric(working_listing.get("price")),
+                        "rendered_currency": working_listing.get("currency") or "AZN",
+                    }
+                    if upload_storage_provider is not None:
+                        final_rv_patch["storage_provider"] = upload_storage_provider
                     self.supabase_repo.update_render_version(
                         render_version_id,
-                        {
-                            "status": "COMPLETED",
-                            "script_text": script_text,
-                            "local_video_path": resolved_video_str,
-                            "storage_object_path": storage_object_path,
-                            "video_cdn_url": video_cdn_url,
-                            "duration_seconds": duration,
-                            "telegram_message_id": persisted_msg_id,
-                            "rendered_price": safe_parse_numeric(working_listing.get("price")),
-                            "rendered_currency": working_listing.get("currency") or "AZN",
-                        },
+                        final_rv_patch,
                     )
                 if listing_uuid:
                     self.supabase_repo.mark_previous_versions_superseded(
@@ -1004,6 +1451,7 @@ class BakuEstatePipeline:
                 "duration": duration,
                 "dispatch": dispatch_result,
                 "storage_object_path": storage_object_path,
+                "storage_provider": upload_storage_provider,
                 "video_cdn_url": video_cdn_url,
                 "supabase": supabase_res,
                 "notion": notion_res,
@@ -1013,6 +1461,62 @@ class BakuEstatePipeline:
                 "channel_niche": channel_niche,
                 "visual_profile": visual_profile.to_dict() if visual_profile and hasattr(visual_profile, "to_dict") else None,
             }
+        except PipelineCancelledError as cancel_exc:
+            logger.info("Pipeline cancelled cooperatively for listing %s: %s", bina_id, cancel_exc)
+            cleaned_storage = False
+            if storage_object_path and self.use_cloud_backend and hasattr(self.supabase_repo, "delete_storage_object"):
+                try:
+                    cleaned_storage = bool(
+                        self.supabase_repo.delete_storage_object(
+                            storage_object_path,
+                            storage_provider=upload_storage_provider,
+                        )
+                    )
+                except Exception as del_exc:
+                    logger.warning("Failed deleting partial storage object %s on cancel: %s", storage_object_path, del_exc)
+            if output_video_path is not None and output_video_path.exists():
+                try:
+                    output_video_path.unlink()
+                except Exception:
+                    pass
+            if self.use_cloud_backend:
+                if render_version_id:
+                    self.supabase_repo.update_render_version(
+                        render_version_id,
+                        {
+                            "status": "FAILED",
+                            "error_message": str(cancel_exc)[:1000],
+                            "storage_object_path": None,
+                            "video_cdn_url": None,
+                        },
+                    )
+                if listing_uuid:
+                    self.supabase_repo.update_listing(listing_uuid, {"pipeline_status": "NEW"})
+            return {
+                "bina_id": bina_id,
+                "status": "CANCELLED",
+                "cancelled": True,
+                "render_version_id": render_version_id,
+                "storage_object_path": storage_object_path,
+                "storage_provider": upload_storage_provider,
+                "cleaned_storage_object": cleaned_storage,
+                "reason": str(cancel_exc),
+            }
+        except WorkerShutdownError:
+            if storage_object_path and self.use_cloud_backend and hasattr(self.supabase_repo, "delete_storage_object"):
+                try:
+                    self.supabase_repo.delete_storage_object(
+                        storage_object_path,
+                        storage_provider=upload_storage_provider,
+                    )
+                except Exception:
+                    pass
+            if output_video_path is not None and output_video_path.exists():
+                try:
+                    output_video_path.unlink()
+                except Exception:
+                    pass
+            raise
         except Exception as e:
             logger.error(f"Error processing listing {bina_id}: {e}", exc_info=True)
             try:
@@ -1032,6 +1536,11 @@ class BakuEstatePipeline:
             else:
                 update_listing_status(bina_id, "FAILED", db_path=self.db_path)
             return {"bina_id": bina_id, "status": "FAILED", "error": str(e)}
+        finally:
+            try:
+                shutil.rmtree(job_temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     def run_full_pipeline(
         self,

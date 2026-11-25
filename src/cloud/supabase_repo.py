@@ -30,8 +30,10 @@ from config.settings import (
     SUPABASE_KEY,
     SUPABASE_URL,
     WORKER_ID,
+    WORKER_MODE,
     safe_parse_numeric,
 )
+from src.cloud.r2_storage import R2StorageClient
 from src.dedup.change_detector import (
     compute_photo_urls_hash,
     normalize_district,
@@ -45,20 +47,37 @@ logger = logging.getLogger("supabase_repo")
 VALID_CURRENCIES = frozenset({"AZN", "USD", "EUR"})
 VALID_ARCHETYPES = frozenset({"budget", "luxury", "villa", "commercial"})
 CLOSED_LEAD_STAGES = frozenset({"WON_CLOSED", "LOST", "COLD"})
+R2_WORKER_MODES = frozenset({"cloud", "railway", "r2"})
 
 
 def build_versioned_storage_path(
     bina_id: str,
     version_num: int,
     target_account_handle: Optional[str] = None,
+    *,
+    agency_id: Optional[str] = None,
+    listing_id: Optional[str] = None,
 ) -> str:
-    """Returns canonical versioned storage object path: videos/{bina_id}/v{n}__at_{clean_handle}.mp4"""
+    """
+    Returns canonical versioned storage object path:
+    - Tenant-isolated R2 format when agency_id & listing_id are provided:
+      `videos/{agency_id}/{listing_id}/v{n}.mp4` (or `v{n}__at_{clean_handle}.mp4`)
+    - Legacy format when omitted:
+      `videos/{bina_id}/v{n}.mp4` (or `v{n}__at_{clean_handle}.mp4`)
+    """
     ver = max(1, int(version_num))
-    clean_id = str(bina_id).strip()
+    suffix = ""
     if target_account_handle and str(target_account_handle).strip():
         clean_handle = re.sub(r'[^a-zA-Z0-9_.-]', '_', str(target_account_handle).strip().lstrip('@'))
-        return f"videos/{clean_id}/v{ver}__at_{clean_handle}.mp4"
-    return f"videos/{clean_id}/v{ver}.mp4"
+        suffix = f"__at_{clean_handle}"
+
+    clean_agency = str(agency_id or "").strip()
+    clean_listing = str(listing_id or "").strip()
+    if clean_agency and clean_listing:
+        return f"videos/{clean_agency}/{clean_listing}/v{ver}{suffix}.mp4"
+
+    clean_id = str(bina_id or clean_listing or "unknown").strip()
+    return f"videos/{clean_id}/v{ver}{suffix}.mp4"
 
 
 def _utc_now_iso() -> str:
@@ -124,6 +143,8 @@ class SupabaseRepo:
         enabled: Optional[bool] = None,
         session: Optional[requests.Session] = None,
         timeout: int = 20,
+        r2_storage: Optional[R2StorageClient] = None,
+        worker_mode: Optional[str] = None,
     ):
         resolved_url = (
             supabase_url
@@ -146,6 +167,58 @@ class SupabaseRepo:
         self.enabled = base_enabled and bool(self.supabase_url) and bool(self.supabase_key)
         self.session = session or requests.Session()
         self.timeout = int(timeout)
+        self.worker_mode = (
+            worker_mode
+            if worker_mode is not None
+            else (os.getenv("WORKER_MODE") or WORKER_MODE or "local")
+        ).strip().lower()
+        self._explicit_r2_storage = r2_storage is not None
+        if r2_storage is not None:
+            self.r2_storage: Optional[R2StorageClient] = r2_storage
+        elif self.worker_mode in R2_WORKER_MODES:
+            candidate_r2 = R2StorageClient()
+            self.r2_storage = candidate_r2 if candidate_r2.is_configured() else None
+        else:
+            self.r2_storage = None
+        self.last_upload_storage_provider: str = "r2" if self.should_use_r2_storage() else "supabase"
+
+    def should_use_r2_storage(self, storage_provider: Optional[str] = None) -> bool:
+        """
+        Determines whether media uploads should route to private Cloudflare R2
+        versus legacy Supabase Storage (dual-path Phase 2 rollout).
+        """
+        if storage_provider is not None:
+            prov = str(storage_provider).strip().lower()
+            if prov == "supabase":
+                return False
+            if prov == "r2":
+                return self.r2_storage is not None and self.r2_storage.is_configured()
+        if self.r2_storage is None or not self.r2_storage.is_configured():
+            return False
+        return self._explicit_r2_storage or (self.worker_mode in R2_WORKER_MODES)
+
+    def get_agency_settings(self, agency_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches public.agency_settings row for an agency UUID (service_role)."""
+        if not self.enabled or not agency_id or not _is_valid_uuid(agency_id):
+            return None
+        try:
+            resp = self.session.get(
+                self._rest_url("agency_settings"),
+                headers=self._headers(),
+                params={
+                    "agency_id": f"eq.{str(agency_id).strip()}",
+                    "select": "*",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json() or []
+                return rows[0] if rows else None
+            logger.error("get_agency_settings failed (%s): %s", resp.status_code, resp.text[:300])
+        except Exception as exc:
+            logger.error("Exception in get_agency_settings: %s", exc)
+        return None
 
     def is_configured(self) -> bool:
         """Returns True when cloud repo is enabled and has non-empty URL and key."""
@@ -715,6 +788,7 @@ class SupabaseRepo:
         script_text: Optional[str] = None,
         local_video_path: Optional[str] = None,
         storage_object_path: Optional[str] = None,
+        storage_provider: Optional[str] = None,
         video_cdn_url: Optional[str] = None,
         duration_seconds: Optional[float] = None,
         status: str = "RUNNING",
@@ -746,6 +820,10 @@ class SupabaseRepo:
             "status": status,
             "telegram_message_id": str(telegram_message_id) if telegram_message_id else None,
         }
+        if storage_provider is not None:
+            norm_prov = str(storage_provider).strip().lower()
+            if norm_prov in ("supabase", "r2"):
+                payload["storage_provider"] = norm_prov
         if hook_type is not None:
             payload["hook_type"] = hook_type
         if duration_bucket is not None:
@@ -2279,11 +2357,18 @@ class SupabaseRepo:
         bina_id: str,
         version_num: int,
         target_account_handle: Optional[str] = None,
+        *,
+        agency_id: Optional[str] = None,
+        listing_id: Optional[str] = None,
+        storage_provider: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
-        Uploads an MP4 render to Supabase Storage at `videos/{bina_id}/v{n}__at_{clean_handle}.mp4`.
+        Uploads an MP4 render using dual-path storage:
+        - Private Cloudflare R2 (`storage_provider='r2'`) when `WORKER_MODE` is
+          `railway`/`cloud`/`r2` or `r2_storage` is injected & configured.
+        - Legacy Supabase Storage (`storage_provider='supabase'`) otherwise.
         Never overwrites prior versions.
-        Returns: (storage_object_path, public_cdn_url) on success, or (None, None) on error.
+        Returns: (storage_object_path, cdn_url) on success, or (None, None) on error.
         """
         if not self.enabled:
             logger.info("SupabaseRepo disabled or unconfigured. Skipping versioned video upload.")
@@ -2294,11 +2379,24 @@ class SupabaseRepo:
             logger.warning("Video file does not exist for upload: %s", video_path)
             return None, None
 
+        use_r2 = self.should_use_r2_storage(storage_provider=storage_provider)
         object_path = build_versioned_storage_path(
             bina_id,
             version_num,
             target_account_handle=target_account_handle,
+            agency_id=agency_id if use_r2 else None,
+            listing_id=listing_id if use_r2 else None,
         )
+
+        if use_r2 and self.r2_storage is not None:
+            try:
+                res = self.r2_storage.upload_video(path, object_path)
+                self.last_upload_storage_provider = "r2"
+                return res.object_path, res.cdn_url
+            except Exception as exc:
+                logger.error("R2 versioned video upload failed for %s: %s", object_path, exc)
+                return None, None
+
         encoded_path = urllib.parse.quote(object_path, safe="/")
         upload_url = f"{self.supabase_url}/storage/v1/object/{self.bucket_name}/{encoded_path}"
         public_cdn_url = (
@@ -2325,6 +2423,7 @@ class SupabaseRepo:
                 timeout=max(60, self.timeout),
             )
             if resp.status_code in (200, 201):
+                self.last_upload_storage_provider = "supabase"
                 logger.info("Versioned upload successful: %s", public_cdn_url)
                 return object_path, public_cdn_url
             logger.error(
@@ -2336,3 +2435,52 @@ class SupabaseRepo:
             logger.error("Exception uploading versioned video %s: %s", object_path, exc)
 
         return None, None
+
+    def delete_storage_object(
+        self,
+        object_path: str,
+        *,
+        storage_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Deletes a storage object (e.g. partial upload cleanup on cooperative cancel)
+        routing to private R2 or legacy Supabase Storage based on `storage_provider`.
+        """
+        clean_path = str(object_path or "").strip().lstrip("/")
+        if not clean_path:
+            return False
+
+        provider = (
+            str(storage_provider).strip().lower()
+            if storage_provider is not None
+            else self.last_upload_storage_provider
+        )
+        if provider == "r2":
+            r2 = self.r2_storage or R2StorageClient()
+            if r2.is_configured():
+                return r2.delete_object(clean_path)
+            logger.warning("Cannot delete R2 object '%s': R2StorageClient not configured.", clean_path)
+            return False
+
+        if not self.enabled:
+            return False
+
+        try:
+            resp = self.session.delete(
+                f"{self.supabase_url}/storage/v1/object/{self.bucket_name}",
+                headers=self._headers(),
+                json={"prefixes": [clean_path]},
+                timeout=self.timeout,
+            )
+            if resp.status_code in (200, 204):
+                logger.info("Deleted Supabase Storage object '%s'.", clean_path)
+                return True
+            logger.error(
+                "delete_storage_object failed for '%s' (%s): %s",
+                clean_path,
+                resp.status_code,
+                resp.text[:300],
+            )
+        except Exception as exc:
+            logger.error("Exception deleting Supabase Storage object '%s': %s", clean_path, exc)
+        return False
