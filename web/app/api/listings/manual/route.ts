@@ -5,7 +5,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOperator } from "@/lib/auth/resolve-operator";
 import { getR2MediaBaseUrl, getR2ServerConfig } from "@/lib/supabase/env";
 import { normalizePhoneInput } from "@/lib/format";
-import type { ChannelNiche } from "@/lib/types";
+import {
+  resolveCanonicalListingNiche,
+  type NicheRulesConfig,
+} from "@/lib/niche-router";
 
 export const runtime = "nodejs";
 
@@ -22,73 +25,6 @@ const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 const MIN_PHOTOS = 4;
 const MAX_PHOTOS = 10;
 const PRESIGN_TTL_SECONDS = 900; // 15 minutes
-
-const ELITE_CENTRAL_DISTRICTS = [
-  "səbail",
-  "sebail",
-  "nəsimi",
-  "nasimi",
-  "nərimanov",
-  "nerimanov",
-  "gənclik",
-  "genclik",
-  "ağ şəhər",
-  "ag seher",
-  "ag sheher",
-  "white city",
-  "badamdar",
-  "bilgəh",
-  "bilgeh",
-  "mərdəkan",
-  "merdekan",
-];
-
-const SUBURBAN_DISTRICTS = [
-  "xırdalan",
-  "xirdalan",
-  "masazır",
-  "masazir",
-  "hövsan",
-  "hovsan",
-  "zabrat",
-  "suraxanı",
-  "suraxani",
-  "binəqədi",
-  "bineqedi",
-  "sabunçu",
-  "sabuncu",
-];
-
-function computeCanonicalNiche(
-  priceAzn: number,
-  district: string,
-  rules?: { luxury_min_azn?: number; affordable_max_azn?: number } | null
-): ChannelNiche {
-  const luxuryMin =
-    typeof rules?.luxury_min_azn === "number" && Number.isFinite(rules.luxury_min_azn)
-      ? rules.luxury_min_azn
-      : 250_000;
-  const affordableMax =
-    typeof rules?.affordable_max_azn === "number" && Number.isFinite(rules.affordable_max_azn)
-      ? rules.affordable_max_azn
-      : 120_000;
-
-  const normalizedDistrict = district.trim().toLowerCase();
-  const isElite = ELITE_CENTRAL_DISTRICTS.some((d) =>
-    normalizedDistrict.includes(d)
-  );
-  const isSuburban = SUBURBAN_DISTRICTS.some((d) =>
-    normalizedDistrict.includes(d)
-  );
-
-  if (priceAzn >= luxuryMin || isElite) {
-    return "LUXURY";
-  }
-  if (isSuburban || (priceAzn > 0 && priceAzn <= affordableMax)) {
-    return "AFFORDABLE";
-  }
-  return "GENERAL";
-}
 
 interface PhotoFileInput {
   name: string;
@@ -287,12 +223,17 @@ export async function POST(request: Request) {
     .eq("agency_id", operator.agencyId)
     .maybeSingle();
 
-  const nicheRules = (settingsRow?.niche_rules_json ?? null) as {
-    luxury_min_azn?: number;
-    affordable_max_azn?: number;
-  } | null;
+  const nicheRules = (settingsRow?.niche_rules_json ?? null) as NicheRulesConfig | null;
 
-  const canonicalNiche = computeCanonicalNiche(priceAzn, district, nicheRules);
+  const canonicalNiche = resolveCanonicalListingNiche(
+    {
+      price_azn_normalized: priceAzn,
+      district_normalized: district,
+      location: district,
+      address,
+    },
+    nicheRules
+  ).niche;
   const hasBillOfSale = body.has_bill_of_sale === true;
   const ownerName =
     typeof body.owner_name === "string" && body.owner_name.trim()
@@ -412,12 +353,30 @@ export async function POST(request: Request) {
     }
   }
 
+  let matchedLeadsCount = 0;
+  if (
+    createdListing.source_availability === "ACTIVE" &&
+    typeof supabase.rpc === "function"
+  ) {
+    try {
+      const { data: matchCount } = await supabase.rpc("match_listing_to_leads", {
+        p_listing_id: createdListing.id,
+      });
+      if (typeof matchCount === "number" && Number.isFinite(matchCount)) {
+        matchedLeadsCount = matchCount;
+      }
+    } catch (matchErr) {
+      console.warn("[listings/manual] match_listing_to_leads POST failed:", matchErr);
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
       listing_id: createdListing.id,
       listing: createdListing,
       upload_urls: uploadUrls,
+      matched_leads_count: matchedLeadsCount,
     },
     { status: 201 }
   );
@@ -485,7 +444,7 @@ export async function PATCH(request: Request) {
   const supabase = createAdminClient();
   const { data: existing, error: lookupErr } = await supabase
     .from("listings")
-    .select("id, agency_id, source_type, assigned_agent_id")
+    .select("id, agency_id, source_type, assigned_agent_id, source_availability")
     .eq("id", listingId)
     .eq("agency_id", operator.agencyId)
     .maybeSingle();
@@ -530,9 +489,27 @@ export async function PATCH(request: Request) {
     );
   }
 
+  let matchedLeadsCount = 0;
+  const isActiveListing =
+    existing.source_availability === undefined ||
+    existing.source_availability === "ACTIVE";
+  if (isActiveListing && typeof supabase.rpc === "function") {
+    try {
+      const { data: matchCount } = await supabase.rpc("match_listing_to_leads", {
+        p_listing_id: updated.id,
+      });
+      if (typeof matchCount === "number" && Number.isFinite(matchCount)) {
+        matchedLeadsCount = matchCount;
+      }
+    } catch (matchErr) {
+      console.warn("[listings/manual] match_listing_to_leads PATCH failed:", matchErr);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     listing_id: updated.id,
     photo_urls: updated.photo_urls,
+    matched_leads_count: matchedLeadsCount,
   });
 }
