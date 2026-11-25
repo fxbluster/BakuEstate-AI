@@ -40,6 +40,38 @@ interface TaskRecord {
   } | null;
 }
 
+interface MatchRecord {
+  id: string;
+  agency_id: string;
+  lead_id: string;
+  listing_id: string;
+  match_score: number;
+  status: "NEW" | "NOTIFIED" | "DISMISSED";
+  created_at: string;
+  buyer_leads?: {
+    id: string;
+    client_name: string | null;
+    phone_normalized: string | null;
+    assigned_agent_id: string | null;
+    budget_max_azn: number | null;
+  } | null;
+  listings?: {
+    id: string;
+    bina_id: string | null;
+    title: string | null;
+    location: string | null;
+    district_normalized: string | null;
+    price_azn_normalized: number | null;
+    rooms: number | null;
+    area: number | null;
+    source_type: string | null;
+  } | null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function timingSafeEqual(a: string, b: string): boolean {
   const enc = new TextEncoder();
   const ab = enc.encode(a);
@@ -213,7 +245,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Resolve per-agency Telegram chat destinations to strictly prevent cross-agency PII leakage
+  // Resolve per-agency & per-broker Telegram chat destinations to prevent cross-agency PII leakage
   const agencyChatMap = new Map<string, string>();
   const { data: settingsRows, error: settingsErr } = await supabase
     .from("agency_settings")
@@ -230,9 +262,29 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
+  const brokerChatMap = new Map<string, { chatId: string; displayName: string }>();
+  const { data: memberRows, error: memberErr } = await supabase
+    .from("agency_members")
+    .select("user_id, agency_id, display_name, telegram_chat_id, is_active")
+    .eq("is_active", true);
+  if (memberErr) {
+    console.error("Failed to load agency_members:", memberErr.message);
+  } else {
+    for (const row of memberRows ?? []) {
+      const aId = String(row.agency_id ?? "").trim();
+      const uId = String(row.user_id ?? "").trim();
+      const cId = String(row.telegram_chat_id ?? "").trim();
+      const dName = String(row.display_name ?? "").trim();
+      if (aId && uId && cId) {
+        brokerChatMap.set(`${aId}:${uId}`, { chatId: cId, displayName: dName });
+      }
+    }
+  }
+
   const nowIso = now.toISOString();
   let highSentCount = 0;
   let digestSentCount = 0;
+  let matchDigestsSent = 0;
 
   // ---------------------------------------------------------------------------
   // 1. Immediate Pings for Due HIGH-Priority Tasks (scoped per agency_id)
@@ -406,6 +458,131 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 3. Smart Buyer <-> Listing Match Digests (09:00-21:30 Baku, per-agency/broker)
+  //    Batches NEW lead_listing_matches into 1 digest per chat_id respecting
+  //    Telegram's 1 msg/sec per-chat cap and marks delivered matches NOTIFIED.
+  // ---------------------------------------------------------------------------
+  const { data: newMatches, error: matchesErr } = await supabase
+    .from("lead_listing_matches")
+    .select(
+      "id, agency_id, lead_id, listing_id, match_score, status, created_at, buyer_leads(id, client_name, phone_normalized, assigned_agent_id, budget_max_azn), listings(id, bina_id, title, location, district_normalized, price_azn_normalized, rooms, area, source_type)",
+    )
+    .eq("status", "NEW")
+    .order("match_score", { ascending: false })
+    .order("created_at", { ascending: true })
+    .limit(200);
+
+  if (matchesErr) {
+    console.error("Failed to query NEW lead_listing_matches:", matchesErr.message);
+  } else if (newMatches && newMatches.length > 0) {
+    const groupedMatches = new Map<
+      string,
+      { agencyId: string; targetChatId: string; brokerName: string | null; items: MatchRecord[] }
+    >();
+
+    for (const rawMatch of newMatches as unknown as MatchRecord[]) {
+      const agencyId = String(rawMatch.agency_id ?? "").trim();
+      if (!agencyId) continue;
+
+      const assignedAgentId = String(rawMatch.buyer_leads?.assigned_agent_id ?? "").trim();
+      const brokerInfo = assignedAgentId ? brokerChatMap.get(`${agencyId}:${assignedAgentId}`) : undefined;
+      const targetChatId = brokerInfo?.chatId || agencyChatMap.get(agencyId);
+      if (!targetChatId) {
+        console.warn(`Skipping match ${rawMatch.id}: no telegram_chat_id configured for agency ${agencyId}`);
+        continue;
+      }
+
+      const groupKey = `${agencyId}::${targetChatId}`;
+      const existing = groupedMatches.get(groupKey);
+      if (existing) {
+        existing.items.push(rawMatch);
+        if (existing.brokerName !== (brokerInfo?.displayName ?? null)) {
+          existing.brokerName = null;
+        }
+      } else {
+        groupedMatches.set(groupKey, {
+          agencyId,
+          targetChatId,
+          brokerName: brokerInfo?.displayName || null,
+          items: [rawMatch],
+        });
+      }
+    }
+
+    const lastSentAtByChat = new Map<string, number>();
+
+    for (const group of groupedMatches.values()) {
+      const displayLimit = 25;
+      const shown = group.items.slice(0, displayLimit);
+      const header = group.brokerName
+        ? `🎯 <b>Yeni Alıcı↔Elan Uyğunlaşmaları (${group.items.length}) — ${escapeHtml(group.brokerName)}</b>`
+        : `🎯 <b>Yeni Ağıllı Alıcı↔Elan Uyğunlaşmaları (${group.items.length})</b>`;
+      const lines: string[] = [header, ""];
+
+      for (let i = 0; i < shown.length; i++) {
+        const m = shown[i];
+        const clientName = escapeHtml(m.buyer_leads?.client_name ?? "Müştəri");
+        const clientPhone = m.buyer_leads?.phone_normalized
+          ? ` (<code>${escapeHtml(m.buyer_leads.phone_normalized)}</code>)`
+          : "";
+        const listingRef = m.listings?.bina_id
+          ? `#${escapeHtml(m.listings.bina_id)}`
+          : m.listings?.source_type === "OFF_MARKET"
+          ? "OFF-MARKET"
+          : "Elan";
+        const loc = escapeHtml(
+          m.listings?.district_normalized || m.listings?.location || "Bakı",
+        );
+        const priceNum = Number(m.listings?.price_azn_normalized ?? 0);
+        const priceStr = priceNum > 0 ? `${Math.round(priceNum).toLocaleString("en-US")} AZN` : "-";
+        const roomsStr = m.listings?.rooms ? `${m.listings.rooms} otaq` : "";
+        const areaStr = m.listings?.area ? `${m.listings.area} m²` : "";
+        const specs = [roomsStr, areaStr].filter(Boolean).join(", ");
+        lines.push(
+          `${i + 1}. <b>${m.match_score}%</b> | 👤 ${clientName}${clientPhone} ↔ 🏠 <b>${listingRef}</b> (${loc}, ${priceStr}${specs ? `, ${specs}` : ""})`,
+        );
+      }
+
+      if (group.items.length > displayLimit) {
+        lines.push("", `<i>... və daha ${group.items.length - displayLimit} uyğunlaşma CRM panelindədir.</i>`);
+      }
+
+      const chunks = chunkLinesForTelegram(lines, TELEGRAM_MAX_CHUNK_CHARS);
+      let groupOk = chunks.length > 0;
+      for (const chunk of chunks) {
+        const prevTs = lastSentAtByChat.get(group.targetChatId) ?? 0;
+        const elapsed = Date.now() - prevTs;
+        if (prevTs > 0 && elapsed < 1050) {
+          await sleep(1050 - elapsed);
+        }
+        const sent = await sendTelegramMessage(botToken, group.targetChatId, chunk);
+        lastSentAtByChat.set(group.targetChatId, Date.now());
+        if (!sent) {
+          groupOk = false;
+          break;
+        }
+      }
+
+      if (groupOk) {
+        const matchIds = group.items.map((m) => m.id);
+        for (let offset = 0; offset < matchIds.length; offset += 100) {
+          const idBatch = matchIds.slice(offset, offset + 100);
+          const { error: updErr } = await supabase
+            .from("lead_listing_matches")
+            .update({ status: "NOTIFIED", notified_at: nowIso })
+            .in("id", idBatch)
+            .eq("agency_id", group.agencyId);
+          if (updErr) {
+            console.error("Failed to mark lead_listing_matches NOTIFIED:", updErr.message);
+          } else {
+            matchDigestsSent += idBatch.length;
+          }
+        }
+      }
+    }
+  }
+
   return new Response(
     JSON.stringify({
       ok: true,
@@ -413,6 +590,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       in_digest_window: inDigestWindow,
       high_reminders_sent: highSentCount,
       morning_digest_tasks_sent: digestSentCount,
+      match_digests_sent: matchDigestsSent,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );

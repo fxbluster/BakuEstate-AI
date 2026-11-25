@@ -16,7 +16,8 @@ import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supa
 
 const BAKU_OFFSET_MS = 4 * 60 * 60 * 1000; // Asia/Baku is fixed UTC+4 (no DST)
 
-const BAKU_DISTRICT_MEDIAN_M2: Record<string, number> = {
+/** @deprecated Fallback-only medians used solely when public.district_price_medians has no live rows. */
+const FALLBACK_DISTRICT_MEDIAN_M2: Record<string, number> = {
   "nərimanov": 3293,
   "nerimanov": 3293,
   "nəsimi": 3131,
@@ -138,6 +139,7 @@ interface ListingRow {
   currency: string;
   price_azn_normalized: number;
   location: string | null;
+  district_normalized?: string | null;
   address: string | null;
   rooms: number | null;
   area: number | null;
@@ -363,43 +365,114 @@ function buildTaskActionKeyboard(taskId: string): InlineKeyboardMarkup {
   };
 }
 
-function computeKeenableStats(location: string, priceAzn: number, area: number): string {
+function resolveMatchedDistrict(location: string, districtNormalized?: string | null): string {
+  const candidates = [districtNormalized ?? "", location ?? ""];
+  for (const raw of candidates) {
+    const locLower = raw.toLowerCase();
+    if (!locLower) continue;
+    for (const dName of Object.keys(FALLBACK_DISTRICT_MEDIAN_M2)) {
+      if (dName !== "baku_median" && locLower.includes(dName)) {
+        return dName.charAt(0).toUpperCase() + dName.slice(1);
+      }
+    }
+    for (const [landmark, distName] of Object.entries(BAKU_LANDMARK_DISTRICT_MAP)) {
+      if (locLower.includes(landmark)) {
+        return distName;
+      }
+    }
+  }
+  const cleanDist = (districtNormalized ?? "").trim();
+  return cleanDist || "Bakı";
+}
+
+async function fetchLiveDistrictMedian(
+  supabase: SupabaseClient,
+  matchedDistrict: string,
+  agencyId?: string | null,
+): Promise<{ medianM2: number; sampleCount: number; source: "live_db" | "fallback" }> {
+  const targetKey = matchedDistrict.trim().toLowerCase();
+  try {
+    let q = supabase
+      .from("district_price_medians")
+      .select("district_normalized, median_azn_per_m2, sample_count");
+    if (agencyId) {
+      q = q.eq("agency_id", agencyId);
+    }
+    const { data, error } = await q;
+    if (!error && data && data.length > 0) {
+      const exactOrSub = data.find((r) => {
+        const dn = String(r.district_normalized ?? "").trim().toLowerCase();
+        return dn && targetKey !== "bakı" && (dn === targetKey || dn.includes(targetKey) || targetKey.includes(dn));
+      });
+      if (exactOrSub && Number(exactOrSub.median_azn_per_m2) > 0) {
+        return {
+          medianM2: Math.round(Number(exactOrSub.median_azn_per_m2)),
+          sampleCount: Number(exactOrSub.sample_count ?? 0),
+          source: "live_db",
+        };
+      }
+      // Compute weighted agency-wide live median if specific district has no samples yet
+      let totalWeight = 0;
+      let weightedSum = 0;
+      for (const r of data) {
+        const med = Number(r.median_azn_per_m2 ?? 0);
+        const cnt = Number(r.sample_count ?? 0);
+        if (med > 0 && cnt > 0) {
+          weightedSum += med * cnt;
+          totalWeight += cnt;
+        }
+      }
+      if (totalWeight > 0) {
+        return {
+          medianM2: Math.round(weightedSum / totalWeight),
+          sampleCount: totalWeight,
+          source: "live_db",
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("district_price_medians query failed, using fallback:", err);
+  }
+
+  const fallbackVal =
+    FALLBACK_DISTRICT_MEDIAN_M2[targetKey] ?? FALLBACK_DISTRICT_MEDIAN_M2["baku_median"];
+  return {
+    medianM2: fallbackVal,
+    sampleCount: 0,
+    source: "fallback",
+  };
+}
+
+function computeKeenableStats(
+  location: string,
+  priceAzn: number,
+  area: number,
+  matchedDistrictOverride?: string,
+  liveMedian?: { medianM2: number; sampleCount: number; source: "live_db" | "fallback" },
+): string {
   if (!priceAzn || priceAzn <= 0 || !area || area <= 0) {
     return `📊 ${location || "Bakı"} üzrə bazar məlumatı: ${formatNumberAz(priceAzn)} AZN / ${area || "-"} m².`;
   }
   const m2Price = Math.floor(priceAzn / area);
-  const locLower = (location || "").toLowerCase();
-
-  let matchedDistrict = "";
-  let districtMedian = BAKU_DISTRICT_MEDIAN_M2["baku_median"];
-
-  for (const [dName, dMedian] of Object.entries(BAKU_DISTRICT_MEDIAN_M2)) {
-    if (dName !== "baku_median" && locLower.includes(dName)) {
-      matchedDistrict = dName.charAt(0).toUpperCase() + dName.slice(1);
-      districtMedian = dMedian;
-      break;
-    }
-  }
-  if (!matchedDistrict) {
-    for (const [landmark, distName] of Object.entries(BAKU_LANDMARK_DISTRICT_MAP)) {
-      if (locLower.includes(landmark)) {
-        matchedDistrict = distName;
-        districtMedian = BAKU_DISTRICT_MEDIAN_M2[distName.toLowerCase()] ?? districtMedian;
-        break;
-      }
-    }
-  }
-  if (!matchedDistrict) matchedDistrict = "Bakı";
+  const matchedDistrict = matchedDistrictOverride || resolveMatchedDistrict(location);
+  const districtMedian =
+    liveMedian?.medianM2 ??
+    FALLBACK_DISTRICT_MEDIAN_M2[matchedDistrict.toLowerCase()] ??
+    FALLBACK_DISTRICT_MEDIAN_M2["baku_median"];
 
   const diff = districtMedian - m2Price;
   const discountPct = Math.round((diff / districtMedian) * 1000) / 10;
   const totalDiff = Math.round(Math.abs(diff) * area);
+  const sourceNote =
+    liveMedian?.source === "live_db" && liveMedian.sampleCount > 0
+      ? ` (canlı 60g, N=${liveMedian.sampleCount})`
+      : " (ehtiyat baza)";
 
   return [
     "📊 KEENABLE BAZAR ANALİTİKASI (2026)",
     "",
     `📍 Ərazi: ${matchedDistrict}`,
-    `🏢 Median: ${formatNumberAz(districtMedian)} AZN/m²`,
+    `🏢 Median: ${formatNumberAz(districtMedian)} AZN/m²${sourceNote}`,
     `💰 Bu Mənzil: ${formatNumberAz(m2Price)} AZN/m²`,
     `📉 Bazar Fərqi: ${discountPct}% ${discountPct > 0 ? "UCUZ!" : "BAHA"}`,
     `💵 Fərq: təxm. ${formatNumberAz(totalDiff)} AZN`,
@@ -1514,13 +1587,25 @@ async function handleCallbackQuery(
   if (action === "keenable") {
     const binaId = rest;
     const listing = await findListingByIdOrBinaId(supabase, binaId, agencyId);
-    const alertText = listing
-      ? computeKeenableStats(
-          listing.location || "Bakı",
-          Number(listing.price_azn_normalized || listing.price || 0),
-          Number(listing.area || 0),
-        )
-      : `📊 #${binaId} elanı bazada tapılmadı.`;
+    let alertText = `📊 #${binaId} elanı bazada tapılmadı.`;
+    if (listing) {
+      const matchedDistrict = resolveMatchedDistrict(
+        listing.location || "Bakı",
+        listing.district_normalized,
+      );
+      const liveMedian = await fetchLiveDistrictMedian(
+        supabase,
+        matchedDistrict,
+        listing.agency_id ?? agencyId,
+      );
+      alertText = computeKeenableStats(
+        listing.location || "Bakı",
+        Number(listing.price_azn_normalized || listing.price || 0),
+        Number(listing.area || 0),
+        matchedDistrict,
+        liveMedian,
+      );
+    }
     await tgApi(botToken, "answerCallbackQuery", {
       callback_query_id: cbId,
       text: alertText,
