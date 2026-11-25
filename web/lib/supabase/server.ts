@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { getSupabaseEnv } from "./env";
+import { getSupabaseEnv, isSupabaseConfigured } from "./env";
+import type { AgencyMember } from "@/lib/types";
 
 type CookieToSet = {
   name: string;
@@ -32,4 +33,44 @@ export async function createClient() {
       },
     }
   );
+}
+
+export const createServerSupabaseClient = createClient;
+
+export async function getServerSessionMember(): Promise<AgencyMember | null> {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user?.id) {
+      return null;
+    }
+
+    const { data: member, error: memberError } = await supabase
+      .from("agency_members")
+      .select(
+        "user_id, agency_id, role, display_name, whatsapp_phone, telegram_chat_id, commission_split_pct, is_active, created_at"
+      )
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (memberError || !member || member.is_active !== true) {
+      return null;
+    }
+
+    return {
+      ...(member as AgencyMember),
+      email: user.email ?? null,
+    };
+  } catch {
+    return null;
+  }
 }

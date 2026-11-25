@@ -109,9 +109,11 @@ export type CopilotActionPayload =
 
 export type CopilotErrorCode =
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
   | "BUDGET_EXCEEDED"
   | "RATE_LIMITED"
-  | "UPSTREAM_ERROR";
+  | "UPSTREAM_ERROR"
+  | "UPSTREAM_UNAVAILABLE";
 
 export type CopilotApiResponse<T = unknown> =
   | {
@@ -178,8 +180,11 @@ export interface TelegramDispatchResponse {
 export interface QueueRenderPayload {
   listing_id: string;
   bina_id?: string;
+  job_type?: "RENDER_INITIAL" | "RERENDER";
   target_account?: string;
   voice_preset?: string;
+  selected_photo_urls?: string[];
+  custom_script_text?: string;
 }
 
 export interface QueueRenderResponse {
@@ -234,6 +239,8 @@ export async function invokeCopilot<T = unknown>(
       let code: CopilotErrorCode = "UPSTREAM_ERROR";
       if (response.status === 401) {
         code = "UNAUTHORIZED";
+      } else if (response.status === 403) {
+        code = "FORBIDDEN";
       } else if (response.status === 429) {
         code =
           data?.code === "BUDGET_EXCEEDED"
@@ -241,11 +248,18 @@ export async function invokeCopilot<T = unknown>(
             : "RATE_LIMITED";
       } else if (
         typeof data?.code === "string" &&
-        ["UNAUTHORIZED", "BUDGET_EXCEEDED", "RATE_LIMITED", "UPSTREAM_ERROR"].includes(
-          data.code
-        )
+        [
+          "UNAUTHORIZED",
+          "FORBIDDEN",
+          "BUDGET_EXCEEDED",
+          "RATE_LIMITED",
+          "UPSTREAM_ERROR",
+          "UPSTREAM_UNAVAILABLE",
+        ].includes(data.code)
       ) {
         code = data.code as CopilotErrorCode;
+      } else if (response.status === 503) {
+        code = "UPSTREAM_UNAVAILABLE";
       }
 
       return {
@@ -257,7 +271,9 @@ export async function invokeCopilot<T = unknown>(
         fallback_available:
           typeof data?.fallback_available === "boolean"
             ? data.fallback_available
-            : true,
+            : code !== "UPSTREAM_UNAVAILABLE" &&
+              code !== "UNAUTHORIZED" &&
+              code !== "FORBIDDEN",
       };
     }
 

@@ -32,16 +32,33 @@ function LoginForm() {
     setLoading(true);
     try {
       const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
 
-      if (authError) {
+      if (authError || !authData.user) {
         setError(
-          authError.message === "Invalid login credentials"
+          authError?.message === "Invalid login credentials"
             ? "Email və ya şifrə yanlışdır."
-            : `Giriş xətası: ${authError.message}`
+            : `Giriş xətası: ${authError?.message || "Sessiya yaradıla bilmədi."}`
+        );
+        return;
+      }
+
+      const { data: member, error: memberError } = await supabase
+        .from("agency_members")
+        .select("user_id, agency_id, role, is_active")
+        .eq("user_id", authData.user.id)
+        .maybeSingle();
+
+      if (memberError || !member || member.is_active !== true) {
+        await supabase.auth.signOut();
+        setError(
+          member && member.is_active === false
+            ? "Hesabınız deaktiv edilib. Agentlik rəhbəri ilə əlaqə saxlayın."
+            : "Aktiv agentlik üzvlüyünüz tapılmadı. Sistemə giriş icazəsi yoxdur."
         );
         return;
       }
