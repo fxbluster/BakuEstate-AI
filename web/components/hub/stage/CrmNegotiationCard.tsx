@@ -18,6 +18,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import type { StageCardInstance, CrmNegotiationPayload } from "@/lib/copilot-context";
+import { createClient } from "@/lib/supabase/client";
 
 export interface CrmNegotiationCardProps {
   card: StageCardInstance;
@@ -36,38 +37,24 @@ export function CrmNegotiationCard({
 }: CrmNegotiationCardProps) {
   const payload = card.payload as CrmNegotiationPayload;
 
-  const leadId = payload.leadId || card.targetEntityId || "lead_083";
-  const leadName = payload.leadName || "Rəşad Əliyev";
-  const phone = payload.phone || "994502123456";
+  const leadId = payload.leadId || card.targetEntityId || "";
+  const leadName = payload.leadName?.trim() || "Müştəri";
+  const phone = payload.phone || "";
 
-  // Authentic Baku initial dialogue if none provided
-  const dialogueHistory = payload.dialogueHistory && payload.dialogueHistory.length > 0
-    ? payload.dialogueHistory
-    : [
-        {
-          id: "m1",
-          sender: "lead" as const,
-          text: "Salam. Badamdardakı bu 4 otaqlı elanla maraqlanıram. Amma qiyməti çox şişirdilib, həm də eşitdim kupçası yoxdur.",
-          time: "14:22",
-        },
-      ];
+  const dialogueHistory =
+    payload.dialogueHistory && payload.dialogueHistory.length > 0
+      ? payload.dialogueHistory
+      : [];
 
-  // Authentic Baku suggested draft
-  const defaultDraft = payload.draftText ||
-    "Salam, xeyr, ev tam kupçalıdır (Dövlət Reyestrindən Çıxarış əldədir), ipotekaya da tam yararlıdır. Qiymətdə də sahibi ilə yerində real baxışdan sonra endirim danışmaq olar. İstəyirsinizsə bu gün saat 17:00-da yerində baxış təşkil edək?";
+  const defaultDraft = payload.draftText || "";
 
   const [draftText, setDraftText] = useState(defaultDraft);
   const [isCopied, setIsCopied] = useState(false);
 
-  // Extracted objection tag state
-  const initialObjection = payload.extractedObjection || {
-    tag: "İmtina: Qiymət + Kupça Şübhəsi",
-    domain: "OBJECTION_PRICE_PER_M2",
-    insightText: "Alıcı Badamdar 4 otaqlı mənzildə m² qiymətinin yüksək olduğunu və çıxarışın (kupça) olmadığını iddia edir; kupça təqdimatı və yerində endirim vurğulandı.",
-    confidence: 0.94,
-  };
+  // Extracted objection tag state (only when provided by payload)
+  const initialObjection = payload.extractedObjection ?? null;
 
-  const [objection, setObjection] = useState<typeof initialObjection | null>(initialObjection);
+  const [objection, setObjection] = useState<typeof initialObjection>(initialObjection);
 
   // Save insight state
   const [isSavingInsight, setIsSavingInsight] = useState(false);
@@ -76,7 +63,9 @@ export function CrmNegotiationCard({
 
   // Clean phone number for wa.me
   const cleanPhone = phone.replace(/[^0-9]/g, "");
-  const waLink = payload.waLink || `https://wa.me/${cleanPhone}?text=${encodeURIComponent(draftText)}`;
+  const waLink =
+    payload.waLink ||
+    (cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(draftText)}` : "");
 
   const handleCopy = () => {
     navigator.clipboard.writeText(draftText);
@@ -91,9 +80,24 @@ export function CrmNegotiationCard({
     setSaveError(null);
 
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        // Cookie auth fallback
+      }
+
       const res = await fetch("/api/ai/copilot", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           action: "save_insight",
           agent_id: "musteri_psixologiyasi",
@@ -103,9 +107,9 @@ export function CrmNegotiationCard({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || (data.status && data.status !== "success" && data.error)) {
-        throw new Error(data.error || "İnsayt yaddaşa yazıla bilmədi");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false || (!data?.ok && data?.status !== "success")) {
+        throw new Error(data?.error || "İnsayt yaddaşa yazıla bilmədi");
       }
 
       setSaveStatus("saved");
@@ -129,17 +133,20 @@ export function CrmNegotiationCard({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-slate-200 truncate">
-                {leadName} (#{leadId})
+                {leadName}
+                {leadId ? ` (#${leadId})` : ""}
               </span>
-              <span className="px-2 py-0.5 text-[10px] font-mono text-emerald-300 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                +{cleanPhone}
-              </span>
+              {cleanPhone && (
+                <span className="px-2 py-0.5 text-[10px] font-mono text-emerald-300 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                  +{cleanPhone}
+                </span>
+              )}
               <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-800 text-slate-300 border border-slate-700">
                 Müştəri Psixologiyası
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate">
-              {payload.listingSpecs?.title || "Badamdar 4 otaq • Kupçalı mənzil danışığı"}
+              {payload.listingSpecs?.title || "Müştəri danışığı və cavab hazırlığı"}
             </p>
           </div>
         </div>
@@ -192,39 +199,45 @@ export function CrmNegotiationCard({
           </div>
 
           <div className="p-3.5 rounded-xl bg-obsidian-900/90 border border-slate-800/80 space-y-3">
-            {dialogueHistory.map((item, idx) => (
-              <div
-                key={item.id || idx}
-                className={`flex gap-2.5 ${
-                  item.sender === "lead" ? "justify-start" : "justify-end"
-                }`}
-              >
-                {item.sender === "lead" && (
-                  <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 text-xs shrink-0">
-                    <User className="w-3.5 h-3.5" />
-                  </div>
-                )}
+            {dialogueHistory.length === 0 ? (
+              <p className="text-xs text-slate-400 text-center py-3">
+                Yazışma tarixçəsi hələ mövcud deyil.
+              </p>
+            ) : (
+              dialogueHistory.map((item, idx) => (
                 <div
-                  className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed ${
-                    item.sender === "lead"
-                      ? "bg-slate-800/90 text-slate-200 border border-slate-700/60 rounded-tl-sm"
-                      : "bg-emerald-600/20 text-emerald-100 border border-emerald-500/30 rounded-tr-sm"
+                  key={item.id || idx}
+                  className={`flex gap-2.5 ${
+                    item.sender === "lead" ? "justify-start" : "justify-end"
                   }`}
                 >
-                  <p>{item.text}</p>
-                  {item.time && (
-                    <span className="block text-[9px] text-slate-400 mt-1 text-right">
-                      {item.time}
-                    </span>
+                  {item.sender === "lead" && (
+                    <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 text-xs shrink-0">
+                      <User className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+                  <div
+                    className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed ${
+                      item.sender === "lead"
+                        ? "bg-slate-800/90 text-slate-200 border border-slate-700/60 rounded-tl-sm"
+                        : "bg-emerald-600/20 text-emerald-100 border border-emerald-500/30 rounded-tr-sm"
+                    }`}
+                  >
+                    <p>{item.text}</p>
+                    {item.time && (
+                      <span className="block text-[9px] text-slate-400 mt-1 text-right">
+                        {item.time}
+                      </span>
+                    )}
+                  </div>
+                  {item.sender !== "lead" && (
+                    <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 text-xs shrink-0">
+                      <Bot className="w-3.5 h-3.5" />
+                    </div>
                   )}
                 </div>
-                {item.sender !== "lead" && (
-                  <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 text-xs shrink-0">
-                    <Bot className="w-3.5 h-3.5" />
-                  </div>
-                )}
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
@@ -339,19 +352,28 @@ export function CrmNegotiationCard({
 
         {/* Primary Action Button: WhatsApp Launcher */}
         <div className="pt-2">
-          <a
-            href={waLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 text-obsidian-950 transition-all duration-200 shadow-lg hover:shadow-emerald-500/20 active:scale-[0.98]"
-          >
-            <MessageSquare className="w-4 h-4 fill-current" />
-            <span>💬 WhatsApp-da Aç</span>
-            <ExternalLink className="w-3.5 h-3.5 opacity-70 ml-1" />
-          </a>
-          <p className="text-[10px] text-center text-slate-400 mt-1.5">
-            Müştərinin WhatsApp nömrəsinə birbaşa pre-filled cavabla keçid açılacaq.
-          </p>
+          {waLink ? (
+            <>
+              <a
+                href={waLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 text-obsidian-950 transition-all duration-200 shadow-lg hover:shadow-emerald-500/20 active:scale-[0.98]"
+              >
+                <MessageSquare className="w-4 h-4 fill-current" />
+                <span>💬 WhatsApp-da Aç</span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-70 ml-1" />
+              </a>
+              <p className="text-[10px] text-center text-slate-400 mt-1.5">
+                Müştərinin WhatsApp nömrəsinə birbaşa pre-filled cavabla keçid açılacaq.
+              </p>
+            </>
+          ) : (
+            <div className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-medium bg-slate-800/70 text-slate-400 border border-slate-700/60">
+              <MessageSquare className="w-4 h-4" />
+              <span>WhatsApp nömrəsi mövcud deyil</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

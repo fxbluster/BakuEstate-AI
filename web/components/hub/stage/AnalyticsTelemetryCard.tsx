@@ -16,6 +16,7 @@ import {
 import type { StageCardInstance, AnalyticsStagePayload } from "@/lib/copilot-context";
 import { createClient } from "@/lib/supabase/client";
 import { resolveDistrictCorridor } from "@/lib/market-benchmarks";
+import { resolveCanonicalListingNiche } from "@/lib/niche-router";
 import { extractErrorMessage } from "@/lib/errors";
 
 export interface AnalyticsTelemetryCardProps {
@@ -37,6 +38,7 @@ interface LiveListingData {
   location?: string;
   district_normalized?: string;
   archetype?: string;
+  canonical_niche?: string;
 }
 
 interface LiveSnapshot {
@@ -58,7 +60,7 @@ export function AnalyticsTelemetryCard({
   onRefresh,
 }: AnalyticsTelemetryCardProps) {
   const payload = card.payload as AnalyticsStagePayload;
-  const targetId = payload.listingId || card.targetEntityId || "6588858";
+  const targetId = payload.listingId || card.targetEntityId || "";
 
   const [liveListing, setLiveListing] = useState<LiveListingData | null>(null);
   const [liveSnapshots, setLiveSnapshots] = useState<LiveSnapshot[]>([]);
@@ -83,30 +85,37 @@ export function AnalyticsTelemetryCard({
     liveListing?.price_azn_normalized ||
     liveListing?.price ||
     payload.specs?.price_azn ||
-    226000;
+    0;
 
-  const areaM2 = liveListing?.area || payload.specs?.area_m2 || 95;
-  const pricePerM2 = Math.round(priceAzn / (areaM2 || 1));
-  const archetype = liveListing?.archetype || payload.specs?.niche_badge || "Sərfəli / Büdcə";
+  const areaM2 = liveListing?.area || payload.specs?.area_m2 || 0;
+  const pricePerM2 =
+    priceAzn > 0 && areaM2 > 0 ? Math.round(priceAzn / areaM2) : 0;
+
+  const canonicalNiche = resolveCanonicalListingNiche({
+    price_azn_normalized: priceAzn,
+    location,
+    district_normalized: liveListing?.district_normalized,
+    canonical_niche: liveListing?.canonical_niche,
+  });
+
+  const archetype = payload.specs?.niche_badge || canonicalNiche.label;
 
   const title =
     liveListing?.title ||
     payload.title ||
-    `Elan #${targetId} Sosial Telemetriyası`;
+    (targetId ? `Elan #${targetId} Sosial Telemetriyası` : "Sosial Telemetriya");
 
-  const defaultTargetHandle =
-    archetype.toLowerCase().includes("lüks") || pricePerM2 > 3000
-      ? "@bakuestate.premium"
-      : "@baku.serfeli.evler";
+  const defaultTargetHandle = payload.targetAccount || canonicalNiche.handle;
 
-  const isWithinCorridor = pricePerM2 >= corridor.min && pricePerM2 <= corridor.max;
-  const isUnderPriced = pricePerM2 < corridor.min;
+  const isWithinCorridor =
+    pricePerM2 > 0 && pricePerM2 >= corridor.min && pricePerM2 <= corridor.max;
+  const isUnderPriced = pricePerM2 > 0 && pricePerM2 < corridor.min;
 
   // Fetch live Supabase data on mount or when targetId changes
   useEffect(() => {
     let isMounted = true;
     async function fetchLiveData() {
-      if (!targetId || targetId === "6572383") return;
+      if (!targetId) return;
       setIsLoading(true);
       try {
         const supabase = createClient();
@@ -131,7 +140,8 @@ export function AnalyticsTelemetryCard({
             .from("publications")
             .select("id")
             .eq("listing_id", listing.id)
-            .order("published_at", { ascending: false });
+            .order("published_at", { ascending: false })
+            .limit(20);
 
           if (isMounted && pubs && pubs.length > 0) {
             const pubIds = pubs.map((p) => p.id);
@@ -139,27 +149,42 @@ export function AnalyticsTelemetryCard({
               .from("publication_telemetry_snapshots")
               .select("*")
               .in("publication_id", pubIds)
-              .order("captured_at", { ascending: true });
+              .order("captured_at", { ascending: true })
+              .limit(100);
             if (isMounted && snaps) {
               setLiveSnapshots(snaps);
             }
           }
 
-          // Fetch related buyer leads for honest demand count
-          const { data: leads } = await supabase
+          // Bounded active buyer lead count query (no unbounded select)
+          const listingCorridor = resolveDistrictCorridor(
+            listing.location ||
+              listing.district_normalized ||
+              payload.specs?.location ||
+              "Bakı"
+          );
+          const districtKeyword = listingCorridor.label
+            .replace(" r.", "")
+            .replace(" qəs.", "")
+            .trim();
+          let leadsCountQuery = supabase
             .from("buyer_leads")
-            .select("id, preferred_districts");
-
-          if (isMounted && leads) {
-            const districtKeyword = corridor.label.replace(" r.", "").replace(" qəs.", "").toLowerCase();
-            const matched = leads.filter((l) => {
-              if (!l.preferred_districts) return false;
-              const distStr = Array.isArray(l.preferred_districts)
-                ? l.preferred_districts.join(" ").toLowerCase()
-                : String(l.preferred_districts).toLowerCase();
-              return distStr.includes(districtKeyword);
-            });
-            setLeadsCount(matched.length > 0 ? matched.length : leads.length);
+            .select("id", { count: "exact", head: true })
+            .not("stage", "in", '("WON_CLOSED","LOST","COLD")');
+          if (
+            districtKeyword &&
+            districtKeyword.toLowerCase() !== "bakı ortalaması"
+          ) {
+            leadsCountQuery = leadsCountQuery.overlaps("preferred_districts", [
+              districtKeyword,
+              districtKeyword.toLowerCase(),
+            ]);
+          }
+          const { count: matchingLeadsCount } = await leadsCountQuery.limit(1);
+          if (isMounted) {
+            setLeadsCount(
+              typeof matchingLeadsCount === "number" ? matchingLeadsCount : 0
+            );
           }
         }
       } catch (err) {
@@ -173,7 +198,7 @@ export function AnalyticsTelemetryCard({
     return () => {
       isMounted = false;
     };
-  }, [targetId, corridor.label]);
+  }, [targetId, payload.specs?.location]);
 
   // Handle Telegram dispatch
   const handleTelegramDispatch = async () => {
@@ -265,22 +290,28 @@ export function AnalyticsTelemetryCard({
         <div className="flex items-center justify-between">
           <div className="flex items-baseline gap-2">
             <span className="text-xl font-bold text-amber-400 font-mono">
-              {priceAzn.toLocaleString()} AZN
+              {priceAzn > 0 ? `${priceAzn.toLocaleString()} AZN` : "Qiymət gözlənilir"}
             </span>
-            <span className="text-xs text-slate-400 font-mono">
-              {pricePerM2.toLocaleString()} AZN/m²
-            </span>
+            {pricePerM2 > 0 && (
+              <span className="text-xs text-slate-400 font-mono">
+                {pricePerM2.toLocaleString()} AZN/m²
+              </span>
+            )}
           </div>
           <span
             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-              isWithinCorridor
+              pricePerM2 === 0
+                ? "bg-slate-800 text-slate-300 border-slate-700"
+                : isWithinCorridor
                 ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
                 : isUnderPriced
                 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
                 : "bg-amber-500/15 text-amber-300 border-amber-500/30"
             }`}
           >
-            {isWithinCorridor
+            {pricePerM2 === 0
+              ? "Məlumat Gözlənilir"
+              : isWithinCorridor
               ? "Bazar Dəhlizindədir (Likvid)"
               : isUnderPriced
               ? "Bazar Qiymətindən Ucuz (Yüksək Tələbat)"

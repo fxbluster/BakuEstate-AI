@@ -21,6 +21,7 @@ import type { StageCardInstance, VideoStagePayload } from "@/lib/copilot-context
 import { useCopilot } from "@/lib/copilot-context";
 import { createClient } from "@/lib/supabase/client";
 import { extractErrorMessage } from "@/lib/errors";
+import { resolveCanonicalListingNiche } from "@/lib/niche-router";
 
 interface LiveListingData {
   id?: string;
@@ -31,8 +32,10 @@ interface LiveListingData {
   rooms?: number;
   area?: number;
   location?: string;
+  district_normalized?: string;
   address?: string;
   archetype?: string;
+  canonical_niche?: string;
   photo_urls?: string[];
 }
 
@@ -42,6 +45,7 @@ interface LiveRenderData {
   version_num?: number;
   status?: string;
   video_cdn_url?: string | null;
+  voice_engine?: string | null;
   duration_seconds?: number | null;
 }
 
@@ -63,8 +67,8 @@ export function VideoPipelineCard({
   const { updateStageCardPayload } = useCopilot();
   const payload = card.payload as VideoStagePayload;
 
-  // Derive specs and defaults
-  const listingId = payload.listingId || card.targetEntityId || "6572383";
+  // Derive specs without hardcoded demo fallbacks
+  const listingId = payload.listingId || card.targetEntityId || "";
   const binaId = payload.binaId || payload.specs?.bina_id || listingId;
 
   // Live Supabase sync for actual listing specs & rendered videos
@@ -75,7 +79,7 @@ export function VideoPipelineCard({
     let isMounted = true;
     async function loadData() {
       const idToSearch = binaId || listingId;
-      if (!idToSearch || idToSearch === "6572383") return;
+      if (!idToSearch) return;
       try {
         const supabase = createClient();
         const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -122,47 +126,50 @@ export function VideoPipelineCard({
   const videoCdnUrl =
     liveRender?.status === "COMPLETED" && liveRender?.video_cdn_url
       ? liveRender.video_cdn_url
-      : payload.videoCdnUrl || (isRendered ? "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" : null);
+      : payload.videoCdnUrl || null;
 
   const title =
     liveListing?.title ||
     payload.title ||
-    (binaId && binaId !== "6572383" ? `Elan #${binaId}` : "Səbail r., Badamdar qəs., 4 otaqlı premium mənzil");
+    (binaId ? `Elan #${binaId}` : "Elan təfərrüatları");
 
   const priceAzn =
     liveListing?.price_azn_normalized ||
     liveListing?.price ||
     payload.priceAzn ||
     payload.specs?.price_azn ||
-    385000;
+    0;
 
   const rooms =
-    liveListing?.rooms ||
-    payload.rooms ||
-    payload.specs?.rooms ||
-    4;
+    liveListing?.rooms ??
+    payload.rooms ??
+    payload.specs?.rooms ??
+    null;
 
   const areaM2 =
-    liveListing?.area ||
-    payload.areaM2 ||
-    payload.specs?.area_m2 ||
-    185;
+    liveListing?.area ??
+    payload.areaM2 ??
+    payload.specs?.area_m2 ??
+    0;
 
   const location =
     liveListing?.location ||
     liveListing?.address ||
     payload.location ||
     payload.specs?.location ||
-    "Bakı şəhəri, Səbail rayonu";
+    "Bakı";
+
+  const canonicalNiche = resolveCanonicalListingNiche({
+    price_azn_normalized: priceAzn,
+    location,
+    district_normalized: liveListing?.district_normalized,
+    canonical_niche: liveListing?.canonical_niche,
+  });
 
   const nicheBadge =
-    liveListing?.archetype === "budget"
-      ? "Sərfəli / Büdcə"
-      : payload.nicheBadge || payload.specs?.niche_badge || "Lüks Portfel";
+    payload.nicheBadge || payload.specs?.niche_badge || canonicalNiche.label;
 
-  const targetAccount =
-    payload.targetAccount ||
-    (liveListing?.archetype === "budget" ? "@baku.serfeli.evler" : "@bakuestate.premium");
+  const targetAccount = payload.targetAccount || canonicalNiche.handle;
 
   // Gallery state for unrendered cards
   const displayPhotos =
@@ -170,12 +177,7 @@ export function VideoPipelineCard({
       ? liveListing.photo_urls
       : payload.photos && payload.photos.length > 0
         ? payload.photos
-        : [
-            "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1080&auto=format&fit=crop&q=80",
-            "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1080&auto=format&fit=crop&q=80",
-            "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1080&auto=format&fit=crop&q=80",
-            "https://images.unsplash.com/photo-1600566753376-12c8ab7fb75b?w=1080&auto=format&fit=crop&q=80",
-          ];
+        : [];
   const [activePhotoIdx, setActivePhotoIdx] = useState(0);
 
   // Video playback state
@@ -368,18 +370,20 @@ export function VideoPipelineCard({
               <div className="p-3 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-2">
                 <div className="flex items-baseline justify-between">
                   <span className="text-lg font-bold text-amber-400 font-mono">
-                    {priceAzn.toLocaleString()} AZN
+                    {priceAzn > 0 ? `${priceAzn.toLocaleString()} AZN` : "Qiymət gözlənilir"}
                   </span>
-                  <span className="text-xs text-slate-400">
-                    {Math.round(priceAzn / (areaM2 || 1)).toLocaleString()} AZN/m²
-                  </span>
+                  {priceAzn > 0 && areaM2 > 0 && (
+                    <span className="text-xs text-slate-400">
+                      {Math.round(priceAzn / areaM2).toLocaleString()} AZN/m²
+                    </span>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
                   <div className="text-slate-300">
-                    <span className="text-slate-500">Otaq:</span> {rooms} otaqlı
+                    <span className="text-slate-500">Otaq:</span> {rooms ? `${rooms} otaqlı` : "—"}
                   </div>
                   <div className="text-slate-300">
-                    <span className="text-slate-500">Sahə:</span> {areaM2} m²
+                    <span className="text-slate-500">Sahə:</span> {areaM2 > 0 ? `${areaM2} m²` : "—"}
                   </div>
                   <div className="text-slate-300 col-span-2 flex items-center gap-1">
                     <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
@@ -391,9 +395,10 @@ export function VideoPipelineCard({
               {/* Pipeline Render Specs */}
               <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/60 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between text-slate-400">
-                  <span>Səs Modeli:</span>
+                  <span>Səs Mühərriki:</span>
                   <span className="text-slate-200 font-medium flex items-center gap-1">
-                    <Volume2 className="w-3.5 h-3.5 text-amber-400" /> ElevenLabs Arif (AZE)
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400" />{" "}
+                    {liveRender?.voice_engine || "Dinamik TTS (AZE)"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
@@ -480,11 +485,18 @@ export function VideoPipelineCard({
 
           {/* Photo Carousel / Preview (16:9) */}
           <div className="relative aspect-video rounded-xl overflow-hidden bg-black/60 border border-slate-800 max-h-[220px]">
-            <img
-              src={displayPhotos[activePhotoIdx]}
-              alt={`Bina ${binaId} foto ${activePhotoIdx + 1}`}
-              className="w-full h-full object-cover"
-            />
+            {displayPhotos.length > 0 ? (
+              <img
+                src={displayPhotos[activePhotoIdx]}
+                alt={`Elan ${binaId || ""} foto ${activePhotoIdx + 1}`}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-1">
+                <Film className="w-8 h-8 opacity-40" />
+                <span className="text-xs">Foto mövcud deyil</span>
+              </div>
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
             {/* Prev/Next buttons */}
@@ -510,35 +522,41 @@ export function VideoPipelineCard({
             )}
 
             {/* Counter Pill */}
-            <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
-              {activePhotoIdx + 1} / {displayPhotos.length}
-            </div>
+            {displayPhotos.length > 0 && (
+              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-slate-300 backdrop-blur-sm border border-slate-700">
+                {activePhotoIdx + 1} / {displayPhotos.length}
+              </div>
+            )}
           </div>
 
           {/* Thumbnail Strip */}
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {displayPhotos.map((photo, i) => (
-              <button
-                key={i}
-                onClick={() => setActivePhotoIdx(i)}
-                className={`relative w-14 h-10 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
-                  activePhotoIdx === i
-                    ? "border-amber-400 scale-105"
-                    : "border-transparent opacity-60 hover:opacity-100"
-                }`}
-              >
-                <img src={photo} alt="" className="w-full h-full object-cover" />
-              </button>
-            ))}
-          </div>
+          {displayPhotos.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {displayPhotos.map((photo, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActivePhotoIdx(i)}
+                  className={`relative w-14 h-10 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
+                    activePhotoIdx === i
+                      ? "border-amber-400 scale-105"
+                      : "border-transparent opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <img src={photo} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Specs Summary */}
           <div className="p-2.5 rounded-xl bg-obsidian-900/80 border border-slate-800/80 space-y-1.5">
             <div className="flex items-baseline justify-between">
               <span className="text-base font-bold text-amber-400 font-mono">
-                {priceAzn.toLocaleString()} AZN
+                {priceAzn > 0 ? `${priceAzn.toLocaleString()} AZN` : "Qiymət gözlənilir"}
               </span>
-              <span className="text-xs text-slate-400">{rooms} otaqlı • {areaM2} m²</span>
+              <span className="text-xs text-slate-400">
+                {rooms ? `${rooms} otaqlı` : "—"} • {areaM2 > 0 ? `${areaM2} m²` : "—"}
+              </span>
             </div>
             <p className="text-xs text-slate-300 flex items-center gap-1.5">
               <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
@@ -560,11 +578,11 @@ export function VideoPipelineCard({
                 <div className="flex items-center gap-2 min-w-0">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span className="truncate">
-                    {queueSuccessMsg || "Montaj növbəsinə əlavə edildi! Lokal Worker icra edəcək."}
+                    {queueSuccessMsg || "Montaj növbəsinə əlavə edildi! İşçi icra edəcək."}
                   </span>
                 </div>
                 <Link
-                  href="/worker"
+                  href="/jobs?tab=worker"
                   className="shrink-0 font-semibold text-gold-300 hover:underline"
                 >
                   İzlə →
@@ -601,7 +619,7 @@ export function VideoPipelineCard({
               )}
             </button>
             <p className="text-[10px] text-center text-slate-500">
-              Avtomatik olaraq ElevenLabs səsləndirməsi, FFmpeg vizual kompozisiyası və kinetik subtitrlər hazırlanacaq.
+              Avtomatik olaraq səsləndirmə, FFmpeg vizual kompozisiyası və kinetik subtitrlər hazırlanacaq.
             </p>
           </div>
         </div>

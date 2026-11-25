@@ -23,6 +23,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { resolveCanonicalListingNiche } from "@/lib/niche-router";
 import { PreflightModal } from "./PreflightModal";
 import { sortListings, SORT_OPTIONS, type SortMode } from "@/lib/listing-sorter";
 import {
@@ -123,57 +124,11 @@ export function resolveListingNiche(item: ListingWithLatestRender): {
   niche: ChannelNiche;
   handle: string;
 } {
-  if (item.canonical_niche) {
-    const niche = item.canonical_niche;
-    const handle =
-      item.publication?.target_account_handle ||
-      (niche === "LUXURY"
-        ? "@bakuestate.premium"
-        : niche === "AFFORDABLE"
-          ? "@baku.serfeli.evler"
-          : niche === "TIKTOK"
-            ? "@baku_emlak_ai"
-            : "@bakuestate.official");
-    return { niche, handle };
-  }
-
-  if (item.publication?.channel_niche) {
-    const niche = item.publication.channel_niche;
-    const handle =
-      item.publication.target_account_handle ||
-      (niche === "LUXURY"
-        ? "@bakuestate.premium"
-        : niche === "AFFORDABLE"
-          ? "@baku.serfeli.evler"
-          : niche === "TIKTOK"
-            ? "@baku_emlak_ai"
-            : "@bakuestate.official");
-    return { niche, handle };
-  }
-
-  if (item.publication?.target_account_handle) {
-    const handle = item.publication.target_account_handle;
-    if (handle.includes("premium")) return { niche: "LUXURY", handle };
-    if (handle.includes("serfeli")) return { niche: "AFFORDABLE", handle };
-    if (handle.includes("emlak_ai")) return { niche: "TIKTOK", handle };
-    return { niche: "GENERAL", handle };
-  }
-
-  const priceDrop = Number(
-    (item as unknown as { price_drop_pct?: number }).price_drop_pct || 0
-  );
-  if (priceDrop >= 10.0) {
-    return { niche: "TIKTOK", handle: "@baku_emlak_ai" };
-  }
-
-  const priceAzn = item.price_azn_normalized || 0;
-  if (priceAzn >= 250000) {
-    return { niche: "LUXURY", handle: "@bakuestate.premium" };
-  } else if (priceAzn > 0 && priceAzn <= 120000) {
-    return { niche: "AFFORDABLE", handle: "@baku.serfeli.evler" };
-  } else {
-    return { niche: "GENERAL", handle: "@bakuestate.official" };
-  }
+  const resolved = resolveCanonicalListingNiche(item);
+  return {
+    niche: resolved.niche,
+    handle: item.publication?.target_account_handle || resolved.handle,
+  };
 }
 
 const ALLOWED_IMAGE_TYPES = new Set([

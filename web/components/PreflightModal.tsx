@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatAzn } from "@/lib/format";
+import { resolveCanonicalListingNiche } from "@/lib/niche-router";
 import type { ChannelNiche } from "@/lib/types";
 import type { ListingWithLatestRender } from "./ListingsClient";
 
@@ -33,93 +34,9 @@ export interface TargetAccountInfo {
 export function resolveTargetAccount(
   listing: ListingWithLatestRender
 ): TargetAccountInfo {
-  let niche: ChannelNiche = "GENERAL";
-  let handle = "@bakuestate.official";
-
-  // 1. Check publication if present
-  if (listing.publication?.channel_niche) {
-    niche = listing.publication.channel_niche;
-    handle =
-      listing.publication.target_account_handle ||
-      (niche === "LUXURY"
-        ? "@bakuestate.premium"
-        : niche === "AFFORDABLE"
-        ? "@baku.serfeli.evler"
-        : niche === "TIKTOK"
-        ? "@baku_emlak_ai"
-        : "@bakuestate.official");
-  } else if (listing.publication?.target_account_handle) {
-    handle = listing.publication.target_account_handle;
-    if (handle.includes("premium")) niche = "LUXURY";
-    else if (handle.includes("serfeli")) niche = "AFFORDABLE";
-    else if (handle.includes("emlak_ai")) niche = "TIKTOK";
-    else niche = "GENERAL";
-  } else {
-    // 2. Client-side fallback: dynamically derive from price, location, and urgency
-    const priceAzn = listing.price_azn_normalized || listing.price || 0;
-    const loc = (
-      listing.location ||
-      listing.district_normalized ||
-      listing.address ||
-      ""
-    ).toLowerCase();
-    const isUrgent = Boolean(
-      (listing as unknown as { is_urgent?: boolean }).is_urgent
-    );
-    const priceDropPct = Number(
-      (listing as unknown as { price_drop_pct?: number }).price_drop_pct || 0
-    );
-
-    const eliteDistricts = [
-      "səbail",
-      "sabail",
-      "nəsimi",
-      "nasimi",
-      "nərimanov",
-      "narimanov",
-      "gənclik",
-      "ganclik",
-      "ağ şəhər",
-      "ag seher",
-      "badamdar",
-      "bilgəh",
-      "bilgah",
-      "mərdəkan",
-      "mardakan",
-    ];
-    const suburbanDistricts = [
-      "xırdalan",
-      "xirdalan",
-      "masazır",
-      "masazir",
-      "hövsan",
-      "hovsan",
-      "zabrat",
-      "suraxanı",
-      "suraxani",
-      "binəqədi",
-      "bineqedi",
-      "sabunçu",
-      "sabuncu",
-    ];
-
-    const isElite = eliteDistricts.some((d) => loc.includes(d));
-    const isSuburban = suburbanDistricts.some((d) => loc.includes(d));
-
-    if (isUrgent || priceDropPct >= 10.0) {
-      niche = "TIKTOK";
-      handle = "@baku_emlak_ai";
-    } else if (priceAzn >= 250000 || isElite) {
-      niche = "LUXURY";
-      handle = "@bakuestate.premium";
-    } else if ((priceAzn > 0 && priceAzn <= 120000) || isSuburban) {
-      niche = "AFFORDABLE";
-      handle = "@baku.serfeli.evler";
-    } else {
-      niche = "GENERAL";
-      handle = "@bakuestate.official";
-    }
-  }
+  const resolved = resolveCanonicalListingNiche(listing);
+  const niche = resolved.niche;
+  const handle = listing.publication?.target_account_handle || resolved.handle;
 
   switch (niche) {
     case "LUXURY":

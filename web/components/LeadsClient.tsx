@@ -17,6 +17,7 @@ import {
   Plus,
   Save,
   Search,
+  Sparkles,
   UserCheck,
   UserPlus,
   Users,
@@ -43,6 +44,7 @@ import type {
   LeadListingRelation,
   LeadSourceChannel,
   LeadStage,
+  Listing,
   PaginatedResult,
 } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
@@ -99,8 +101,31 @@ export interface LeadsFilterState {
   agent?: string;
 }
 
+export interface LeadListingMatchItem {
+  id: string;
+  lead_id?: string;
+  listing_id: string;
+  match_score: number;
+  status: "NEW" | "NOTIFIED" | "DISMISSED" | string;
+  notified_at?: string | null;
+  created_at?: string;
+  listings?: Pick<
+    Listing,
+    | "id"
+    | "bina_id"
+    | "title"
+    | "location"
+    | "price_azn_normalized"
+    | "rooms"
+    | "area"
+    | "has_bill_of_sale"
+    | "source_availability"
+  > | null;
+}
+
 type LeadWithAgent = BuyerLeadWithListings & {
   assigned_agent_id?: string | null;
+  lead_listing_matches?: LeadListingMatchItem[];
 };
 
 interface LeadsClientProps {
@@ -174,6 +199,62 @@ export function LeadsClient({
 
   useEffect(() => {
     setLeads(initialLeads as LeadWithAgent[]);
+  }, [initialLeads]);
+
+  useEffect(() => {
+    if (!initialLeads || initialLeads.length === 0) return;
+    const missingMatchLeads = (initialLeads as LeadWithAgent[]).filter(
+      (l) => !Array.isArray(l.lead_listing_matches)
+    );
+    if (missingMatchLeads.length === 0) return;
+
+    let cancelled = false;
+    async function loadMatchesForPage() {
+      try {
+        const supabase = createClient();
+        const tableApi = supabase.from?.("lead_listing_matches");
+        if (!tableApi || typeof tableApi.select !== "function") return;
+
+        const leadIds = missingMatchLeads.map((l) => l.id).slice(0, 24);
+        const query = tableApi
+          .select(
+            "id, lead_id, listing_id, match_score, status, notified_at, created_at, listings(id, bina_id, title, location, price_azn_normalized, rooms, area, has_bill_of_sale, source_availability)"
+          )
+          .in("lead_id", leadIds)
+          .neq("status", "DISMISSED")
+          .order("match_score", { ascending: false })
+          .limit(120);
+
+        const res = await query;
+        if (cancelled || !res?.data || !Array.isArray(res.data)) return;
+
+        const byLead = new Map<string, LeadListingMatchItem[]>();
+        for (const row of res.data as LeadListingMatchItem[]) {
+          const lid = row.lead_id;
+          if (!lid) continue;
+          const bucket = byLead.get(lid) ?? [];
+          bucket.push(row);
+          byLead.set(lid, bucket);
+        }
+
+        setLeads((prev) =>
+          prev.map((lead) => {
+            if (Array.isArray(lead.lead_listing_matches)) return lead;
+            return {
+              ...lead,
+              lead_listing_matches: byLead.get(lead.id) ?? [],
+            };
+          })
+        );
+      } catch {
+        // Non-fatal: SSR or tests may omit lead_listing_matches table
+      }
+    }
+
+    loadMatchesForPage();
+    return () => {
+      cancelled = true;
+    };
   }, [initialLeads]);
 
   useEffect(() => {
@@ -703,6 +784,122 @@ export function LeadsClient({
     }
   }
 
+  async function handlePitchMatch(
+    leadId: string,
+    match: LeadListingMatchItem
+  ) {
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.from("lead_listings").upsert({
+        lead_id: leadId,
+        listing_id: match.listing_id,
+        relation: "PITCHED",
+      });
+      if (error) throw error;
+
+      const opt = listingOptions.find((o) => o.id === match.listing_id);
+      const listingInfo = match.listings ?? (opt
+        ? {
+            id: opt.id,
+            bina_id: opt.bina_id || "",
+            title: opt.title,
+            location: opt.location,
+            price_azn_normalized: opt.price_azn_normalized,
+            source_availability: opt.source_availability as NonNullable<
+              LeadListingJoin["listings"]
+            >["source_availability"],
+            owner_outreach_status: opt.owner_outreach_status as NonNullable<
+              LeadListingJoin["listings"]
+            >["owner_outreach_status"],
+            editorial_status: "PENDING_REVIEW" as const,
+            rooms: opt.rooms,
+            area: opt.area,
+          }
+        : undefined);
+
+      setLeads((prev) =>
+        prev.map((l) => {
+          if (l.id !== leadId) return l;
+          const alreadyLinked = l.lead_listings.some(
+            (ll) => ll.listing_id === match.listing_id
+          );
+          const nextLinked: LeadListingJoin[] = alreadyLinked
+            ? l.lead_listings
+            : [
+                {
+                  lead_id: leadId,
+                  listing_id: match.listing_id,
+                  relation: "PITCHED",
+                  notes: null,
+                  updated_at: new Date().toISOString(),
+                  listings: listingInfo
+                    ? {
+                        id: listingInfo.id,
+                        bina_id: listingInfo.bina_id || "",
+                        title: listingInfo.title,
+                        location: listingInfo.location,
+                        price_azn_normalized: listingInfo.price_azn_normalized,
+                        source_availability:
+                          listingInfo.source_availability || "ACTIVE",
+                        owner_outreach_status:
+                          "owner_outreach_status" in listingInfo
+                            ? listingInfo.owner_outreach_status
+                            : "NOT_CONTACTED",
+                        editorial_status:
+                          "editorial_status" in listingInfo
+                            ? listingInfo.editorial_status
+                            : "APPROVED",
+                        rooms: listingInfo.rooms,
+                        area: listingInfo.area,
+                      }
+                    : null,
+                },
+                ...l.lead_listings,
+              ];
+          return { ...l, lead_listings: nextLinked };
+        })
+      );
+      setFeedback({
+        type: "ok",
+        text: "Uyğun mənzil müştəriyə təklif olunan elanlara əlavə edildi.",
+      });
+    } catch (err) {
+      setFeedback({
+        type: "err",
+        text: `Təklif bağlama xətası: ${err instanceof Error ? err.message : "Naməlum xəta"}`,
+      });
+    }
+  }
+
+  async function handleDismissMatch(leadId: string, matchId: string) {
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from("lead_listing_matches")
+        .update({ status: "DISMISSED" })
+        .eq("id", matchId);
+      if (error) throw error;
+
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id !== leadId
+            ? l
+            : {
+                ...l,
+                lead_listing_matches: (l.lead_listing_matches ?? []).filter(
+                  (m) => m.id !== matchId
+                ),
+              }
+        )
+      );
+    } catch (err) {
+      setFeedback({
+        type: "err",
+        text: `Uyğunluq gizlədilə bilmədi: ${err instanceof Error ? err.message : "Naməlum xəta"}`,
+      });
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -922,6 +1119,11 @@ export function LeadsClient({
             const soldLinked = lead.lead_listings.filter(
               (ll) => ll.listings && isListingUnavailable(ll.listings)
             );
+            const activeMatches = (lead.lead_listing_matches ?? [])
+              .filter((m) => m.status !== "DISMISSED")
+              .slice()
+              .sort((a, b) => b.match_score - a.match_score)
+              .slice(0, 3);
 
             return (
               <div key={lead.id} className="exec-card p-5 space-y-4">
@@ -1174,6 +1376,86 @@ export function LeadsClient({
                     </div>
                   )}
                 </div>
+
+                {/* Smart Property Recommendations (lead_listing_matches) */}
+                {activeMatches.length > 0 && (
+                  <div className="space-y-2 border-t border-slate-800/70 pt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-gold-300">
+                        <Sparkles className="h-3.5 w-3.5 text-gold-400" />
+                        <span>
+                          Ağıllı Uyğunluq Tövsiyələri ({activeMatches.length})
+                        </span>
+                      </span>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {activeMatches.map((match) => {
+                        const opt = listingOptions.find(
+                          (o) => o.id === match.listing_id
+                        );
+                        const ml = match.listings ?? opt ?? null;
+                        const slug = ml?.bina_id || match.listing_id;
+                        const alreadyLinked = lead.lead_listings.some(
+                          (ll) => ll.listing_id === match.listing_id
+                        );
+                        return (
+                          <div
+                            key={match.id}
+                            className="flex flex-col justify-between gap-2 rounded-xl border border-gold-500/30 bg-gold-500/5 px-3 py-2.5 text-xs"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between gap-1.5">
+                                <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                                  {match.match_score}% uyğun
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  {match.status === "NOTIFIED"
+                                    ? "Bildirilib"
+                                    : "Yeni"}
+                                </span>
+                              </div>
+                              <Link
+                                href={`/listings/${slug}`}
+                                className="block font-semibold text-slate-100 hover:text-gold-300 truncate"
+                              >
+                                {ml?.bina_id ? `#${ml.bina_id}` : "OFF-MARKET"}{" "}
+                                • {ml?.title || ml?.location || "Elan"}
+                              </Link>
+                              {ml && (
+                                <p className="text-[11px] text-slate-400">
+                                  {formatAzn(ml.price_azn_normalized)} •{" "}
+                                  {ml.rooms ?? "?"} otaq • {ml.area ?? "?"} m²
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/60">
+                              {!alreadyLinked && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handlePitchMatch(lead.id, match)
+                                  }
+                                  className="text-[11px] font-semibold text-gold-300 hover:underline"
+                                >
+                                  + Təklif Et
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDismissMatch(lead.id, match.id)
+                                }
+                                className="text-[11px] text-slate-400 hover:text-rose-300"
+                              >
+                                Gizlət
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
