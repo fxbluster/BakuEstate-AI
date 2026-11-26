@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient, getServerSessionMember } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
+import { resolvePlayableRenders } from "@/lib/r2-media";
 import { ListingDetailClient } from "@/components/ListingDetailClient";
 import type {
   Listing,
@@ -108,11 +109,15 @@ export default async function ListingDetailPage({
       baseListing.owner_phone_normalized,
   };
 
+  const resolvedRenders = await resolvePlayableRenders(
+    (rendersRes.data as RenderVersion[] | null) ?? []
+  );
+
   return (
     <ListingDetailClient
       initialListing={listing}
       initialEvents={(eventsRes.data as ListingEvent[] | null) ?? []}
-      initialRenders={(rendersRes.data as RenderVersion[] | null) ?? []}
+      initialRenders={resolvedRenders}
       initialPublications={(pubsRes.data as Publication[] | null) ?? []}
       memberRole={member?.role ?? "BROKER"}
       agencyId={member?.agency_id ?? null}

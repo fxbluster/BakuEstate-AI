@@ -18,6 +18,7 @@ import {
   Volume2,
 } from "lucide-react";
 import type { StageCardInstance, VideoStagePayload } from "@/lib/copilot-context";
+import { resolveClientVideoSrc } from "@/lib/r2-media-client";
 import { useCopilot } from "@/lib/copilot-context";
 import { createClient } from "@/lib/supabase/client";
 import { extractErrorMessage } from "@/lib/errors";
@@ -123,10 +124,17 @@ export function VideoPipelineCard({
       ? true
       : payload.isRendered ?? Boolean(payload.videoCdnUrl);
 
-  const videoCdnUrl =
+  const rawVideoCdnUrl =
     liveRender?.status === "COMPLETED" && liveRender?.video_cdn_url
       ? liveRender.video_cdn_url
       : payload.videoCdnUrl || null;
+
+  const videoCdnUrl =
+    resolveClientVideoSrc({
+      id: liveRender?.id ?? payload.renderVersionId ?? null,
+      video_cdn_url: rawVideoCdnUrl,
+      storage_pruned_at: null,
+    }) ?? rawVideoCdnUrl;
 
   const title =
     liveListing?.title ||

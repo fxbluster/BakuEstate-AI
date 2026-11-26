@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOperator } from "@/lib/auth/resolve-operator";
+import { resolvePlayableRenderUrl } from "@/lib/r2-media";
 import type {
   TelegramDispatchPayload,
   TelegramDispatchResponse,
@@ -249,6 +250,9 @@ export async function POST(request: Request) {
   }
 
   const videoCdnUrl: string = renderVersion.video_cdn_url;
+  const playableVideoUrl: string =
+    (await resolvePlayableRenderUrl(renderVersion, { expiresInSeconds: 3600 })) ||
+    videoCdnUrl;
   const binaId = listing.bina_id ? String(listing.bina_id) : null;
   const displayRef = binaId || String(listing.id).slice(0, 8);
 
@@ -313,7 +317,7 @@ export async function POST(request: Request) {
         HEAD_REQUEST_TIMEOUT_MS
       );
 
-      const headResponse = await fetch(videoCdnUrl, {
+      const headResponse = await fetch(playableVideoUrl, {
         method: "HEAD",
         signal: controller.signal,
       });
@@ -356,7 +360,7 @@ export async function POST(request: Request) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: targetChatId,
-            video: videoCdnUrl,
+            video: playableVideoUrl,
             caption: crmCaption,
             parse_mode: "HTML",
             reply_markup: replyMarkup,

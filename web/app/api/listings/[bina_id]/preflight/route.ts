@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ProxyAgent } from "undici";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOperator } from "@/lib/auth/resolve-operator";
+import { resolvePlayableRenderUrl } from "@/lib/r2-media";
 import { getBinaProxyUrl } from "@/lib/supabase/env";
 
 export const runtime = "nodejs";
@@ -777,8 +778,8 @@ export async function POST(
       );
     }
 
-    const videoUrl = renderVersion?.video_cdn_url as string | undefined;
-    if (!videoUrl) {
+    const rawVideoUrl = renderVersion?.video_cdn_url as string | undefined;
+    if (!rawVideoUrl) {
       return NextResponse.json(
         {
           ok: false,
@@ -789,6 +790,10 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    const videoUrl =
+      (await resolvePlayableRenderUrl(renderVersion, { expiresInSeconds: 3600 })) ||
+      rawVideoUrl;
 
     // Ensure publication row exists for atomic slot leasing
     let pubId = existingPublication?.id as string | undefined;

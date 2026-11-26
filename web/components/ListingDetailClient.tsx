@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { resolveClientVideoSrc } from "@/lib/r2-media-client";
 import {
   AlertTriangle,
   Archive,
@@ -1181,7 +1182,10 @@ export function ListingDetailClient({
                     <div className="overflow-hidden rounded-xl border border-slate-700/80 bg-black aspect-[9/16] max-h-[420px] mx-auto flex items-center justify-center">
                       <video
                         key={selectedRender.id}
-                        src={selectedRender.video_cdn_url}
+                        src={
+                          resolveClientVideoSrc(selectedRender) ??
+                          selectedRender.video_cdn_url
+                        }
                         controls
                         playsInline
                         preload="metadata"
