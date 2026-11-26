@@ -85,11 +85,40 @@ class TestSupabaseRepo(unittest.TestCase):
         self.assertIsNotNone(saved)
         args, kwargs = self.mock_session.post.call_args
         self.assertIn("/rest/v1/listings", args[0])
-        self.assertEqual(kwargs["params"]["on_conflict"], "bina_id")
+        self.assertNotIn("params", kwargs)
         sent = kwargs["json"][0]
         self.assertEqual(sent["owner_phone_normalized"], "+994509998877")
         self.assertEqual(sent["price_azn_normalized"], 170000.0)
         self.assertEqual(sent["district_normalized"], "Nərimanov")
+
+    def test_upsert_listing_handles_409_partial_index_conflict_with_patch(self):
+        post_resp = MagicMock()
+        post_resp.status_code = 409
+        patch_resp = MagicMock()
+        patch_resp.status_code = 200
+        patch_resp.json.return_value = [{"id": "uuid-existing", "bina_id": "5616503"}]
+        self.mock_session.post.return_value = post_resp
+        self.mock_session.patch.return_value = patch_resp
+
+        saved = self.repo.upsert_listing({"bina_id": "5616503", "price": 150000, "currency": "AZN"})
+        self.assertEqual(saved["id"], "uuid-existing")
+        _, patch_kwargs = self.mock_session.patch.call_args
+        self.assertEqual(patch_kwargs["params"], {"bina_id": "eq.5616503"})
+
+    def test_enqueue_pipeline_job_uses_plain_post_and_handles_409_idempotently(self):
+        resp_409 = MagicMock()
+        resp_409.status_code = 409
+        self.mock_session.post.return_value = resp_409
+
+        result = self.repo.enqueue_pipeline_job(
+            idempotency_key="initial:6588580",
+            job_type="RENDER_INITIAL",
+            listing_id="uuid-1",
+            params_json={"bina_id": "6588580"},
+        )
+        self.assertIsNone(result)
+        _, kwargs = self.mock_session.post.call_args
+        self.assertNotIn("params", kwargs)
 
     def test_update_listing_blocks_accidental_phone_clear(self):
         resp = MagicMock()

@@ -493,7 +493,8 @@ class SupabaseRepo:
         existing: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Upserts a canonical listing into public.listings on bina_id conflict,
+        Upserts a canonical listing into public.listings without ON CONFLICT
+        (compatible with partial unique index uq_listings_agency_bina_id),
         strictly preserving any non-empty owner_phone_normalized.
         Returns the saved row dict or None on failure/disabled.
         """
@@ -503,16 +504,53 @@ class SupabaseRepo:
 
         payload = self.build_listing_upsert_payload(listing, existing=existing)
         try:
+            existing_id = str((existing or {}).get("id") or "").strip()
+            if existing_id:
+                resp = self.session.patch(
+                    self._rest_url("listings"),
+                    headers=self._headers(prefer="return=representation"),
+                    params={"id": f"eq.{existing_id}"},
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if resp.status_code in (200, 201, 204):
+                    rows = resp.json() if resp.status_code != 204 else []
+                    return rows[0] if rows else payload
+                logger.error(
+                    "upsert_listing PATCH failed for bina_id=%s (%s): %s",
+                    payload["bina_id"],
+                    resp.status_code,
+                    resp.text[:300],
+                )
+                return None
+
             resp = self.session.post(
                 self._rest_url("listings"),
-                headers=self._headers(prefer="resolution=merge-duplicates,return=representation"),
-                params={"on_conflict": "bina_id"},
+                headers=self._headers(prefer="return=representation"),
                 json=[payload],
                 timeout=self.timeout,
             )
             if resp.status_code in (200, 201):
                 rows = resp.json() or []
                 return rows[0] if rows else payload
+            if resp.status_code == 409:
+                patch_resp = self.session.patch(
+                    self._rest_url("listings"),
+                    headers=self._headers(prefer="return=representation"),
+                    params={"bina_id": f"eq.{payload['bina_id']}"},
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if patch_resp.status_code in (200, 201, 204):
+                    rows = patch_resp.json() if patch_resp.status_code != 204 else []
+                    return rows[0] if rows else payload
+                logger.error(
+                    "upsert_listing 409->PATCH fallback failed for bina_id=%s (%s): %s",
+                    payload["bina_id"],
+                    patch_resp.status_code,
+                    patch_resp.text[:300],
+                )
+                return None
             logger.error(
                 "upsert_listing failed for bina_id=%s (%s): %s",
                 payload["bina_id"],
@@ -1670,14 +1708,20 @@ class SupabaseRepo:
         try:
             resp = self.session.post(
                 self._rest_url("pipeline_jobs"),
-                headers=self._headers(prefer="resolution=ignore-duplicates,return=representation"),
-                params={"on_conflict": "idempotency_key"},
+                headers=self._headers(prefer="return=representation"),
                 json=[payload],
                 timeout=self.timeout,
             )
             if resp.status_code in (200, 201):
                 rows = resp.json() or []
                 return rows[0] if rows else None
+            if resp.status_code == 409:
+                logger.info(
+                    "enqueue_pipeline_job idempotent duplicate skipped (key=%s, type=%s)",
+                    payload["idempotency_key"],
+                    job_type,
+                )
+                return None
             logger.error("enqueue_pipeline_job failed (%s): %s", resp.status_code, resp.text[:300])
         except Exception as exc:
             logger.error("Exception in enqueue_pipeline_job: %s", exc)
