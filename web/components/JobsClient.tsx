@@ -451,7 +451,7 @@ export function JobsClient({
         type: "ok",
         text:
           jobType === "SCRAPE_NEW"
-            ? "bina.az-dan yeni elanların yığımı növbəyə salındı (avtomatik video yaradılmır — özünüz seçəcəksiniz)."
+            ? "İş növbəyə salındı: əvvəlcə videosuz elanların videosu yığılır, yeni yığım yalnız özəl fürsətləri saxlayır."
             : "Elanların bina.az-da aktivlik yoxlaması növbəyə salındı.",
       });
     } catch (err) {
@@ -483,7 +483,7 @@ export function JobsClient({
             disabled={busyId !== null}
             onClick={() => enqueueUtilityJob("SCRAPE_NEW")}
             className="exec-btn-primary text-xs"
-            title="bina.az-dan yalnız yeni elanları bazaya çəkir (avtomatik video yaratmır)"
+            title="Əvvəlcə videosuz elanların videosunu yığır, özəl fürsət varsa yeni elanı bazaya saxlayır"
           >
             <Play className="h-3.5 w-3.5" />
             <span>bina.az-dan Elan Yığ</span>
