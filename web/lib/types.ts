@@ -109,6 +109,11 @@ export interface AgencyMember {
   email?: string | null;
 }
 
+export interface SocialChannelProfile {
+  handle?: string;
+  url?: string;
+}
+
 export interface AgencySettings {
   agency_id: string;
   public_phone: string;
@@ -117,6 +122,7 @@ export interface AgencySettings {
     luxury_min_azn: number;
     affordable_max_azn: number;
     viral_drop_pct: number;
+    channels?: Partial<Record<ChannelNiche, SocialChannelProfile>>;
     [key: string]: unknown;
   };
   social_api_mode: "OFFICIAL" | "TELEGRAM_FALLBACK";

@@ -13,7 +13,24 @@ import {
   Users,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import type { AgencyMember, AgencyRole, AgencySettings } from "@/lib/types";
+import type {
+  AgencyMember,
+  AgencyRole,
+  AgencySettings,
+  ChannelNiche,
+  SocialChannelProfile,
+} from "@/lib/types";
+
+const CHANNEL_SLOTS: Array<{
+  niche: ChannelNiche;
+  label: string;
+  defaultHandle: string;
+}> = [
+  { niche: "LUXURY", label: "Lüks", defaultHandle: "@bakuestate.premium" },
+  { niche: "AFFORDABLE", label: "Sərfəli", defaultHandle: "@baku.serfeli.evler" },
+  { niche: "GENERAL", label: "Ümumi", defaultHandle: "@bakuestate.official" },
+  { niche: "TIKTOK", label: "TikTok / Viral", defaultHandle: "@baku_emlak_ai" },
+];
 
 interface SettingsClientProps {
   initialSettings: AgencySettings;
@@ -63,6 +80,22 @@ export function SettingsClient({
   const [viralDropPct, setViralDropPct] = useState(
     String(initialSettings.niche_rules_json?.viral_drop_pct ?? 10)
   );
+  const [channelProfiles, setChannelProfiles] = useState<
+    Record<ChannelNiche, { handle: string; url: string }>
+  >(() => {
+    const raw = (initialSettings.niche_rules_json?.channels ?? {}) as Partial<
+      Record<ChannelNiche, SocialChannelProfile>
+    >;
+    return {
+      LUXURY: { handle: raw.LUXURY?.handle ?? "", url: raw.LUXURY?.url ?? "" },
+      AFFORDABLE: {
+        handle: raw.AFFORDABLE?.handle ?? "",
+        url: raw.AFFORDABLE?.url ?? "",
+      },
+      GENERAL: { handle: raw.GENERAL?.handle ?? "", url: raw.GENERAL?.url ?? "" },
+      TIKTOK: { handle: raw.TIKTOK?.handle ?? "", url: raw.TIKTOK?.url ?? "" },
+    };
+  });
 
   const [watermarkText, setWatermarkText] = useState(
     String(
@@ -107,6 +140,21 @@ export function SettingsClient({
           luxury_min_azn: Number(luxuryMinAzn) || 250000,
           affordable_max_azn: Number(affordableMaxAzn) || 120000,
           viral_drop_pct: Number(viralDropPct) || 10,
+          channels: Object.fromEntries(
+            (Object.keys(channelProfiles) as ChannelNiche[])
+              .map((k) => {
+                const h = channelProfiles[k].handle.trim();
+                const u = channelProfiles[k].url.trim();
+                return [
+                  k,
+                  {
+                    ...(h ? { handle: h } : {}),
+                    ...(u ? { url: u } : {}),
+                  },
+                ] as const;
+              })
+              .filter(([, v]) => Boolean(v.handle || v.url))
+          ),
         },
         watermark_preset_json: {
           ...(initialSettings.watermark_preset_json ?? {}),
@@ -368,6 +416,82 @@ export function SettingsClient({
                 className="exec-input text-xs"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Optional Social Channel Handles & URLs */}
+        <div className="rounded-xl border border-slate-800/80 bg-obsidian-950/60 p-4 space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-gold-300">
+              Sosial Kanal Adları &amp; Linkləri (İstəyə bağlı)
+            </p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              Hesabları açanda adını və ya linkini bura yazın — boş qoysanız standart etiketlər qalacaq və analitika normal işləyəcək.
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {CHANNEL_SLOTS.map((slot) => (
+              <div
+                key={slot.niche}
+                className="rounded-lg border border-slate-800/80 bg-obsidian-900/60 p-3 space-y-2"
+              >
+                <p className="text-xs font-semibold text-slate-200">
+                  {slot.label}{" "}
+                  <span className="text-[11px] font-normal text-slate-500">
+                    ({slot.niche})
+                  </span>
+                </p>
+                <div className="space-y-1">
+                  <label
+                    htmlFor={`channel-handle-${slot.niche}`}
+                    className="text-[11px] text-slate-400"
+                  >
+                    {slot.label} Hesab Adı
+                  </label>
+                  <input
+                    id={`channel-handle-${slot.niche}`}
+                    type="text"
+                    value={channelProfiles[slot.niche].handle}
+                    onChange={(e) =>
+                      setChannelProfiles((prev) => ({
+                        ...prev,
+                        [slot.niche]: {
+                          ...prev[slot.niche],
+                          handle: e.target.value,
+                        },
+                      }))
+                    }
+                    placeholder={slot.defaultHandle}
+                    className="exec-input text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label
+                    htmlFor={`channel-url-${slot.niche}`}
+                    className="text-[11px] text-slate-400"
+                  >
+                    {slot.label} Profil Linki
+                  </label>
+                  <input
+                    id={`channel-url-${slot.niche}`}
+                    type="url"
+                    value={channelProfiles[slot.niche].url}
+                    onChange={(e) =>
+                      setChannelProfiles((prev) => ({
+                        ...prev,
+                        [slot.niche]: {
+                          ...prev[slot.niche],
+                          url: e.target.value,
+                        },
+                      }))
+                    }
+                    placeholder="https://instagram.com/..."
+                    className="exec-input text-xs"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

@@ -49,7 +49,9 @@ import { JobsClient } from "@/components/JobsClient";
 import { DashboardClient, type DuplicatePair } from "@/components/DashboardClient";
 import { LeadsClient } from "@/components/LeadsClient";
 import { ListingsClient, type ListingWithLatestRender } from "@/components/ListingsClient";
+import { SettingsClient } from "@/components/SettingsClient";
 import type {
+  AgencySettings,
   FollowUpTask,
   Listing,
   PipelineJob,
@@ -395,5 +397,113 @@ describe("v2 Post-Cutover Bugfixes (YOL C TDD)", () => {
     const pushedUrl = String(mockPush.mock.calls[0][0]);
     expect(pushedUrl).toContain("tab=DRAFTS");
     expect(pushedUrl).not.toContain("niche=LUXURY");
+  });
+
+  it("6. ListingsClient uses serverTabCounts & serverNicheCounts (e.g. 28 drafts instead of page-local count)", () => {
+    const listing: ListingWithLatestRender = {
+      ...makeListing(),
+      latestRender: {
+        id: "r-1",
+        version_num: 1,
+        status: "COMPLETED",
+        video_cdn_url: "https://cdn.example.com/v1.mp4",
+      },
+      publication: null,
+    };
+
+    render(
+      <ListingsClient
+        initialListings={[listing]}
+        pagination={{
+          items: [listing],
+          totalCount: 40,
+          page: 1,
+          pageSize: 24,
+          hasNextPage: true,
+        }}
+        serverTabCounts={{ all: 40, drafts: 28, published: 3 }}
+        serverNicheCounts={{ all: 40, luxury: 19, affordable: 8, general: 13, tiktok: 0 }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Yayıma Hazır Qaralamalar\s*28/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Bütün Elanlar\s*40/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /@bakuestate\.premium\s*19/i })).not.toBeNull();
+  });
+
+  it("7. ListingsClient displays custom channelProfiles handles when set and falls back to defaults", () => {
+    const listing: ListingWithLatestRender = {
+      ...makeListing(),
+      latestRender: null,
+      publication: null,
+    };
+
+    render(
+      <ListingsClient
+        initialListings={[listing]}
+        channelProfiles={{
+          LUXURY: { handle: "@menim.luxury", url: "https://instagram.com/menim.luxury" },
+          GENERAL: { handle: "@menim.emlak" },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /@menim\.luxury/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /@menim\.emlak/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /@baku\.serfeli\.evler/i })).not.toBeNull();
+  });
+
+  it("8. SettingsClient loads and saves custom social channel handles & URLs in niche_rules_json.channels", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const initialSettings: AgencySettings = {
+      agency_id: "ag-1",
+      public_phone: "+994501234567",
+      telegram_chat_id: null,
+      niche_rules_json: {
+        luxury_min_azn: 250000,
+        affordable_max_azn: 120000,
+        viral_drop_pct: 10,
+        channels: {
+          LUXURY: { handle: "@my.vip", url: "https://instagram.com/my.vip" },
+        },
+      },
+      social_api_mode: "TELEGRAM_FALLBACK",
+      watermark_preset_json: { text: "BakuEstate.az", position: "bottom-right" },
+      monthly_ai_budget_usd: 50,
+      ai_rate_limit_rpm: 20,
+      updated_at: new Date().toISOString(),
+    };
+
+    render(
+      <SettingsClient
+        initialSettings={initialSettings}
+        initialMembers={[]}
+        currentUserId="u-1"
+      />
+    );
+
+    const luxHandle = screen.getByLabelText(/Lüks Hesab Adı/i) as HTMLInputElement;
+    const luxUrl = screen.getByLabelText(/Lüks Profil Linki/i) as HTMLInputElement;
+    expect(luxHandle.value).toBe("@my.vip");
+    expect(luxUrl.value).toBe("https://instagram.com/my.vip");
+
+    const affHandle = screen.getByLabelText(/Sərfəli Hesab Adı/i) as HTMLInputElement;
+    fireEvent.change(affHandle, { target: { value: "@serfeli.baku" } });
+    fireEvent.click(screen.getByRole("button", { name: /Ayarları Yadda Saxla/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/agency/settings",
+        expect.objectContaining({ method: "PATCH" })
+      );
+    });
+
+    const sentBody = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(sentBody.niche_rules_json.channels.AFFORDABLE.handle).toBe("@serfeli.baku");
+    expect(sentBody.niche_rules_json.channels.LUXURY.handle).toBe("@my.vip");
   });
 });

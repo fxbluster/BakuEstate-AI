@@ -43,6 +43,7 @@ interface NicheRulesInput {
   luxury_min_azn: number;
   affordable_max_azn: number;
   viral_drop_pct: number;
+  channels?: Partial<Record<ChannelNiche, { handle?: string; url?: string }>>;
 }
 
 function resolveCanonicalNicheForListing(
@@ -191,6 +192,56 @@ export async function PATCH(request: Request) {
       affordable_max_azn: affordableMax,
       viral_drop_pct: viralDropPct,
     };
+
+    if (
+      rawRules.channels !== undefined &&
+      rawRules.channels !== null &&
+      typeof rawRules.channels === "object" &&
+      !Array.isArray(rawRules.channels)
+    ) {
+      const rawChannels = rawRules.channels as Record<string, unknown>;
+      const sanitizedChannels: Partial<
+        Record<ChannelNiche, { handle?: string; url?: string }>
+      > = {};
+      const allowedNiches: ChannelNiche[] = [
+        "LUXURY",
+        "AFFORDABLE",
+        "GENERAL",
+        "TIKTOK",
+      ];
+      for (const nicheKey of allowedNiches) {
+        const entry = rawChannels[nicheKey];
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          continue;
+        }
+        const rec = entry as Record<string, unknown>;
+        const handle =
+          typeof rec.handle === "string" ? rec.handle.trim().slice(0, 80) : "";
+        const url =
+          typeof rec.url === "string" ? rec.url.trim().slice(0, 300) : "";
+
+        if (url && !/^https?:\/\//i.test(url)) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error: `${nicheKey} profil linki http:// və ya https:// ilə başlamalıdır.`,
+            },
+            { status: 400 }
+          );
+        }
+
+        if (handle || url) {
+          sanitizedChannels[nicheKey] = {
+            ...(handle ? { handle } : {}),
+            ...(url ? { url } : {}),
+          };
+        }
+      }
+      if (Object.keys(sanitizedChannels).length > 0) {
+        validatedNicheRules.channels = sanitizedChannels;
+      }
+    }
+
     patch.niche_rules_json = validatedNicheRules;
   }
 

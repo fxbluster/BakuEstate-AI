@@ -7,10 +7,12 @@ import {
   type ListingsFilterState,
 } from "@/components/ListingsClient";
 import type {
+  ChannelNiche,
   Listing,
   PaginatedResult,
   Publication,
   RenderStatus,
+  SocialChannelProfile,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -142,7 +144,55 @@ export default async function ListingsPage({
 
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
-  const listingsRes = await query.range(from, to);
+
+  let summaryQuery = supabase
+    .from("listings")
+    .select("canonical_niche, pipeline_status, editorial_status");
+  if (member?.agency_id) {
+    summaryQuery = summaryQuery.eq("agency_id", member.agency_id);
+  }
+
+  const [listingsRes, summaryRes, settingsRes] = await Promise.all([
+    query.range(from, to),
+    summaryQuery,
+    member?.agency_id
+      ? supabase
+          .from("agency_settings")
+          .select("niche_rules_json")
+          .eq("agency_id", member.agency_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  const summaryRows =
+    (summaryRes.data as Array<{
+      canonical_niche?: string | null;
+      pipeline_status?: string | null;
+      editorial_status?: string | null;
+    }> | null) ?? [];
+
+  const serverTabCounts = {
+    all: summaryRows.length,
+    drafts: summaryRows.filter((r) => r.pipeline_status === "DRAFT_READY").length,
+    published: summaryRows.filter((r) => r.editorial_status === "PUBLISHED").length,
+  };
+
+  const serverNicheCounts = {
+    all: summaryRows.length,
+    luxury: summaryRows.filter((r) => r.canonical_niche === "LUXURY").length,
+    affordable: summaryRows.filter((r) => r.canonical_niche === "AFFORDABLE").length,
+    general: summaryRows.filter((r) => r.canonical_niche === "GENERAL").length,
+    tiktok: summaryRows.filter((r) => r.canonical_niche === "TIKTOK").length,
+  };
+
+  const rawChannels = (
+    settingsRes.data?.niche_rules_json as
+      | { channels?: Partial<Record<ChannelNiche, SocialChannelProfile>> }
+      | null
+      | undefined
+  )?.channels;
+  const channelProfiles: Partial<Record<ChannelNiche, SocialChannelProfile>> =
+    rawChannels && typeof rawChannels === "object" ? rawChannels : {};
 
   const pageListings = (listingsRes.data as Listing[] | null) ?? [];
   const totalCount = listingsRes.count ?? pageListings.length;
@@ -254,6 +304,9 @@ export default async function ListingsPage({
       pagination={pagination}
       initialFilters={initialFilters}
       memberRole={member?.role ?? "BROKER"}
+      serverTabCounts={serverTabCounts}
+      serverNicheCounts={serverNicheCounts}
+      channelProfiles={channelProfiles}
     />
   );
 }

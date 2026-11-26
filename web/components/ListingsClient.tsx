@@ -49,6 +49,7 @@ import type {
   Publication,
   PublicationChannel,
   RenderStatus,
+  SocialChannelProfile,
   SourceAvailability,
 } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
@@ -83,11 +84,28 @@ export interface ListingsFilterState {
   sort?: string;
 }
 
+export interface ListingsServerTabCounts {
+  all: number;
+  drafts: number;
+  published: number;
+}
+
+export interface ListingsServerNicheCounts {
+  all: number;
+  luxury: number;
+  affordable: number;
+  general: number;
+  tiktok: number;
+}
+
 interface ListingsClientProps {
   initialListings: ListingWithLatestRender[];
   pagination?: PaginatedResult<ListingWithLatestRender>;
   initialFilters?: ListingsFilterState;
   memberRole?: AgencyRole;
+  serverTabCounts?: ListingsServerTabCounts;
+  serverNicheCounts?: ListingsServerNicheCounts;
+  channelProfiles?: Partial<Record<ChannelNiche, SocialChannelProfile>>;
 }
 
 export function escapePostgrestSearch(input: string): string {
@@ -143,6 +161,9 @@ export function ListingsClient({
   pagination,
   initialFilters,
   memberRole = "BROKER",
+  serverTabCounts,
+  serverNicheCounts,
+  channelProfiles,
 }: ListingsClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -255,6 +276,9 @@ export function ListingsClient({
   }
 
   const counts = useMemo(() => {
+    if (serverTabCounts) {
+      return serverTabCounts;
+    }
     let drafts = 0;
     let published = 0;
     for (const item of listings) {
@@ -274,9 +298,12 @@ export function ListingsClient({
       drafts,
       published,
     };
-  }, [listings, isServerPaginated, totalCount]);
+  }, [listings, isServerPaginated, totalCount, serverTabCounts]);
 
   const nicheCounts = useMemo(() => {
+    if (serverNicheCounts) {
+      return serverNicheCounts;
+    }
     let luxury = 0;
     let affordable = 0;
     let general = 0;
@@ -297,7 +324,7 @@ export function ListingsClient({
       general,
       tiktok,
     };
-  }, [listings, isServerPaginated, totalCount]);
+  }, [listings, isServerPaginated, totalCount, serverNicheCounts]);
 
   const filtered = useMemo(() => {
     if (isServerPaginated) {
@@ -784,7 +811,7 @@ export function ListingsClient({
             },
             {
               id: "LUXURY",
-              label: "💎 @bakuestate.premium",
+              label: `💎 ${channelProfiles?.LUXURY?.handle?.trim() || "@bakuestate.premium"}`,
               count: nicheCounts.luxury,
               activeCls:
                 "bg-amber-500/20 text-amber-300 border border-amber-400/50 shadow-sm",
@@ -792,7 +819,7 @@ export function ListingsClient({
             },
             {
               id: "AFFORDABLE",
-              label: "🏠 @baku.serfeli.evler",
+              label: `🏠 ${channelProfiles?.AFFORDABLE?.handle?.trim() || "@baku.serfeli.evler"}`,
               count: nicheCounts.affordable,
               activeCls:
                 "bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-sm",
@@ -800,7 +827,7 @@ export function ListingsClient({
             },
             {
               id: "GENERAL",
-              label: "🏢 @bakuestate.official",
+              label: `🏢 ${channelProfiles?.GENERAL?.handle?.trim() || "@bakuestate.official"}`,
               count: nicheCounts.general,
               activeCls:
                 "bg-sky-500/20 text-sky-300 border border-sky-400/50 shadow-sm",
@@ -808,7 +835,7 @@ export function ListingsClient({
             },
             {
               id: "TIKTOK",
-              label: "🔥 @baku_emlak_ai",
+              label: `🔥 ${channelProfiles?.TIKTOK?.handle?.trim() || "@baku_emlak_ai"}`,
               count: nicheCounts.tiktok,
               activeCls:
                 "bg-rose-500/20 text-rose-300 border border-rose-400/50 shadow-sm",
