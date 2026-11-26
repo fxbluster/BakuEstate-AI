@@ -145,6 +145,33 @@ class TestMotionEngine(unittest.TestCase):
         self.assertEqual(len(res["transitions"]), 2)
         self.assertGreater(len(res["transitions"]), 0)
 
+    def test_high_slide_count_pairwise_xfade_walkthrough(self):
+        """Tests N>=4 pairwise sequential xfade stitching to bound FFmpeg memory in containers."""
+        from PIL import Image
+
+        extra_images = list(self.test_images)
+        for idx in range(2):
+            img_p = self.temp_dir / f"extra_img_{idx}.jpg"
+            Image.new("RGB", (640, 480), color=(120 + idx * 40, 180, 90)).save(img_p, "JPEG")
+            extra_images.append(img_p)
+
+        out_vid = self.temp_dir / "five_slide_pairwise.mp4"
+        res = render_cinematic_walkthrough(
+            image_paths=extra_images,
+            output_path=out_vid,
+            total_duration=6.0,
+            archetype=PropertyArchetype.LUXURY,
+            framing_mode="cinematic_fill",
+            fps=12,
+            width=360,
+            height=640,
+        )
+        self.assertTrue(out_vid.exists())
+        self.assertGreater(out_vid.stat().st_size, 5000)
+        self.assertEqual(res["clip_count"], 5)
+        self.assertEqual(len(res["transitions"]), 4)
+        self.assertTrue(res.get("pairwise_stitch"))
+
 
 if __name__ == "__main__":
     unittest.main()

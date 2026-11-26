@@ -361,7 +361,7 @@ class TestSupabaseRepo(unittest.TestCase):
         self.assertEqual(len(created), 2)
 
         # Verify query joined lead_listings with open buyer_leads
-        get_args, get_kwargs = self.mock_session.get.call_args
+        get_args, get_kwargs = self.mock_session.get.call_args_list[0]
         self.assertTrue(get_args[0].endswith("/rest/v1/lead_listings"))
         self.assertEqual(get_kwargs["params"]["listing_id"], "eq.uuid-listing-1")
         self.assertEqual(
@@ -519,6 +519,48 @@ class TestSupabaseRepo(unittest.TestCase):
         self.assertEqual(patch_kwargs["params"]["id"], f"eq.{card_uuid}")
         self.assertEqual(patch_kwargs["json"]["status"], "EXECUTED")
         self.assertIn("acted_at", patch_kwargs["json"])
+
+    def test_create_render_version_publication_and_events_inject_default_agency_id(self):
+        ag_resp = MagicMock()
+        ag_resp.status_code = 200
+        ag_resp.json.return_value = [{"id": "ag-default-uuid"}]
+        empty_pub_resp = MagicMock()
+        empty_pub_resp.status_code = 200
+        empty_pub_resp.json.return_value = []
+        self.mock_session.get.side_effect = [ag_resp, empty_pub_resp]
+
+        post_resp = MagicMock()
+        post_resp.status_code = 201
+        post_resp.json.return_value = [{"id": "row-uuid-1"}]
+        self.mock_session.post.return_value = post_resp
+
+        rv = self.repo.create_render_version(
+            listing_id="list-uuid-1",
+            version_num=1,
+            status="COMPLETED",
+            video_cdn_url="https://cdn.example.com/v1.mp4",
+        )
+        self.assertIsNotNone(rv)
+        rv_payload = self.mock_session.post.call_args_list[0][1]["json"]
+        self.assertEqual(rv_payload["agency_id"], "ag-default-uuid")
+
+        pub = self.repo.create_or_update_publication(
+            listing_id="list-uuid-1",
+            status="DRAFT_READY",
+            render_version_id="row-uuid-1",
+        )
+        self.assertIsNotNone(pub)
+        pub_payload = self.mock_session.post.call_args_list[1][1]["json"][0]
+        self.assertEqual(pub_payload["agency_id"], "ag-default-uuid")
+
+        ev = self.repo.insert_listing_event(
+            listing_id="list-uuid-1",
+            event_type="SCRAPED_NEW",
+            new_value={"price": 100000},
+        )
+        self.assertIsNotNone(ev)
+        ev_payload = self.mock_session.post.call_args_list[2][1]["json"][0]
+        self.assertEqual(ev_payload["agency_id"], "ag-default-uuid")
 
 
 if __name__ == "__main__":

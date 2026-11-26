@@ -330,6 +330,7 @@ class MotionEngine:
 
         cmd = [
             self.ffmpeg_exe, "-y",
+            "-threads", "2",
             "-loop", "1",
             "-i", str(image_path),
             "-filter_complex", filter_graph,
@@ -436,53 +437,66 @@ class MotionEngine:
                 )
                 clip_paths.append(clip_p)
 
-            # 2. Build xfade filtergraph chain
-            filter_parts: List[str] = []
+            # 2. Stitch motion clips with xfade (pairwise when N >= 4 to avoid OOM)
             transition_markers: List[Dict[str, Any]] = []
-            curr_v = "[0:v]"
-            curr_offset = 0.0
+            use_pairwise = N >= 4
 
-            for i in range(N - 1):
-                curr_offset += slide_duration - trans_duration
-                next_v = f"[{i+1}:v]"
-                out_v = f"v_out{i+1}" if i < N - 2 else "final_v"
-                t_type = trans_list[i % len(trans_list)]
-
-                filter_parts.append(
-                    f"{curr_v}{next_v}xfade=transition={t_type}:duration={trans_duration}:offset={curr_offset:.3f}[{out_v}]"
+            if use_pairwise:
+                transition_markers = self._run_pairwise_xfade_stitch(
+                    clip_paths=clip_paths,
+                    out_path=out_path,
+                    temp_dir=temp_dir,
+                    slide_duration=slide_duration,
+                    trans_duration=trans_duration,
+                    trans_list=trans_list,
+                    total_duration=total_duration,
+                    fps=fps,
                 )
-                curr_v = f"[{out_v}]"
+            else:
+                filter_parts: List[str] = []
+                curr_v = "[0:v]"
+                curr_offset = 0.0
 
-                transition_markers.append({
-                    "transition_index": i,
-                    "type": t_type,
-                    "timestamp": round(curr_offset, 3),
-                    "duration": trans_duration
-                })
+                for i in range(N - 1):
+                    curr_offset += slide_duration - trans_duration
+                    next_v = f"[{i+1}:v]"
+                    out_v = f"v_out{i+1}" if i < N - 2 else "final_v"
+                    t_type = trans_list[i % len(trans_list)]
 
-            xfade_filter_str = ";".join(filter_parts)
+                    filter_parts.append(
+                        f"{curr_v}{next_v}xfade=transition={t_type}:duration={trans_duration}:offset={curr_offset:.3f}[{out_v}]"
+                    )
+                    curr_v = f"[{out_v}]"
 
-            # 3. Execute final FFmpeg concatenation
-            cmd = [self.ffmpeg_exe, "-y"]
-            for cp in clip_paths:
-                cmd.extend(["-i", str(cp)])
+                    transition_markers.append({
+                        "transition_index": i,
+                        "type": t_type,
+                        "timestamp": round(curr_offset, 3),
+                        "duration": trans_duration
+                    })
 
-            cmd.extend([
-                "-filter_complex", xfade_filter_str,
-                "-map", "[final_v]",
-                "-t", str(total_duration),
-                "-r", str(fps),
-                "-c:v", "libx264",
-                "-preset", "faster",
-                "-pix_fmt", "yuv420p",
-                str(out_path)
-            ])
+                xfade_filter_str = ";".join(filter_parts)
 
-            logger.info(f"Stitching {N} motion clips with xfade -> {out_path}...")
-            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            if res.returncode != 0:
-                logger.error(f"FFmpeg xfade stitching failed: {res.stderr[-500:]}")
-                raise RuntimeError(f"FFmpeg xfade stitching failed: {res.stderr[-300:]}")
+                cmd = [self.ffmpeg_exe, "-y", "-threads", "2"]
+                for cp in clip_paths:
+                    cmd.extend(["-i", str(cp)])
+
+                cmd.extend([
+                    "-filter_complex", xfade_filter_str,
+                    "-map", "[final_v]",
+                    "-t", str(total_duration),
+                    "-r", str(fps),
+                    "-c:v", "libx264",
+                    "-preset", "faster",
+                    "-pix_fmt", "yuv420p",
+                    str(out_path)
+                ])
+
+                logger.info(f"Stitching {N} motion clips with xfade -> {out_path}...")
+                res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                if res.returncode != 0:
+                    logger.error(f"FFmpeg xfade stitching failed: {res.stderr[-500:]}")
+                    raise RuntimeError(f"FFmpeg xfade stitching failed: {res.stderr[-300:]}")
 
             logger.info(f"Walkthrough rendered successfully: {out_path} ({out_path.stat().st_size} bytes)")
             return {
@@ -493,11 +507,79 @@ class MotionEngine:
                 "transition_duration": trans_duration,
                 "transitions": transition_markers,
                 "archetype": archetype,
-                "framing_mode": actual_framing
+                "framing_mode": actual_framing,
+                "pairwise_stitch": use_pairwise,
             }
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _run_pairwise_xfade_stitch(
+        self,
+        *,
+        clip_paths: List[Path],
+        out_path: Path,
+        temp_dir: Path,
+        slide_duration: float,
+        trans_duration: float,
+        trans_list: List[str],
+        total_duration: float,
+        fps: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Stitches N motion clips two inputs at a time so FFmpeg decodes at most 2 streams
+        concurrently, preventing container OOM kills on 8-10 photo listings.
+        """
+        n_clips = len(clip_paths)
+        transition_markers: List[Dict[str, Any]] = []
+        acc_path = clip_paths[0]
+        curr_offset = 0.0
+
+        logger.info(f"Pairwise stitching {n_clips} motion clips with bounded memory -> {out_path}...")
+        for i in range(n_clips - 1):
+            curr_offset += slide_duration - trans_duration
+            t_type = trans_list[i % len(trans_list)]
+            is_last = i == (n_clips - 2)
+            stage_out = out_path if is_last else (temp_dir / f"stage_{i:02d}.mp4")
+
+            filter_str = (
+                f"[0:v][1:v]xfade=transition={t_type}:duration={trans_duration}:offset={curr_offset:.3f}[v_out]"
+            )
+            cmd = [
+                self.ffmpeg_exe, "-y",
+                "-threads", "2",
+                "-i", str(acc_path),
+                "-i", str(clip_paths[i + 1]),
+                "-filter_complex", filter_str,
+                "-map", "[v_out]",
+            ]
+            if is_last:
+                cmd.extend(["-t", str(total_duration)])
+            cmd.extend([
+                "-r", str(fps),
+                "-c:v", "libx264",
+                "-preset", "faster" if is_last else "ultrafast",
+                "-pix_fmt", "yuv420p",
+                str(stage_out),
+            ])
+
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if res.returncode != 0:
+                logger.error(f"FFmpeg pairwise xfade step {i} failed: {res.stderr[-500:]}")
+                raise RuntimeError(f"FFmpeg xfade stitching failed: {res.stderr[-300:]}")
+
+            if i > 0 and acc_path.exists():
+                acc_path.unlink(missing_ok=True)
+            acc_path = stage_out
+
+            transition_markers.append({
+                "transition_index": i,
+                "type": t_type,
+                "timestamp": round(curr_offset, 3),
+                "duration": trans_duration,
+            })
+
+        return transition_markers
 
 
 def render_cinematic_walkthrough(

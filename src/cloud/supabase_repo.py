@@ -184,11 +184,13 @@ class SupabaseRepo:
         self._default_agency_id: Optional[str] = (
             os.getenv("DEFAULT_AGENCY_ID") or ""
         ).strip() or None
+        self._agency_lookup_attempted: bool = bool(self._default_agency_id)
 
     def get_default_agency_id(self) -> Optional[str]:
         """Resolves and caches the primary agency UUID for background worker inserts."""
-        if self._default_agency_id:
+        if self._default_agency_id or self._agency_lookup_attempted:
             return self._default_agency_id
+        self._agency_lookup_attempted = True
         if not self.enabled:
             return None
         try:
@@ -212,6 +214,18 @@ class SupabaseRepo:
         except Exception as exc:
             logger.debug("get_default_agency_id lookup skipped: %s", exc)
         return None
+
+    def _with_agency_id(
+        self,
+        payload: Dict[str, Any],
+        agency_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Ensures NOT NULL agency_id is populated before inserting into tenant-scoped v2 tables."""
+        if not payload.get("agency_id"):
+            resolved = (str(agency_id or "").strip()) or self.get_default_agency_id()
+            if resolved:
+                payload["agency_id"] = resolved
+        return payload
 
     def should_use_r2_storage(self, storage_provider: Optional[str] = None) -> bool:
         """
@@ -730,7 +744,7 @@ class SupabaseRepo:
         if not self.enabled or not listing_id or not event_type:
             return None
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "listing_id": listing_id,
             "event_type": event_type,
             "old_value_json": old_value,
@@ -738,7 +752,7 @@ class SupabaseRepo:
             "price_delta_pct": price_delta_pct,
             "triggered_job_id": triggered_job_id,
             "actor": actor,
-        }
+        })
         try:
             resp = self.session.post(
                 self._rest_url("listing_events"),
@@ -765,7 +779,7 @@ class SupabaseRepo:
 
         rows_to_insert = []
         for ev in events:
-            rows_to_insert.append({
+            rows_to_insert.append(self._with_agency_id({
                 "listing_id": listing_id,
                 "event_type": ev["event_type"],
                 "old_value_json": ev.get("old_value_json"),
@@ -773,7 +787,7 @@ class SupabaseRepo:
                 "price_delta_pct": ev.get("price_delta_pct"),
                 "triggered_job_id": ev.get("triggered_job_id"),
                 "actor": ev.get("actor", "scraper"),
-            })
+            }))
 
         try:
             resp = self.session.post(
@@ -879,7 +893,7 @@ class SupabaseRepo:
         if not self.enabled or not listing_id:
             return None
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "listing_id": listing_id,
             "version_num": max(1, int(version_num)),
             "content_revision": max(1, int(content_revision)),
@@ -895,7 +909,7 @@ class SupabaseRepo:
             "duration_seconds": duration_seconds,
             "status": status,
             "telegram_message_id": str(telegram_message_id) if telegram_message_id else None,
-        }
+        })
         if storage_provider is not None:
             norm_prov = str(storage_provider).strip().lower()
             if norm_prov in ("supabase", "r2"):
@@ -1006,7 +1020,7 @@ class SupabaseRepo:
         if not self.enabled or not entity_type or not title:
             return None
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "entity_type": entity_type,
             "lead_id": lead_id,
             "listing_id": listing_id,
@@ -1014,7 +1028,7 @@ class SupabaseRepo:
             "due_at": due_at or _utc_now_iso(),
             "priority": priority,
             "status": "OPEN",
-        }
+        })
         try:
             resp = self.session.post(
                 self._rest_url("follow_up_tasks"),
@@ -1244,7 +1258,7 @@ class SupabaseRepo:
             return None
 
         # Create new publication row
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "listing_id": clean_listing_id,
             "channel": clean_channel,
             "target_account_handle": (
@@ -1268,7 +1282,7 @@ class SupabaseRepo:
             "caption_used": caption_used,
             "notes": notes,
             "external_post_id": external_post_id,
-        }
+        })
         if clean_status == "PUBLISHED":
             from datetime import timedelta
             payload["published_at"] = published_at or _utc_now_iso()
@@ -1374,7 +1388,7 @@ class SupabaseRepo:
             clean_bina_id = 0
 
         clean_result = str(result).strip().upper()
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "listing_id": clean_listing_id,
             "bina_id": clean_bina_id,
             "result": clean_result,
@@ -1383,7 +1397,7 @@ class SupabaseRepo:
             "price_delta_pct": float(price_delta_pct) if price_delta_pct is not None else None,
             "response_time_ms": int(response_time_ms) if response_time_ms is not None else None,
             "checked_at": _utc_now_iso(),
-        }
+        })
 
         try:
             resp = self.session.post(
@@ -1505,7 +1519,7 @@ class SupabaseRepo:
         if not self.enabled or not publication_id or not phase:
             return None
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "publication_id": str(publication_id).strip(),
             "snapshot_phase": str(phase).strip(),
             "views_count": max(0, int(views)),
@@ -1513,7 +1527,7 @@ class SupabaseRepo:
             "comments_count": max(0, int(comments)),
             "ner_score": float(ner_score) if ner_score is not None else None,
             "captured_at": _utc_now_iso(),
-        }
+        })
         try:
             resp = self.session.post(
                 self._rest_url("publication_telemetry_snapshots"),
@@ -1550,7 +1564,7 @@ class SupabaseRepo:
         if not self.enabled or not publication_id or not platform_comment_id:
             return None
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "publication_id": str(publication_id).strip(),
             "platform_comment_id": str(platform_comment_id).strip(),
             "author_handle": str(author_handle).strip(),
@@ -1561,7 +1575,7 @@ class SupabaseRepo:
             "intent_confidence": float(intent_confidence) if intent_confidence is not None else None,
             "suggested_reply": suggested_reply,
             "buyer_lead_id": str(buyer_lead_id).strip() if buyer_lead_id else None,
-        }
+        })
         try:
             resp = self.session.post(
                 self._rest_url("social_comments"),
@@ -1627,13 +1641,13 @@ class SupabaseRepo:
             logger.error("Exception checking existing buyer lead for %s: %s", clean_handle, exc)
 
         if not lead_id:
-            lead_payload = {
+            lead_payload = self._with_agency_id({
                 "client_name": clean_handle,
                 "social_handle": clean_handle,
                 "source_channel": channel,
                 "stage": "NEW_INQUIRY",
                 "notes": f"Sosial şəbəkə sorğusu ({channel}): {suggested_reply}" if suggested_reply else None,
-            }
+            })
             try:
                 resp = self.session.post(
                     self._rest_url("buyer_leads"),
@@ -1654,12 +1668,12 @@ class SupabaseRepo:
 
         # Link lead_listings
         if clean_listing_id and lead_id:
-            link_payload = {
+            link_payload = self._with_agency_id({
                 "lead_id": str(lead_id).strip(),
                 "listing_id": clean_listing_id,
                 "relation": "INQUIRED",
                 "notes": suggested_reply,
-            }
+            })
             try:
                 self.session.post(
                     self._rest_url("lead_listings"),
@@ -2262,12 +2276,12 @@ class SupabaseRepo:
                 else:
                     payload_metadata.setdefault("raw_listing_id", s_list)
 
-        payload: Dict[str, Any] = {
+        payload: Dict[str, Any] = self._with_agency_id({
             "actor": clean_actor,
             "event_type": clean_event_type,
             "summary": clean_summary,
             "metadata": payload_metadata,
-        }
+        })
         if resolved_lead_id:
             payload["lead_id"] = resolved_lead_id
         if resolved_listing_id:
@@ -2343,6 +2357,8 @@ class SupabaseRepo:
             env_agency = os.getenv("DEFAULT_AGENCY_ID") or os.getenv("AGENCY_ID")
             if env_agency and _is_valid_uuid(env_agency):
                 resolved_agency_id = env_agency.strip()
+            else:
+                resolved_agency_id = self.get_default_agency_id()
 
         # Resolve assigned_agent_id
         candidate_agent = assigned_agent_id or owner_id or self.get_default_operator_uid()
