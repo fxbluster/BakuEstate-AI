@@ -41,6 +41,10 @@ interface JobsClientProps {
   initialWorkers: WorkerStatusRow[];
   initialTab?: JobsCenterTab;
   agencyId?: string | null;
+  totalCount?: number;
+  page?: number;
+  pageSize?: number;
+  initialStatusCounts?: Record<string, number>;
 }
 
 type ExtendedJobStatus = JobStatus | "CANCELLED";
@@ -99,10 +103,21 @@ export function JobsClient({
   initialWorkers,
   initialTab = "jobs",
   agencyId,
+  totalCount,
+  page,
+  pageSize,
+  initialStatusCounts,
 }: JobsClientProps) {
   const [activeTab, setActiveTab] = useState<JobsCenterTab>(initialTab);
   const [jobs, setJobs] = useState<PipelineJob[]>(initialJobs);
   const [workers, setWorkers] = useState<WorkerStatusRow[]>(initialWorkers);
+  const [totalJobsCount, setTotalJobsCount] = useState<number>(
+    totalCount ?? initialJobs.length
+  );
+  const [serverStatusCounts, setServerStatusCounts] = useState<Record<
+    string,
+    number
+  > | null>(initialStatusCounts ?? null);
   const [statusFilter, setStatusFilter] = useState<ExtendedJobStatus | "ALL">("ALL");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRealtimeSubscribed, setIsRealtimeSubscribed] = useState(false);
@@ -115,29 +130,61 @@ export function JobsClient({
   } | null>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  useEffect(() => {
+    setJobs(initialJobs);
+  }, [initialJobs]);
+
+  useEffect(() => {
+    if (typeof totalCount === "number") {
+      setTotalJobsCount(totalCount);
+    }
+  }, [totalCount]);
+
+  useEffect(() => {
+    if (initialStatusCounts) {
+      setServerStatusCounts(initialStatusCounts);
+    }
+  }, [initialStatusCounts]);
+
   const fetchAll = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
     setRefreshing(true);
     try {
       const supabase = createClient();
+      const orderedJobsQuery = supabase
+        .from("pipeline_jobs")
+        .select("*, listings(id, bina_id, title)", {
+          count: page && pageSize ? "exact" : undefined,
+        })
+        .order("created_at", { ascending: false });
+
+      const jobsRequest =
+        page && pageSize
+          ? orderedJobsQuery.range((page - 1) * pageSize, page * pageSize - 1)
+          : orderedJobsQuery.limit(100);
+
       const [jRes, wRes] = await Promise.all([
-        supabase
-          .from("pipeline_jobs")
-          .select("*, listings(id, bina_id, title)")
-          .order("created_at", { ascending: false })
-          .limit(100),
+        jobsRequest,
         supabase
           .from("worker_status")
           .select("*")
           .order("last_seen_at", { ascending: false })
           .limit(5),
       ]);
-      if (jRes.data) setJobs(jRes.data as PipelineJob[]);
+      if (jRes.data) {
+        const nextJobs = jRes.data as PipelineJob[];
+        setJobs(nextJobs);
+        if (typeof jRes.count === "number") {
+          setTotalJobsCount(jRes.count);
+        } else if (!page || !pageSize) {
+          setTotalJobsCount(nextJobs.length);
+        }
+      }
       if (wRes.data) setWorkers(wRes.data as WorkerStatusRow[]);
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [page, pageSize]);
 
   useEffect(() => {
     if (!autoRefresh || !isSupabaseConfigured() || isRealtimeSubscribed) return;
@@ -194,6 +241,15 @@ export function JobsClient({
   }, [fetchAll, agencyId]);
 
   const counts = useMemo(() => {
+    if (serverStatusCounts) {
+      const map: Record<string, number> = {
+        ALL: serverStatusCounts.ALL ?? totalJobsCount,
+      };
+      for (const s of STATUS_TABS) {
+        if (s !== "ALL") map[s] = serverStatusCounts[s] ?? 0;
+      }
+      return map;
+    }
     const map: Record<string, number> = { ALL: jobs.length };
     for (const s of STATUS_TABS) {
       if (s !== "ALL") map[s] = 0;
@@ -202,7 +258,7 @@ export function JobsClient({
       map[j.status] = (map[j.status] ?? 0) + 1;
     }
     return map;
-  }, [jobs]);
+  }, [jobs, serverStatusCounts, totalJobsCount]);
 
   const filtered = useMemo(() => {
     if (statusFilter === "ALL") return jobs;
@@ -498,7 +554,7 @@ export function JobsClient({
             }`}
           >
             <ListChecks className="h-3.5 w-3.5" />
-            <span>İş Tarixçəsi ({jobs.length})</span>
+            <span>İş Tarixçəsi ({totalJobsCount})</span>
           </button>
           <button
             type="button"
@@ -510,7 +566,7 @@ export function JobsClient({
             }`}
           >
             <Server className="h-3.5 w-3.5" />
-            <span>Kompüter Monitoru</span>
+            <span>Worker Monitoru</span>
           </button>
         </div>
 

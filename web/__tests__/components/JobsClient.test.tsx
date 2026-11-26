@@ -161,12 +161,12 @@ describe("JobsClient UI Cleanup & Formatting", () => {
     });
   });
 
-  it("switches cleanly to Kompüter Monitoru tab without duplicating jobs filter list", () => {
+  it("switches cleanly to Worker Monitoru tab without duplicating jobs filter list", () => {
     render(<JobsClient initialJobs={sampleJobs} initialWorkers={[sampleWorker]} />);
 
     expect(screen.getByRole("button", { name: /^Hamısı/i })).not.toBeNull();
 
-    const monitorBtns = screen.getAllByRole("button", { name: /Kompüter Monitoru/i });
+    const monitorBtns = screen.getAllByRole("button", { name: /Worker Monitoru/i });
     fireEvent.click(monitorBtns[monitorBtns.length - 1]);
 
     expect(screen.queryByRole("button", { name: /^Hamısı/i })).toBeNull();

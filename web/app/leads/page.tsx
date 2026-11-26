@@ -26,9 +26,11 @@ export default async function LeadsPage({
     search?: string;
     stage?: string;
     agent?: string;
+    new?: string;
   }>;
 }) {
   const params = searchParams ? await searchParams : {};
+  const initialOpenNewModal = params.new === "1" || params.new === "true";
   const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
   const pageSize = Math.min(
     100,
@@ -61,6 +63,7 @@ export default async function LeadsPage({
           hasNextPage: false,
         }}
         initialFilters={initialFilters}
+        initialOpenNewModal={initialOpenNewModal}
       />
     );
   }
@@ -149,6 +152,7 @@ export default async function LeadsPage({
       agencyMembers={(membersRes.data as AgencyMember[] | null) ?? []}
       memberRole={member?.role ?? "BROKER"}
       initialFilters={initialFilters}
+      initialOpenNewModal={initialOpenNewModal}
     />
   );
 }

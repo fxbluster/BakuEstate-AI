@@ -213,8 +213,8 @@ export function WorkerStatusBadge({
         }`}
         title={
           primary
-            ? `Lokal Worker (${primary.worker_id}) • Son siqnal: ${formatRelativeAz(primary.last_seen_at)} — Monitoru aç`
-            : "Lokal Windows Worker monitorunu aç"
+            ? `Bulud Worker (${primary.worker_id}) • Son siqnal: ${formatRelativeAz(primary.last_seen_at)} — Monitoru aç`
+            : "Bulud Worker (Railway) monitorunu aç"
         }
       >
         <span className="relative flex h-2 w-2">
@@ -270,7 +270,7 @@ export function WorkerStatusBadge({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-slate-100">
-              Lokal Windows Worker
+              Bulud Worker (Railway)
             </span>
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
@@ -296,7 +296,7 @@ export function WorkerStatusBadge({
           <p className="mt-0.5 text-xs text-slate-400 truncate">
             {primary
               ? `${primary.worker_id} • Son siqnal: ${formatRelativeAz(primary.last_seen_at)}${isOnline && phaseText ? ` • ${phaseText}` : ""}`
-              : "Hələ heç bir lokal worker siqnalı qeydə alınmayıb (PC sönülü ola bilər)"}
+              : "Hələ heç bir bulud worker siqnalı qeydə alınmayıb (Railway xidmətini yoxlayın)"}
           </p>
         </div>
       </div>
@@ -320,7 +320,7 @@ export function WorkerStatusBadge({
             onClick={onOpenMonitor}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gold-500/35 bg-gold-500/10 px-3 py-1.5 text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
           >
-            <span>Kompüter Monitoru</span>
+            <span>Worker Monitoru</span>
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         ) : showMonitorLink ? (
@@ -328,7 +328,7 @@ export function WorkerStatusBadge({
             href="/jobs?tab=worker"
             className="inline-flex items-center gap-1.5 rounded-lg border border-gold-500/35 bg-gold-500/10 px-3 py-1.5 text-xs font-semibold text-gold-300 hover:bg-gold-500/20 transition"
           >
-            <span>Kompüter Monitoru</span>
+            <span>Worker Monitoru</span>
             <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         ) : null}

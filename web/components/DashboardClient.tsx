@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -78,8 +78,26 @@ export function DashboardClient({
     text: string;
   } | null>(null);
 
-  const overdueTasks = tasks.filter((t) => isOverdue(t.due_at));
-  const upcomingTasks = tasks.filter((t) => !isOverdue(t.due_at));
+  const duplicateListingIds = useMemo(
+    () => new Set(duplicates.map((d) => d.candidate.id)),
+    [duplicates]
+  );
+
+  const visibleTasks = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          !(
+            t.entity_type === "DUPLICATE_REVIEW" &&
+            t.listing_id &&
+            duplicateListingIds.has(t.listing_id)
+          )
+      ),
+    [tasks, duplicateListingIds]
+  );
+
+  const overdueTasks = visibleTasks.filter((t) => isOverdue(t.due_at));
+  const upcomingTasks = visibleTasks.filter((t) => !isOverdue(t.due_at));
 
   async function handleTaskAction(
     task: FollowUpTask,
@@ -226,7 +244,7 @@ export function DashboardClient({
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/leads" className="exec-btn-primary">
+          <Link href="/leads?new=1" className="exec-btn-primary">
             <Sparkles className="h-4 w-4" />
             <span>Yeni Müştəri</span>
           </Link>
@@ -264,7 +282,7 @@ export function DashboardClient({
           <p className="text-xs text-slate-400">Açıq / Gecikmiş Tapşırıq</p>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-50">
-              {tasks.length}
+              {visibleTasks.length}
             </span>
             {overdueTasks.length > 0 && (
               <span className="text-xs font-medium text-rose-400">
@@ -308,7 +326,7 @@ export function DashboardClient({
             <span className="text-xs text-slate-400">Bakı vaxtı (UTC+4)</span>
           </div>
 
-          {tasks.length === 0 ? (
+          {visibleTasks.length === 0 ? (
             <div className="exec-card flex flex-col items-center justify-center py-12 text-center px-6">
               <CheckCircle2 className="h-10 w-10 text-emerald-400/80" />
               <p className="mt-3 text-sm font-medium text-slate-200">

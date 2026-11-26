@@ -136,6 +136,7 @@ interface LeadsClientProps {
   agencyMembers?: AgencyMember[];
   memberRole?: AgencyRole;
   initialFilters?: LeadsFilterState;
+  initialOpenNewModal?: boolean;
 }
 
 const STAGE_ORDER: LeadStage[] = [
@@ -188,6 +189,7 @@ export function LeadsClient({
   agencyMembers = [],
   memberRole = "BROKER",
   initialFilters,
+  initialOpenNewModal = false,
 }: LeadsClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -284,7 +286,13 @@ export function LeadsClient({
   } | null>(null);
 
   // Quick-Add Modal State
-  const [addOpen, setAddOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(Boolean(initialOpenNewModal));
+
+  useEffect(() => {
+    if (initialOpenNewModal) {
+      setAddOpen(true);
+    }
+  }, [initialOpenNewModal]);
   const [submitting, setSubmitting] = useState(false);
   const [clientName, setClientName] = useState("");
   const [phoneOrHandle, setPhoneOrHandle] = useState("");

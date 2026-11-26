@@ -8,6 +8,7 @@ import {
   Cpu,
   LayoutDashboard,
   LogOut,
+  Settings,
   Users,
   Sparkles,
   Zap,
@@ -27,7 +28,13 @@ export interface AppShellMember {
   is_active?: boolean;
 }
 
-const NAV_ITEMS = [
+const NAV_ITEMS: Array<{
+  href: string;
+  label: string;
+  shortLabel: string;
+  icon: typeof LayoutDashboard;
+  adminOnly?: boolean;
+}> = [
   { href: "/", label: "İcmal", shortLabel: "İcmal", icon: LayoutDashboard },
   {
     href: "/listings",
@@ -52,6 +59,13 @@ const NAV_ITEMS = [
     label: "İş Növbəsi & Worker",
     shortLabel: "Növbə",
     icon: Cpu,
+  },
+  {
+    href: "/settings",
+    label: "Ayarlar",
+    shortLabel: "Ayarlar",
+    icon: Settings,
+    adminOnly: true,
   },
 ];
 
@@ -110,6 +124,9 @@ function AppShellContent({
   member: AppShellMember | null;
 }) {
   const router = useRouter();
+  const visibleNavItems = NAV_ITEMS.filter(
+    (item) => !item.adminOnly || member?.role === "ADMIN"
+  );
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -166,7 +183,7 @@ function AppShellContent({
         </div>
 
         <nav className="flex-1 space-y-1.5 px-3 py-4">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
             return (
@@ -246,7 +263,7 @@ function AppShellContent({
 
       {/* Mobile Bottom Tab Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-30 flex items-center justify-around border-t border-slate-800/90 bg-obsidian-900/95 px-2 py-2 backdrop-blur-md md:hidden">
-        {NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.href);
           return (

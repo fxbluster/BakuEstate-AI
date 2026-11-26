@@ -708,7 +708,8 @@ export function ListingsClient({
           type="button"
           onClick={() => {
             setActiveTab("ALL");
-            if (isServerPaginated) navigateWithParams({ tab: null }, true);
+            setNicheFilter("ALL");
+            if (isServerPaginated) navigateWithParams({ tab: null, niche: "ALL" }, true);
           }}
           className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
             activeTab === "ALL"
@@ -727,7 +728,8 @@ export function ListingsClient({
           type="button"
           onClick={() => {
             setActiveTab("DRAFTS");
-            if (isServerPaginated) navigateWithParams({ tab: "DRAFTS" }, true);
+            setNicheFilter("ALL");
+            if (isServerPaginated) navigateWithParams({ tab: "DRAFTS", niche: "ALL" }, true);
           }}
           className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
             activeTab === "DRAFTS"
@@ -746,8 +748,9 @@ export function ListingsClient({
           type="button"
           onClick={() => {
             setActiveTab("PUBLISHED");
+            setNicheFilter("ALL");
             if (isServerPaginated)
-              navigateWithParams({ tab: "PUBLISHED" }, true);
+              navigateWithParams({ tab: "PUBLISHED", niche: "ALL" }, true);
           }}
           className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
             activeTab === "PUBLISHED"

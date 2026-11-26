@@ -69,19 +69,33 @@ export default async function JobsPage({
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  const [jobsRes, workersRes] = await Promise.all([
+  let statusCountsQuery = supabase.from("pipeline_jobs").select("status");
+  if (member?.agency_id) {
+    statusCountsQuery = statusCountsQuery.eq("agency_id", member.agency_id);
+  }
+
+  const [jobsRes, workersRes, statusCountsRes] = await Promise.all([
     jobsQuery.range(from, to),
     supabase
       .from("worker_status")
       .select("*")
       .order("last_seen_at", { ascending: false })
       .limit(50),
+    statusCountsQuery,
   ]);
 
   const initialJobs = (jobsRes.data as PipelineJob[] | null) ?? [];
   const totalCount = jobsRes.count ?? initialJobs.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const hasNextPage = from + initialJobs.length < totalCount;
+
+  const statusRows = (statusCountsRes.data as Array<{ status: string }> | null) ?? [];
+  const initialStatusCounts: Record<string, number> = {
+    ALL: statusRows.length > 0 ? statusRows.length : totalCount,
+  };
+  for (const row of statusRows) {
+    initialStatusCounts[row.status] = (initialStatusCounts[row.status] ?? 0) + 1;
+  }
 
   function buildPageHref(nextPage: number): string {
     const qs = new URLSearchParams();
@@ -98,6 +112,10 @@ export default async function JobsPage({
         initialWorkers={(workersRes.data as WorkerStatusRow[] | null) ?? []}
         initialTab={initialTab}
         agencyId={member?.agency_id ?? null}
+        totalCount={totalCount}
+        page={page}
+        pageSize={pageSize}
+        initialStatusCounts={initialStatusCounts}
       />
 
       {totalCount > pageSize && (
