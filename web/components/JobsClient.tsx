@@ -585,7 +585,11 @@ export function JobsClient({
 
       {/* Tab Content */}
       {activeTab === "worker" ? (
-        <WorkerLivePanel workers={workers} jobs={jobs} />
+        <WorkerLivePanel
+          workers={workers}
+          jobs={jobs}
+          statusCounts={counts}
+        />
       ) : (
         <div className="space-y-4">
           {/* Status Filters */}

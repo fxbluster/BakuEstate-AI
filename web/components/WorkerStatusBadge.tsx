@@ -119,9 +119,26 @@ export function WorkerStatusProvider({
       startFallbackPolling();
     }
 
+    const syncTimer = setInterval(() => {
+      if (active) refresh();
+    }, 10_000);
+
+    const handleVisibility = () => {
+      if (active && document.visibilityState === "visible") {
+        refresh();
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibility);
+    }
+
     return () => {
       active = false;
       stopFallbackPolling();
+      clearInterval(syncTimer);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibility);
+      }
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       if (channel) {
         supabase.removeChannel(channel);
@@ -192,7 +209,14 @@ export function WorkerStatusBadge({
   const workers = initialWorkers ? localWorkers : (sharedCtx?.workers ?? localWorkers);
   const loaded = initialWorkers ? localLoaded : (sharedCtx?.loaded ?? localLoaded);
 
-  const primary = workers[0] ?? null;
+  const primary =
+    workers.find(
+      (w) =>
+        Boolean(w.is_online) &&
+        String(w.metadata_json?.state || "").toUpperCase() !== "STOPPED"
+    ) ??
+    workers[0] ??
+    null;
   const metaState = String(primary?.metadata_json?.state || "").toUpperCase();
   const isStopped = metaState === "STOPPED";
   const isOnline = Boolean(primary?.is_online) && !isStopped;

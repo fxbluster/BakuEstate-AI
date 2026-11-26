@@ -2,6 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { WorkerMonitorClient } from "@/components/WorkerMonitorClient";
+import { WorkerStatusBadge } from "@/components/WorkerStatusBadge";
 import type { PipelineJob, WorkerStatusRow } from "@/lib/types";
 
 vi.mock("@/lib/supabase/env", () => ({
@@ -174,5 +175,46 @@ describe("WorkerMonitorClient Multi-Replica Railway Cloud Monitor", () => {
     ).not.toBeNull();
     expect(screen.queryByText(/setup_worker_service\.ps1/i)).toBeNull();
     expect(screen.queryByText(/powershell/i)).toBeNull();
+  });
+
+  it("hides retired OFFLINE deploy containers when an online replica exists and displays global statusCounts", () => {
+    const staleOffline2: WorkerStatusRow = {
+      ...offlineReplica,
+      worker_id: "rep-old-dead-deploy-2",
+    };
+
+    render(
+      <WorkerMonitorClient
+        initialWorkers={[offlineReplica, staleOffline2, railwayReplica2]}
+        initialJobs={[]}
+        statusCounts={{ ALL: 90, QUEUED: 3, SUCCEEDED: 82, FAILED: 5 }}
+      />
+    );
+
+    expect(screen.getAllByText("railway-worker-2").length).toBeGreaterThan(0);
+    expect(screen.queryByText("railway-worker-offline")).toBeNull();
+    expect(screen.queryByText("rep-old-dead-deploy-2")).toBeNull();
+    expect(screen.getByText(/1 \/ 1 Replika Onlayn/i)).not.toBeNull();
+    expect(screen.getByText(/3 gözləyir/i)).not.toBeNull();
+    expect(screen.getByText(/82 uğurlu/i)).not.toBeNull();
+  });
+
+  it("WorkerStatusBadge selects online idle worker instead of stale offline first entry", () => {
+    const staleBusyOffline: WorkerStatusRow = {
+      ...offlineReplica,
+      current_job_id: "old-job",
+      metadata_json: { state: "PROCESSING" },
+      is_online: false,
+    };
+
+    render(
+      <WorkerStatusBadge
+        initialWorkers={[staleBusyOffline, railwayReplica2]}
+        compact
+      />
+    );
+
+    expect(screen.getByText("Worker Onlayn")).not.toBeNull();
+    expect(screen.queryByText("Worker İşləyir")).toBeNull();
   });
 });

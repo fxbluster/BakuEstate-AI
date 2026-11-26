@@ -24,6 +24,7 @@ import type { PipelineJob, WorkerStatusRow } from "@/lib/types";
 interface WorkerLivePanelProps {
   workers: WorkerStatusRow[];
   jobs: PipelineJob[];
+  statusCounts?: Record<string, number>;
 }
 
 function getReplicaState(worker: WorkerStatusRow, jobs: PipelineJob[]) {
@@ -81,7 +82,11 @@ function getReplicaState(worker: WorkerStatusRow, jobs: PipelineJob[]) {
   };
 }
 
-export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
+export function WorkerLivePanel({
+  workers,
+  jobs,
+  statusCounts,
+}: WorkerLivePanelProps) {
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>(
     workers[0]?.worker_id ?? ""
@@ -91,15 +96,6 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
     const tickTimer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(tickTimer);
   }, []);
-
-  useEffect(() => {
-    if (
-      workers.length > 0 &&
-      !workers.some((w) => w.worker_id === selectedWorkerId)
-    ) {
-      setSelectedWorkerId(workers[0].worker_id);
-    }
-  }, [workers, selectedWorkerId]);
 
   const replicaViews = useMemo(
     () =>
@@ -115,48 +111,71 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
     [replicaViews]
   );
 
-  const busyCount = useMemo(
-    () => replicaViews.filter((r) => r.isBusy).length,
+  const restartingCount = useMemo(
+    () => replicaViews.filter((r) => r.isRestarting).length,
     [replicaViews]
+  );
+
+  const displayedReplicas = useMemo(() => {
+    if (onlineCount > 0 || restartingCount > 0) {
+      return replicaViews.filter((r) => r.isOnline || r.isRestarting);
+    }
+    return replicaViews.slice(0, 1);
+  }, [replicaViews, onlineCount, restartingCount]);
+
+  useEffect(() => {
+    if (
+      displayedReplicas.length > 0 &&
+      !displayedReplicas.some((r) => r.worker.worker_id === selectedWorkerId)
+    ) {
+      setSelectedWorkerId(displayedReplicas[0].worker.worker_id);
+    }
+  }, [displayedReplicas, selectedWorkerId]);
+
+  const busyCount = useMemo(
+    () => displayedReplicas.filter((r) => r.isBusy).length,
+    [displayedReplicas]
   );
 
   const totalSessionProcessed = useMemo(
     () =>
-      replicaViews.reduce(
+      displayedReplicas.reduce(
         (sum, r) => sum + Number(r.meta.jobs_processed_session ?? 0),
         0
       ),
-    [replicaViews]
+    [displayedReplicas]
   );
 
   const nextScheduleBaku = useMemo(() => {
-    for (const r of replicaViews) {
+    for (const r of displayedReplicas) {
       if (r.meta.next_schedule_baku) return r.meta.next_schedule_baku;
     }
     return "pg_cron • 12:30 / 19:30";
-  }, [replicaViews]);
+  }, [displayedReplicas]);
 
   const queuedCount = useMemo(
-    () => jobs.filter((j) => j.status === "QUEUED").length,
-    [jobs]
+    () => statusCounts?.QUEUED ?? jobs.filter((j) => j.status === "QUEUED").length,
+    [jobs, statusCounts]
   );
 
   const succeededRecentCount = useMemo(
-    () => jobs.filter((j) => j.status === "SUCCEEDED").length,
-    [jobs]
+    () =>
+      statusCounts?.SUCCEEDED ??
+      jobs.filter((j) => j.status === "SUCCEEDED").length,
+    [jobs, statusCounts]
   );
 
   const failedRecentCount = useMemo(
-    () => jobs.filter((j) => j.status === "FAILED").length,
-    [jobs]
+    () => statusCounts?.FAILED ?? jobs.filter((j) => j.status === "FAILED").length,
+    [jobs, statusCounts]
   );
 
   const selectedReplica = useMemo(
     () =>
-      replicaViews.find((r) => r.worker.worker_id === selectedWorkerId) ??
-      replicaViews[0] ??
+      displayedReplicas.find((r) => r.worker.worker_id === selectedWorkerId) ??
+      displayedReplicas[0] ??
       null,
-    [replicaViews, selectedWorkerId]
+    [displayedReplicas, selectedWorkerId]
   );
 
   const logs = useMemo(() => {
@@ -206,7 +225,7 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
                     }`}
                   />
                   <span>
-                    {onlineCount} / {workers.length} Replika Onlayn
+                    {onlineCount} / {displayedReplicas.length} Replika Onlayn
                   </span>
                 </span>
               </div>
@@ -287,13 +306,13 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
         )}
 
         {/* Multi-Replica Container List */}
-        {replicaViews.length === 0 ? (
+        {displayedReplicas.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-xs text-slate-400">
             Hələ heç bir Railway worker replikası siqnal (heartbeat) göndərməyib.
           </div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {replicaViews.map((rep) => {
+            {displayedReplicas.map((rep) => {
               const isSelected =
                 selectedReplica?.worker.worker_id === rep.worker.worker_id;
               const uptimeText =
@@ -445,7 +464,7 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            {replicaViews.map((rep) => {
+            {displayedReplicas.map((rep) => {
               const active =
                 selectedReplica?.worker.worker_id === rep.worker.worker_id;
               return (
@@ -512,9 +531,17 @@ export function WorkerLivePanel({ workers, jobs }: WorkerLivePanelProps) {
 export function WorkerMonitorClient({
   initialWorkers,
   initialJobs,
+  statusCounts,
 }: {
   initialWorkers: WorkerStatusRow[];
   initialJobs: PipelineJob[];
+  statusCounts?: Record<string, number>;
 }) {
-  return <WorkerLivePanel workers={initialWorkers} jobs={initialJobs} />;
+  return (
+    <WorkerLivePanel
+      workers={initialWorkers}
+      jobs={initialJobs}
+      statusCounts={statusCounts}
+    />
+  );
 }
