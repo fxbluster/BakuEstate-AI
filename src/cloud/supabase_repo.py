@@ -1999,6 +1999,57 @@ class SupabaseRepo:
             logger.error("Exception in get_unrendered_listings: %s", exc)
         return []
 
+    def get_unrendered_backlog_listings(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Fetches active, non-duplicate listings that have no COMPLETED render_version
+        and no active QUEUED/RUNNING pipeline_job so the worker clears its video backlog
+        before scraping ordinary new listings.
+        """
+        if not self.enabled:
+            return []
+        try:
+            fetch_limit = max(1, int(limit)) * 2
+            resp = self.session.get(
+                self._rest_url("listings"),
+                headers=self._headers(),
+                params={
+                    "select": "id,bina_id,title,pipeline_status,editorial_status,content_revision,created_at",
+                    "source_availability": "eq.ACTIVE",
+                    "duplicate_resolution": "in.(NONE,FALSE_POSITIVE)",
+                    "pipeline_status": "in.(NEW,FAILED)",
+                    "editorial_status": "not.in.(ARCHIVED,REJECTED,PUBLISHED)",
+                    "order": "created_at.asc",
+                    "limit": str(fetch_limit),
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                logger.error(
+                    "get_unrendered_backlog_listings failed (%s): %s",
+                    resp.status_code,
+                    resp.text[:300],
+                )
+                return []
+
+            candidates = resp.json() or []
+            backlog: List[Dict[str, Any]] = []
+            for row in candidates:
+                lid = str(row.get("id") or "").strip()
+                if not lid:
+                    continue
+                latest = self.get_latest_render_version(lid)
+                if latest and str(latest.get("status") or "").upper() == "COMPLETED":
+                    continue
+                if self.has_active_pipeline_job(lid):
+                    continue
+                backlog.append(row)
+                if len(backlog) >= max(1, int(limit)):
+                    break
+            return backlog
+        except Exception as exc:
+            logger.error("Exception in get_unrendered_backlog_listings: %s", exc)
+        return []
+
     def has_active_pipeline_job(self, listing_id: str) -> bool:
         """Checks if a QUEUED or RUNNING pipeline job already exists for listing_id."""
         if not self.enabled or not listing_id:

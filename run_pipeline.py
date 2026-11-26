@@ -508,6 +508,7 @@ class BakuEstatePipeline:
         *,
         enqueue_render_jobs: bool = True,
         actor: str = "scraper",
+        special_opportunities_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Persists a scraped listing into Supabase Postgres with full change detection,
@@ -665,6 +666,25 @@ class BakuEstatePipeline:
             }
 
         # Case 3: Truly new, unique listing
+        opp_reason: Optional[str] = None
+        if special_opportunities_only:
+            from src.pipeline.opportunity_filter import is_special_opportunity
+
+            is_hot, opp_reason = is_special_opportunity(clean_item)
+            if not is_hot:
+                logger.info(
+                    "Backlog-first mode: skipping ordinary new listing %s (%s).",
+                    bina_id,
+                    opp_reason,
+                )
+                return {
+                    "action": "skipped_not_special",
+                    "bina_id": bina_id,
+                    "reason": opp_reason,
+                }
+            # Special opportunity: save listing for later rendering without immediate render job
+            enqueue_render_jobs = False
+
         new_data = dict(clean_item)
         new_data.setdefault("pipeline_status", "NEW")
         new_data.setdefault("duplicate_resolution", "NONE")
@@ -694,15 +714,18 @@ class BakuEstatePipeline:
                 )
 
         if listing_uuid:
+            event_payload: Dict[str, Any] = {
+                "price": saved_row.get("price"),
+                "currency": saved_row.get("currency"),
+                "price_azn_normalized": saved_row.get("price_azn_normalized"),
+                "location": saved_row.get("location"),
+            }
+            if opp_reason:
+                event_payload["special_opportunity_reason"] = opp_reason
             self.supabase_repo.insert_listing_event(
                 listing_uuid,
                 "SCRAPED_NEW",
-                new_value={
-                    "price": saved_row.get("price"),
-                    "currency": saved_row.get("currency"),
-                    "price_azn_normalized": saved_row.get("price_azn_normalized"),
-                    "location": saved_row.get("location"),
-                },
+                new_value=event_payload,
                 triggered_job_id=triggered_job.get("id") if triggered_job else None,
                 actor=actor,
             )
@@ -721,6 +744,7 @@ class BakuEstatePipeline:
         specific_id: Optional[str] = None,
         enqueue_render_jobs: bool = False,
         check_existing_for_changes: bool = True,
+        special_opportunities_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Scrapes listings from bina.az and persists them to Supabase (or local SQLite fallback)."""
         logger.info(
@@ -751,6 +775,7 @@ class BakuEstatePipeline:
                     ingest_res = self.ingest_scraped_listing(
                         details,
                         enqueue_render_jobs=enqueue_render_jobs,
+                        special_opportunities_only=special_opportunities_only,
                     )
                     cloud_row = ingest_res.get("listing") or details
                     cloud_row["downloaded_photos"] = details.get("downloaded_photos", [])
@@ -787,6 +812,7 @@ class BakuEstatePipeline:
                     res = self.ingest_scraped_listing(
                         item,
                         enqueue_render_jobs=enqueue_render_jobs,
+                        special_opportunities_only=special_opportunities_only,
                     )
                     listing_out = res.get("listing") or item
                     if item.get("downloaded_photos"):

@@ -687,6 +687,46 @@ class BakuLocalWorker:
         specific_id = params.get("specific_id") or None
         check_existing = bool(params.get("check_existing_for_changes", True))
         enqueue_renders = bool(params.get("enqueue_render_jobs", True))
+        special_opportunities_only = bool(params.get("special_opportunities_only", False))
+        backlog_renders_enqueued = 0
+
+        if not specific_id:
+            backlog_fn = getattr(self.repo, "get_unrendered_backlog_listings", None)
+            backlog = backlog_fn(limit=max(1, limit)) if callable(backlog_fn) else []
+            if isinstance(backlog, list) and len(backlog) > 0:
+                is_auto = str(job.get("trigger_source") or "").upper() == "AUTO_SCHEDULER"
+                today_count = self.repo.count_today_auto_renders_baku() if is_auto else 0
+                utc_now = datetime.now(timezone.utc)
+                expires_at = (utc_now + timedelta(hours=max(1, int(AUTO_JOB_TTL_HOURS)))).isoformat()
+
+                for row in backlog:
+                    if is_auto and today_count >= DAILY_AUTO_RENDER_LIMIT:
+                        logger.info(
+                            "Daily auto-render cap (%d/%d) reached while queueing backlog.",
+                            today_count,
+                            DAILY_AUTO_RENDER_LIMIT,
+                        )
+                        break
+                    lid = str(row.get("id") or "").strip()
+                    bid = str(row.get("bina_id") or "").strip()
+                    if not lid or not bid:
+                        continue
+                    queued_job = self.repo.enqueue_pipeline_job(
+                        idempotency_key=f"initial:{bid}",
+                        job_type="RENDER_INITIAL",
+                        listing_id=lid,
+                        trigger_source=str(job.get("trigger_source") or "AUTO_SCHEDULER"),
+                        params_json={"bina_id": bid, "backlog_priority": True},
+                        expires_at=expires_at,
+                    )
+                    if queued_job:
+                        self.repo.update_listing(lid, {"pipeline_status": "QUEUED"})
+                        backlog_renders_enqueued += 1
+                        if is_auto:
+                            today_count += 1
+
+                special_opportunities_only = True
+                enqueue_renders = False
 
         ingested = self.pipeline.run_ingestion(
             pages=pages,
@@ -694,6 +734,7 @@ class BakuLocalWorker:
             specific_id=specific_id,
             enqueue_render_jobs=enqueue_renders,
             check_existing_for_changes=check_existing,
+            special_opportunities_only=special_opportunities_only,
         )
 
         matched_leads_count = 0
@@ -709,6 +750,8 @@ class BakuLocalWorker:
             "job_type": "SCRAPE_NEW",
             "ingested_count": len(ingested),
             "matched_leads_count": matched_leads_count,
+            "backlog_renders_enqueued": backlog_renders_enqueued,
+            "special_opportunities_only": special_opportunities_only,
         }
 
     def _check_auto_render_guardrails(
