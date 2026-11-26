@@ -181,6 +181,37 @@ class SupabaseRepo:
         else:
             self.r2_storage = None
         self.last_upload_storage_provider: str = "r2" if self.should_use_r2_storage() else "supabase"
+        self._default_agency_id: Optional[str] = (
+            os.getenv("DEFAULT_AGENCY_ID") or ""
+        ).strip() or None
+
+    def get_default_agency_id(self) -> Optional[str]:
+        """Resolves and caches the primary agency UUID for background worker inserts."""
+        if self._default_agency_id:
+            return self._default_agency_id
+        if not self.enabled:
+            return None
+        try:
+            resp = self.session.get(
+                self._rest_url("agencies"),
+                headers=self._headers(),
+                params={
+                    "select": "id",
+                    "order": "created_at.asc",
+                    "limit": "1",
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                rows = resp.json()
+                if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                    aid = str(rows[0].get("id") or "").strip()
+                    if aid:
+                        self._default_agency_id = aid
+                        return aid
+        except Exception as exc:
+            logger.debug("get_default_agency_id lookup skipped: %s", exc)
+        return None
 
     def should_use_r2_storage(self, storage_provider: Optional[str] = None) -> bool:
         """
@@ -503,6 +534,13 @@ class SupabaseRepo:
             return None
 
         payload = self.build_listing_upsert_payload(listing, existing=existing)
+        if not payload.get("agency_id"):
+            resolved_agency_id = (
+                str((existing or {}).get("agency_id") or listing.get("agency_id") or "").strip()
+                or self.get_default_agency_id()
+            )
+            if resolved_agency_id:
+                payload["agency_id"] = resolved_agency_id
         try:
             existing_id = str((existing or {}).get("id") or "").strip()
             if existing_id:
@@ -1683,6 +1721,7 @@ class SupabaseRepo:
         job_type: str,
         *,
         listing_id: Optional[str] = None,
+        agency_id: Optional[str] = None,
         trigger_source: str = "AUTO_SCHEDULER",
         params_json: Optional[Dict[str, Any]] = None,
         expires_at: Optional[str] = None,
@@ -1695,6 +1734,7 @@ class SupabaseRepo:
         if not self.enabled or not idempotency_key or not job_type:
             return None
 
+        resolved_agency_id = (agency_id or "").strip() or self.get_default_agency_id()
         payload: Dict[str, Any] = {
             "idempotency_key": idempotency_key.strip(),
             "job_type": job_type,
@@ -1705,6 +1745,8 @@ class SupabaseRepo:
             "max_attempts": max(1, int(max_attempts)),
             "expires_at": expires_at,
         }
+        if resolved_agency_id:
+            payload["agency_id"] = resolved_agency_id
         try:
             resp = self.session.post(
                 self._rest_url("pipeline_jobs"),
@@ -2057,7 +2099,7 @@ class SupabaseRepo:
                 self._rest_url("listings"),
                 headers=self._headers(),
                 params={
-                    "select": "id,bina_id,title,pipeline_status,editorial_status,content_revision,created_at",
+                    "select": "id,agency_id,bina_id,title,pipeline_status,editorial_status,content_revision,created_at",
                     "source_availability": "eq.ACTIVE",
                     "duplicate_resolution": "in.(NONE,FALSE_POSITIVE)",
                     "pipeline_status": "in.(NEW,FAILED)",

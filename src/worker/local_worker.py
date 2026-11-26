@@ -715,6 +715,7 @@ class BakuLocalWorker:
                         idempotency_key=f"initial:{bid}",
                         job_type="RENDER_INITIAL",
                         listing_id=lid,
+                        agency_id=str(job.get("agency_id") or row.get("agency_id") or "").strip() or None,
                         trigger_source=str(job.get("trigger_source") or "AUTO_SCHEDULER"),
                         params_json={"bina_id": bid, "backlog_priority": True},
                         expires_at=expires_at,

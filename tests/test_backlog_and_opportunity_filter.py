@@ -55,6 +55,20 @@ class TestBacklogAndOpportunityFilter(unittest.TestCase):
         self.assertFalse(normal)
         self.assertEqual(reason_normal, "STANDARD_MARKET")
 
+        # 4. Daily/monthly rental (e.g. 90 AZN for 200 m2) must NOT be treated as a sale deal
+        rental, reason_rental = is_special_opportunity(
+            {
+                "price_azn_normalized": 90,
+                "area": 200,
+                "district_normalized": "Nəsimi",
+                "is_owner": True,
+                "has_bill_of_sale": True,
+                "title": "4 otaqlı mənzil, 200 m²",
+            }
+        )
+        self.assertFalse(rental)
+        self.assertEqual(reason_rental, "RENTAL_OR_INVALID_PRICE")
+
     def test_ingest_scraped_listing_special_opportunities_only(self):
         from run_pipeline import BakuEstatePipeline
 

@@ -36,6 +36,9 @@ URGENT_DEAL_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+MIN_SALE_PRICE_AZN: float = 20000.0
+
+
 def _resolve_district_floor(location_text: str) -> float:
     lower = location_text.strip().lower()
     if not lower:
@@ -66,6 +69,9 @@ def is_special_opportunity(listing: Dict[str, Any]) -> Tuple[bool, str]:
         for v in (listing.get("district_normalized"), listing.get("location"))
         if v
     )
+
+    if 0 < price_azn < MIN_SALE_PRICE_AZN:
+        return False, "RENTAL_OR_INVALID_PRICE"
 
     if price_azn > 0 and area_m2 >= 20.0:
         floor_m2 = _resolve_district_floor(location_text)

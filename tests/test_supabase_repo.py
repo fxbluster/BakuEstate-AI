@@ -114,11 +114,13 @@ class TestSupabaseRepo(unittest.TestCase):
             idempotency_key="initial:6588580",
             job_type="RENDER_INITIAL",
             listing_id="uuid-1",
+            agency_id="ag-uuid-1",
             params_json={"bina_id": "6588580"},
         )
         self.assertIsNone(result)
         _, kwargs = self.mock_session.post.call_args
         self.assertNotIn("params", kwargs)
+        self.assertEqual(kwargs["json"][0]["agency_id"], "ag-uuid-1")
 
     def test_update_listing_blocks_accidental_phone_clear(self):
         resp = MagicMock()
