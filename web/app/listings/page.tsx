@@ -94,10 +94,18 @@ export default async function ListingsPage({
 
   let completedRendersQuery = supabase
     .from("render_versions")
-    .select("listing_id")
+    .select("listing_id, video_cdn_url, storage_object_path, storage_pruned_at")
     .eq("status", "COMPLETED");
   if (member?.agency_id) {
     completedRendersQuery = completedRendersQuery.eq("agency_id", member.agency_id);
+  }
+
+  let activeJobsQuery = supabase
+    .from("pipeline_jobs")
+    .select("listing_id, status")
+    .in("status", ["QUEUED", "RUNNING"]);
+  if (member?.agency_id) {
+    activeJobsQuery = activeJobsQuery.eq("agency_id", member.agency_id);
   }
 
   let publishedPubsQuery = supabase
@@ -108,9 +116,10 @@ export default async function ListingsPage({
     publishedPubsQuery = publishedPubsQuery.eq("agency_id", member.agency_id);
   }
 
-  const [summaryRes, completedRendersRes, publishedPubsRes, settingsRes] = await Promise.all([
+  const [summaryRes, completedRendersRes, activeJobsRes, publishedPubsRes, settingsRes] = await Promise.all([
     summaryQuery,
     completedRendersQuery,
+    activeJobsQuery,
     publishedPubsQuery,
     member?.agency_id
       ? supabase
@@ -129,10 +138,31 @@ export default async function ListingsPage({
       editorial_status?: string | null;
     }> | null) ?? [];
 
+  const activeJobStatusByListing = new Map<string, "QUEUED" | "RUNNING">();
+  for (const job of (activeJobsRes.data as Array<{ listing_id: string | null; status: string }> | null) ?? []) {
+    if (!job.listing_id) continue;
+    const prev = activeJobStatusByListing.get(job.listing_id);
+    if (job.status === "RUNNING" || !prev) {
+      activeJobStatusByListing.set(
+        job.listing_id,
+        job.status === "RUNNING" ? "RUNNING" : "QUEUED"
+      );
+    }
+  }
+
   const completedListingIdSet = new Set(
-    ((completedRendersRes.data as Array<{ listing_id: string }> | null) ?? []).map(
-      (r) => r.listing_id
-    )
+    ((completedRendersRes.data as Array<{
+      listing_id: string;
+      video_cdn_url?: string | null;
+      storage_object_path?: string | null;
+      storage_pruned_at?: string | null;
+    }> | null) ?? [])
+      .filter(
+        (r) =>
+          !r.storage_pruned_at &&
+          (Boolean(r.video_cdn_url) || Boolean(r.storage_object_path))
+      )
+      .map((r) => r.listing_id)
   );
 
   const publishedListingIdSet = new Set(
@@ -148,14 +178,17 @@ export default async function ListingsPage({
   const draftListingIds = summaryRows
     .filter(
       (r) =>
-        completedListingIdSet.has(r.id) && !publishedListingIdSet.has(r.id)
+        completedListingIdSet.has(r.id) &&
+        !publishedListingIdSet.has(r.id) &&
+        !activeJobStatusByListing.has(r.id)
     )
     .map((r) => r.id);
 
   const noVideoListingIds = summaryRows
     .filter(
       (r) =>
-        !completedListingIdSet.has(r.id) && !publishedListingIdSet.has(r.id)
+        !publishedListingIdSet.has(r.id) &&
+        (!completedListingIdSet.has(r.id) || activeJobStatusByListing.has(r.id))
     )
     .map((r) => r.id);
 
@@ -299,7 +332,7 @@ export default async function ListingsPage({
       supabase
         .from("render_versions")
         .select(
-          "id, listing_id, version_num, status, video_cdn_url, hook_type, duration_bucket, created_at, completed_at"
+          "id, listing_id, version_num, status, video_cdn_url, storage_object_path, storage_pruned_at, hook_type, duration_bucket, created_at, completed_at"
         )
         .in("listing_id", pageIds)
         .order("version_num", { ascending: false }),
@@ -321,11 +354,18 @@ export default async function ListingsPage({
     for (const r of rendersRes.data ?? []) {
       const lid = r.listing_id as string;
       if (!latestByListing.has(lid)) {
+        const hasCloudVideo =
+          !r.storage_pruned_at &&
+          (Boolean(r.video_cdn_url) || Boolean(r.storage_object_path));
         latestByListing.set(lid, {
           id: r.id as string | undefined,
           version_num: r.version_num as number,
           status: r.status as RenderStatus,
-          video_cdn_url: (r.video_cdn_url as string | null) ?? null,
+          video_cdn_url: hasCloudVideo
+            ? ((r.video_cdn_url as string | null) ??
+              (r.storage_object_path as string | null) ??
+              null)
+            : null,
           hook_type: (r.hook_type as string | null) ?? null,
           duration_bucket: (r.duration_bucket as string | null) ?? null,
           created_at: (r.created_at as string | null) ?? null,
@@ -352,8 +392,15 @@ export default async function ListingsPage({
 
   const merged: ListingWithLatestRender[] = pageListings.map((l) => {
     const contact = ownerContactByListing.get(l.id);
+    const activeJob = activeJobStatusByListing.get(l.id);
     return {
       ...l,
+      pipeline_status:
+        activeJob === "RUNNING"
+          ? "RENDERING"
+          : activeJob === "QUEUED"
+            ? "QUEUED"
+            : l.pipeline_status,
       contact_name: contact?.owner_name ?? l.contact_name,
       owner_phone_raw: contact?.owner_phone_raw ?? l.owner_phone_raw,
       owner_phone_normalized:

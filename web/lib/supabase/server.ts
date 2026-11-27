@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getSupabaseEnv, isSupabaseConfigured } from "./env";
@@ -37,40 +38,42 @@ export async function createClient() {
 
 export const createServerSupabaseClient = createClient;
 
-export async function getServerSessionMember(): Promise<AgencyMember | null> {
-  if (!isSupabaseConfigured()) {
-    return null;
-  }
-
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
-
-    if (error || !user?.id) {
+export const getServerSessionMember = cache(
+  async (): Promise<AgencyMember | null> => {
+    if (!isSupabaseConfigured()) {
       return null;
     }
 
-    const { data: member, error: memberError } = await supabase
-      .from("agency_members")
-      .select(
-        "user_id, agency_id, role, display_name, whatsapp_phone, telegram_chat_id, commission_split_pct, is_active, created_at"
-      )
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .maybeSingle();
+    try {
+      const supabase = await createClient();
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
 
-    if (memberError || !member || member.is_active !== true) {
+      if (error || !user?.id) {
+        return null;
+      }
+
+      const { data: member, error: memberError } = await supabase
+        .from("agency_members")
+        .select(
+          "user_id, agency_id, role, display_name, whatsapp_phone, telegram_chat_id, commission_split_pct, is_active, created_at"
+        )
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (memberError || !member || member.is_active !== true) {
+        return null;
+      }
+
+      return {
+        ...(member as AgencyMember),
+        email: user.email ?? null,
+      };
+    } catch {
       return null;
     }
-
-    return {
-      ...(member as AgencyMember),
-      email: user.email ?? null,
-    };
-  } catch {
-    return null;
   }
-}
+);

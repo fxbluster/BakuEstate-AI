@@ -115,7 +115,10 @@ export function getUnifiedListingStatus(item: ListingWithLatestRender): {
   ) {
     return { label: "Növbədə", tone: "sky" };
   }
-  if (item.latestRender?.status === "COMPLETED") {
+  if (
+    item.latestRender?.status === "COMPLETED" &&
+    Boolean(item.latestRender.video_cdn_url)
+  ) {
     return { label: "Video Hazır", tone: "gold" };
   }
   if (
