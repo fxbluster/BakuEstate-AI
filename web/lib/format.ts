@@ -11,14 +11,17 @@ import type {
   LeadListingRelation,
   LeadSourceChannel,
   LeadStage,
+  Listing,
   ListingEventType,
   OwnerOutreachStatus,
   PipelineStatus,
   PreflightStatus,
+  Publication,
   PublicationChannel,
   PublicationStatus,
   RenderStatus,
   RenderTriggerReason,
+  RenderVersion,
   SourceAvailability,
   TaskPriority,
   TelemetryStatus,
@@ -479,3 +482,83 @@ export const INTENT_CATEGORY_META: Record<
   PHONE_REQ: { label: "Əlaqə / WhatsApp", tone: "violet" },
   NOISE: { label: "Ümumi", tone: "neutral" },
 };
+
+const VOICE_ID_LABELS: Record<string, string> = {
+  zqjv3hwvraic7fvwz1qr: "Arif (ElevenLabs)",
+  arif: "Arif (ElevenLabs)",
+  eleven_male: "Arif (ElevenLabs)",
+  dzaip8uahf0qri1fxu8m: "Ayan (ElevenLabs)",
+  ayan: "Ayan (ElevenLabs)",
+  banu: "Ayan (ElevenLabs)",
+  eleven_female: "Ayan (ElevenLabs)",
+  "az-az-babekneural": "Babək (Edge-TTS)",
+  "az-az-banuneural": "Banu (Edge-TTS)",
+};
+
+export function formatVoiceLabel(
+  voiceId: string | null | undefined
+): string | null {
+  if (!voiceId) return null;
+  const trimmed = voiceId.trim();
+  if (!trimmed) return null;
+  return VOICE_ID_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
+export type UnifiedStatusLabel =
+  | "Paylaşıldı"
+  | "Video Hazır"
+  | "Montaj Olunur"
+  | "Növbədə"
+  | "Videosuz"
+  | "Arxiv";
+
+export function getUnifiedListingStatus(
+  listing: Pick<
+    Listing,
+    "editorial_status" | "pipeline_status" | "source_availability" | "video_cdn_url"
+  >,
+  renders: Array<Pick<RenderVersion, "status">> = [],
+  publications: Array<Pick<Publication, "status">> = []
+): { label: UnifiedStatusLabel; tone: BadgeTone } {
+  if (
+    listing.editorial_status === "ARCHIVED" ||
+    listing.editorial_status === "REJECTED" ||
+    listing.source_availability === "CONFIRMED_SOLD" ||
+    listing.source_availability === "REMOVED_ON_BINA"
+  ) {
+    return { label: "Arxiv", tone: "neutral" };
+  }
+
+  if (
+    listing.editorial_status === "PUBLISHED" ||
+    publications.some((p) => p.status === "PUBLISHED") ||
+    publications.length > 0
+  ) {
+    return { label: "Paylaşıldı", tone: "emerald" };
+  }
+
+  if (
+    listing.pipeline_status === "RENDERING" ||
+    renders.some((r) => r.status === "RUNNING")
+  ) {
+    return { label: "Montaj Olunur", tone: "violet" };
+  }
+
+  if (
+    listing.pipeline_status === "QUEUED" ||
+    renders.some((r) => r.status === "QUEUED")
+  ) {
+    return { label: "Növbədə", tone: "amber" };
+  }
+
+  if (
+    renders.some((r) => r.status === "COMPLETED") ||
+    listing.pipeline_status === "DRAFT_READY" ||
+    listing.pipeline_status === "DISPATCHED" ||
+    Boolean(listing.video_cdn_url)
+  ) {
+    return { label: "Video Hazır", tone: "sky" };
+  }
+
+  return { label: "Videosuz", tone: "neutral" };
+}

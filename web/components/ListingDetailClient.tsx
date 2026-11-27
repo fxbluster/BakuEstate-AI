@@ -10,6 +10,8 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileCheck2,
   Film,
@@ -31,18 +33,16 @@ import {
   ARCHETYPE_LABELS,
   type BadgeTone,
   buildWhatsAppUrl,
-  DUPLICATE_RESOLUTION_META,
-  EDITORIAL_STATUS_META,
   EVENT_TYPE_META,
   formatAzn,
   formatBakuDateTime,
   formatPrice,
+  formatVoiceLabel,
+  getUnifiedListingStatus,
   OWNER_OUTREACH_META,
-  PIPELINE_STATUS_META,
   PUBLICATION_CHANNEL_LABELS,
   RENDER_STATUS_META,
   RENDER_TRIGGER_LABELS,
-  SOURCE_AVAILABILITY_META,
 } from "@/lib/format";
 import type {
   AgencyRole,
@@ -212,13 +212,30 @@ export function ListingDetailClient({
   const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
   const defaultNiche = inferNicheFromListing(initialListing);
 
-  const playableDefault =
-    initialRenders.find((r) => r.video_cdn_url && !r.storage_pruned_at) ??
-    initialRenders[0] ??
+  const sortedRenders = [...renders].sort(
+    (a, b) => b.version_num - a.version_num
+  );
+  const primaryRender =
+    sortedRenders.find(
+      (r) =>
+        r.status === "COMPLETED" &&
+        r.video_cdn_url &&
+        !r.storage_pruned_at
+    ) ??
+    sortedRenders.find((r) => r.status === "COMPLETED") ??
+    sortedRenders.find(
+      (r) => r.status === "RUNNING" || r.status === "QUEUED"
+    ) ??
+    sortedRenders[0] ??
     null;
+  const olderRenders = sortedRenders.filter(
+    (r) => r.id !== primaryRender?.id
+  );
+  const playableDefault = primaryRender;
   const [selectedRenderId, setSelectedRenderId] = useState<string | null>(
     playableDefault?.id ?? null
   );
+  const [showOlderVersions, setShowOlderVersions] = useState(false);
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{
@@ -285,7 +302,7 @@ export function ListingDetailClient({
   const displayCode = listing.bina_id ? `#${listing.bina_id}` : "OFF-MARKET";
 
   const selectedRender =
-    renders.find((r) => r.id === selectedRenderId) ?? renders[0] ?? null;
+    sortedRenders.find((r) => r.id === selectedRenderId) ?? primaryRender;
 
   const waUrl =
     memberRole !== "SMM"
@@ -741,26 +758,7 @@ export function ListingDetailClient({
     }
   }
 
-  const edMeta = EDITORIAL_STATUS_META[listing.editorial_status] ?? {
-    label: listing.editorial_status || "Baxış gözləyir",
-    tone: "amber" as BadgeTone,
-  };
-  const avMeta = SOURCE_AVAILABILITY_META[listing.source_availability] ?? {
-    label: listing.source_availability || "Aktiv",
-    tone: "emerald" as BadgeTone,
-  };
-  const pipeMeta = PIPELINE_STATUS_META[listing.pipeline_status] ?? {
-    label: listing.pipeline_status || "Yeni",
-    tone: "sky" as BadgeTone,
-  };
-  const ownerMeta = OWNER_OUTREACH_META[listing.owner_outreach_status] ?? {
-    label: listing.owner_outreach_status || "Əlaqə yoxdur",
-    tone: "neutral" as BadgeTone,
-  };
-  const dupMeta = DUPLICATE_RESOLUTION_META[listing.duplicate_resolution] ?? {
-    label: listing.duplicate_resolution || "Təkrarsız",
-    tone: "neutral" as BadgeTone,
-  };
+  const unifiedStatus = getUnifiedListingStatus(listing, renders, publications);
 
   return (
     <div className="space-y-6">
@@ -783,13 +781,10 @@ export function ListingDetailClient({
               {isOffMarket && (
                 <StatusBadge label="Eksklüziv Portfel" tone="gold" />
               )}
-              <StatusBadge label={edMeta.label} tone={edMeta.tone} />
-              <StatusBadge label={avMeta.label} tone={avMeta.tone} />
-              <StatusBadge label={pipeMeta.label} tone={pipeMeta.tone} />
-              <StatusBadge label={ownerMeta.label} tone={ownerMeta.tone} />
-              {listing.duplicate_resolution !== "NONE" && (
-                <StatusBadge label={dupMeta.label} tone={dupMeta.tone} />
-              )}
+              <StatusBadge
+                label={unifiedStatus.label}
+                tone={unifiedStatus.tone}
+              />
             </div>
 
             <h1 className="text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
@@ -1211,13 +1206,14 @@ export function ListingDetailClient({
 
                 {/* Version Selector List & Metadata */}
                 <div className="sm:col-span-6 space-y-2.5">
-                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                    {renders.map((ver) => {
+                  {(() => {
+                    const renderVersionCard = (ver: RenderVersion) => {
                       const active = ver.id === selectedRender.id;
                       const stMeta = RENDER_STATUS_META[ver.status] ?? {
                         label: ver.status,
                         tone: "neutral" as BadgeTone,
                       };
+                      const voiceLabel = formatVoiceLabel(ver.voice_id);
                       return (
                         <button
                           key={ver.id}
@@ -1241,7 +1237,7 @@ export function ListingDetailClient({
                           <p className="mt-1 text-[11px] text-slate-400">
                             {RENDER_TRIGGER_LABELS[ver.trigger_reason] ??
                               ver.trigger_reason}
-                            {ver.voice_id ? ` • ${ver.voice_id}` : ""}
+                            {voiceLabel ? ` • ${voiceLabel}` : ""}
                             {ver.duration_seconds
                               ? ` • ${Math.round(ver.duration_seconds)}s`
                               : ""}
@@ -1251,8 +1247,42 @@ export function ListingDetailClient({
                           </p>
                         </button>
                       );
-                    })}
-                  </div>
+                    };
+
+                    return (
+                      <>
+                        {primaryRender && renderVersionCard(primaryRender)}
+
+                        {olderRenders.length > 0 && (
+                          <div className="space-y-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowOlderVersions((prev) => !prev)
+                              }
+                              aria-expanded={showOlderVersions}
+                              className="flex w-full items-center justify-between rounded-xl border border-slate-800 bg-obsidian-950/70 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-slate-700 hover:text-slate-100"
+                            >
+                              <span>
+                                Köhnə versiyalar ({olderRenders.length})
+                              </span>
+                              {showOlderVersions ? (
+                                <ChevronUp className="h-4 w-4 text-slate-400" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-slate-400" />
+                              )}
+                            </button>
+
+                            {showOlderVersions && (
+                              <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                                {olderRenders.map(renderVersionCard)}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   {selectedRender.script_text && (
                     <div className="rounded-xl border border-slate-800 bg-obsidian-950/80 p-3">
@@ -1317,11 +1347,15 @@ export function ListingDetailClient({
                   className="exec-select text-xs"
                 >
                   <option value="">Versiya seç (opsional)</option>
-                  {renders.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      v{r.version_num} ({RENDER_STATUS_META[r.status].label})
-                    </option>
-                  ))}
+                  {sortedRenders.map((r) => {
+                    const voiceLabel = formatVoiceLabel(r.voice_id);
+                    return (
+                      <option key={r.id} value={r.id}>
+                        v{r.version_num} ({RENDER_STATUS_META[r.status].label})
+                        {voiceLabel ? ` • ${voiceLabel}` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
