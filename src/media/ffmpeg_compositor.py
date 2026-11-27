@@ -490,6 +490,7 @@ class VideoCompositor:
         )
         from src.media.glass_badge import (
             create_hero_badge,
+            create_persistent_top_pill,
             create_cta_badge,
             create_bottom_scrim_png,
             create_logo_watermark,
@@ -532,9 +533,12 @@ class VideoCompositor:
             bottom_scrim_path = temp_dir / "bottom_scrim.png"
             create_bottom_scrim_png(bottom_scrim_path)
 
-            # 3. Generate minimal editorial hero strip (t=0.2s to t=2.5s)
+            # 3. Generate bold scroll-stopping intro card (t=0s to t=3.8s) + persistent top pill (t>=3.8s)
             hero_badge_path = temp_dir / "hero_badge.png"
-            create_hero_badge(listing, hero_badge_path, width=920, height=176, archetype=archetype)
+            create_hero_badge(listing, hero_badge_path, width=940, height=280, archetype=archetype)
+
+            top_pill_path = temp_dir / "top_info_pill.png"
+            create_persistent_top_pill(listing, top_pill_path, width=840, height=60, archetype=archetype)
 
             # 4. Generate safe-zone CTA badge
             cta_badge_path = temp_dir / "cta_badge.png"
@@ -545,7 +549,7 @@ class VideoCompositor:
             create_logo_watermark(logo_watermark_path)
 
             # Build video filtergraph timings
-            hero_end_time = min(3.2, max(1.5, total_duration - 1.5))
+            hero_end_time = min(3.8, max(1.8, total_duration - 1.5))
             cta_start_time = max(0.5, total_duration - 6.5)
 
             # 6. Convert subtitles to kinetic ASS (safe-zone baseline y=1380px, stationary safe zone)
@@ -563,9 +567,10 @@ class VideoCompositor:
             v_filters = [
                 f"[0:v][1:v]overlay=0:0:format=auto[v_scrim]",
                 f"[v_scrim][4:v]overlay=x=860:y=24:format=auto[v_brand]",
-                f"[2:v]fade=in:st=0:d=0.4:alpha=1[v_hero_faded]",
-                f"[v_brand][v_hero_faded]overlay=x=(W-w)/2:y=186:enable='between(t,0,{hero_end_time:.2f})':format=auto[v_hero]",
-                f"[v_hero][3:v]overlay=x=(W-w)/2:y=1540:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
+                f"[2:v]fade=in:st=0:d=0.35:alpha=1[v_hero_faded]",
+                f"[v_brand][v_hero_faded]overlay=x=(W-w)/2:y=260:enable='between(t,0,{hero_end_time:.2f})':format=auto[v_hero]",
+                f"[v_hero][5:v]overlay=x=(W-w)/2:y=108:enable='gte(t,{hero_end_time:.2f})':format=auto[v_top]",
+                f"[v_top][3:v]overlay=x=(W-w)/2:y=1540:enable='gte(t,{cta_start_time:.2f})':format=auto[v_cta]",
                 f"[v_cta]subtitles='{escaped_ass}'[v_out]"
             ]
             filter_complex_v = ";".join(v_filters)
@@ -600,20 +605,21 @@ class VideoCompositor:
                 "-i", str(hero_badge_path),
                 "-i", str(cta_badge_path),
                 "-i", str(logo_watermark_path),
+                "-i", str(top_pill_path),
                 "-i", str(audio_path)
             ]
 
             if resolved_bg_music and Path(resolved_bg_music).exists():
                 cmd.extend(["-stream_loop", "-1", "-i", str(resolved_bg_music)])
-                next_in = 7
+                next_in = 8
                 has_chime = chime_sfx.exists()
                 has_whoosh = whoosh_sfx.exists() and len(transitions) > 0
 
                 a_chains = [
-                    f"[6:a]volume=0.25[bg_pre]",
-                    f"[bg_pre][5:a]sidechaincompress=threshold=0.06:ratio=4:attack=25:release=300[ducked_bg]"
+                    f"[7:a]volume=0.25[bg_pre]",
+                    f"[bg_pre][6:a]sidechaincompress=threshold=0.06:ratio=4:attack=25:release=300[ducked_bg]"
                 ]
-                mix_sources = ["[ducked_bg]", "[5:a]"]
+                mix_sources = ["[ducked_bg]", "[6:a]"]
 
                 if has_chime:
                     cmd.extend(["-i", str(chime_sfx)])
@@ -650,7 +656,7 @@ class VideoCompositor:
                 cmd.extend([
                     "-filter_complex", filter_complex_v,
                     "-map", "[v_out]",
-                    "-map", "5:a"
+                    "-map", "6:a"
                 ])
 
             cmd.extend([

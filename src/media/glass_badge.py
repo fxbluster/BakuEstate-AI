@@ -77,76 +77,105 @@ ARCHETYPE_STYLES = {
 }
 
 
+def _draw_pill_tag(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    font: Any,
+    bg_rgba: Tuple[int, int, int, int],
+    text_rgba: Tuple[int, int, int, int] = (255, 255, 255, 255),
+    pad_x: int = 16,
+    pad_y: int = 7,
+) -> int:
+    """Draws a crisp rounded pill tag and returns its right x coordinate."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    pw = tw + pad_x * 2
+    ph = th + pad_y * 2
+    draw.rounded_rectangle([x, y, x + pw, y + ph], radius=ph // 2, fill=bg_rgba)
+    draw.text((x + pad_x, y + pad_y - bbox[1]), text, font=font, fill=text_rgba)
+    return x + pw
+
+
 def create_hero_badge(
     listing: Dict[str, Any],
     output_path: Optional[Path] = None,
-    width: int = 920,
-    height: int = 176,
-    archetype: str = "budget"
+    width: int = 940,
+    height: int = 280,
+    archetype: str = "budget",
+    hook_text: Optional[str] = None,
 ) -> Path:
     """
-    Renders a minimal editorial real estate title strip (zero heavy AI-box look):
-    - Lightly frosted translucent dark ribbon with a vertical architectural accent bar
-    - Clean uppercase micro-tags separated by dots (no bulky pill buttons)
-    - Bold editorial price and concise 1-line specs
+    Renders a bold, high-contrast scroll-stopping editorial intro card:
+    - Dark frosted glass card with vibrant archetype accent border & left bar
+    - Colored pill badges (TƏCİLİ, KUPÇALI, archetype highlight)
+    - Giant bold price, concise location/specs, and punchy 1-line hook headline
     """
     style_key = archetype.lower() if archetype.lower() in ARCHETYPE_STYLES else "budget"
     style = ARCHETYPE_STYLES[style_key]
 
     accent_map = {
-        "budget": (255, 212, 59, 245),      # Vibrant Gold
-        "luxury": (245, 215, 145, 245),     # Champagne Gold
-        "villa": (52, 211, 153, 245),       # Emerald Mint
-        "commercial": (56, 189, 248, 245),  # Sky Cyan
+        "budget": (255, 212, 59, 255),      # Vibrant Gold
+        "luxury": (245, 215, 145, 255),     # Champagne Gold
+        "villa": (52, 211, 153, 255),       # Emerald Mint
+        "commercial": (56, 189, 248, 255),  # Sky Cyan
     }
-    accent_color = accent_map.get(style_key, (255, 212, 59, 245))
+    accent_color = accent_map.get(style_key, (255, 212, 59, 255))
+    scale = min(1.0, height / 260.0) if height < 240 else 1.0
 
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Minimal Frosted Editorial Ribbon (translucent charcoal, thin hairline border)
+    # 1. High-contrast Frosted Dark Glass Card
     draw.rounded_rectangle(
-        [0, 0, width, height],
-        radius=20,
-        fill=(10, 14, 22, 148),
-        outline=(255, 255, 255, 42),
-        width=1
+        [0, 0, width - 1, height - 1],
+        radius=24,
+        fill=(10, 14, 24, 215),
+        outline=(accent_color[0], accent_color[1], accent_color[2], 145),
+        width=2,
     )
 
     # Vertical architectural accent bar on the left
-    bar_pad_y = max(20, int(height * 0.14))
+    bar_pad_y = max(18, int(height * 0.11))
     draw.rounded_rectangle(
-        [20, bar_pad_y, 27, height - bar_pad_y],
+        [20, bar_pad_y, 28, height - bar_pad_y],
         radius=4,
-        fill=accent_color
+        fill=accent_color,
     )
 
-    # Fonts scaled cleanly to container height
-    font_tag = get_best_font(size=20, bold=True)
-    font_price = get_best_font(size=50, bold=True)
-    font_specs = get_best_font(size=27, bold=False)
+    font_tag = get_best_font(size=max(16, int(20 * scale)), bold=True)
+    font_price = get_best_font(size=max(38, int(64 * scale)), bold=True)
+    font_specs = get_best_font(size=max(22, int(30 * scale)), bold=True)
+    font_hook = get_best_font(size=max(18, int(25 * scale)), bold=False)
 
-    # 2. Minimal Micro-Tag Row (clean text, zero bulky pills)
-    has_kupca = listing.get("has_bill_of_sale", True)
-    is_urgent = listing.get("is_urgent", False)
-    tags: List[str] = []
+    # 2. Colored Pill Badges Row
+    has_kupca = bool(listing.get("has_bill_of_sale", False))
+    is_urgent = bool(listing.get("is_urgent", False))
+    pill_defs: List[Tuple[str, Tuple[int, int, int, int], Tuple[int, int, int, int]]] = []
     if is_urgent:
-        tags.append("TƏCİLİ")
+        pill_defs.append(("TƏCİLİ SATIŞ", (220, 38, 38, 235), (255, 255, 255, 255)))
     if has_kupca:
-        tags.append("KUPÇALI")
+        pill_defs.append(("KUPÇALI", (16, 185, 129, 230), (255, 255, 255, 255)))
     for pill_name, _ in style["default_pills"]:
-        if len(tags) < 3 and pill_name not in tags:
-            tags.append(pill_name)
+        if len(pill_defs) < 3 and all(p[0] != pill_name for p in pill_defs):
+            pill_defs.append((
+                pill_name,
+                (accent_color[0], accent_color[1], accent_color[2], 235),
+                (15, 23, 42, 255),
+            ))
 
-    tag_str = "   ·   ".join(tags)
-    x_text = 46
-    y_tag = max(18, int(height * 0.13))
-    y_price = max(50, int(height * 0.32))
-    y_specs = max(116, int(height * 0.68))
+    x_text = 48
+    y_tag = max(16, int(height * 0.09))
+    cur_x = x_text
+    for p_label, p_bg, p_fg in pill_defs:
+        cur_x = _draw_pill_tag(
+            draw, cur_x, y_tag, p_label, font_tag, p_bg, p_fg,
+            pad_x=max(10, int(14 * scale)), pad_y=max(4, int(6 * scale)),
+        ) + 12
 
-    draw.text((x_text, y_tag), tag_str, font=font_tag, fill=accent_color)
-
-    # 3. Bold Editorial Price
+    # 3. Giant Bold Price
     price = listing.get("price")
     curr = listing.get("currency") or "AZN"
     try:
@@ -156,9 +185,10 @@ def create_hero_badge(
         formatted_price = "Münasib Qiymət"
 
     price_str = f"{formatted_price} {curr}"
+    y_price = max(54, int(height * 0.27))
     draw.text((x_text, y_price), price_str, font=font_price, fill=(255, 255, 255, 255))
 
-    # 4. Clean Specs Line
+    # 4. Clean Location & Specs Line
     raw_loc = listing.get("location") or listing.get("address") or "Bakı şəhəri"
     loc_clean = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəs.', raw_loc, flags=re.IGNORECASE).strip()
     loc_clean = re.sub(r'\bm\.(?=\s|$|[,\.!])', 'm.', loc_clean, flags=re.IGNORECASE).strip()
@@ -176,14 +206,96 @@ def create_hero_badge(
             specs_parts.append(f"{area} m²")
     specs_display = "  ·  ".join(specs_parts)
 
-    draw.text((x_text, y_specs), specs_display, font=font_specs, fill=(235, 240, 248, 245))
+    y_specs = max(106, int(height * 0.56))
+    draw.text((x_text, y_specs), specs_display, font=font_specs, fill=accent_color)
 
-    # Save output
+    # 5. Punchy Hook Headline (for tall intro cards)
+    if height >= 230:
+        default_hooks = {
+            "luxury": "Premium təmirli, eksklüziv yaşayış fürsəti!",
+            "villa": "Geniş həyətli, tam hazır xüsusi mülk!",
+            "commercial": "Yüksək gəlirli hazır obyekt təklifi!",
+            "budget": "Əla yerləşmə və sərfəli qiymət fürsəti!",
+        }
+        resolved_hook = (hook_text or "").strip()
+        if not resolved_hook:
+            ab_meta = listing.get("ab_metadata") if isinstance(listing.get("ab_metadata"), dict) else {}
+            vp = ab_meta.get("visual_profile") if isinstance(ab_meta.get("visual_profile"), dict) else {}
+            resolved_hook = str(vp.get("hook_sentence_az") or "").strip()
+        if not resolved_hook:
+            resolved_hook = default_hooks.get(style_key, default_hooks["budget"])
+        if len(resolved_hook) > 64:
+            resolved_hook = resolved_hook[:61].rstrip() + "..."
+        y_hook = int(height * 0.76)
+        draw.text((x_text, y_hook), resolved_hook, font=font_hook, fill=(226, 232, 240, 245))
+
     if not output_path:
         output_path = Path("data/output/hero_badge.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(output_path), "PNG")
-    logger.info(f"Created {archetype} editorial hero strip: {output_path} ({width}x{height})")
+    logger.info(f"Created {archetype} editorial hero card: {output_path} ({width}x{height})")
+    return output_path
+
+
+def create_persistent_top_pill(
+    listing: Dict[str, Any],
+    output_path: Optional[Path] = None,
+    width: int = 840,
+    height: int = 60,
+    archetype: str = "budget",
+) -> Path:
+    """Compact persistent top info bar shown after the intro card fades out."""
+    style_key = archetype.lower() if archetype.lower() in ARCHETYPE_STYLES else "budget"
+    accent_map = {
+        "budget": (255, 212, 59, 255),
+        "luxury": (245, 215, 145, 255),
+        "villa": (52, 211, 153, 255),
+        "commercial": (56, 189, 248, 255),
+    }
+    accent = accent_map.get(style_key, (255, 212, 59, 255))
+
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        [0, 0, width - 1, height - 1],
+        radius=height // 2,
+        fill=(10, 14, 24, 195),
+        outline=(accent[0], accent[1], accent[2], 120),
+        width=1,
+    )
+
+    price = listing.get("price")
+    curr = listing.get("currency") or "AZN"
+    try:
+        num_price = float(price) if price is not None else 0.0
+        formatted_price = f"{int(num_price):,}".replace(",", " ") if num_price > 0 else "Münasib Qiymət"
+    except (ValueError, TypeError):
+        formatted_price = "Münasib Qiymət"
+
+    raw_loc = listing.get("location") or listing.get("address") or "Bakı"
+    loc_clean = re.sub(r'\bq\.(?=\s|$|[,\.!])', 'qəs.', raw_loc, flags=re.IGNORECASE).strip()
+    parts = [f"{formatted_price} {curr}", loc_clean]
+    if listing.get("rooms"):
+        parts.append(f"{listing['rooms']} otaq")
+    if listing.get("area"):
+        try:
+            parts.append(f"{int(float(listing['area']))} m²")
+        except Exception:
+            parts.append(f"{listing['area']} m²")
+    text = "   ·   ".join(parts)
+
+    font = get_best_font(size=24, bold=True)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    tx = max(24, (width - tw) // 2)
+    ty = (height - th) // 2 - bbox[1]
+    draw.text((tx, ty), text, font=font, fill=(248, 250, 252, 250))
+
+    if not output_path:
+        output_path = Path("data/output/top_info_pill.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(str(output_path), "PNG")
     return output_path
 
 
