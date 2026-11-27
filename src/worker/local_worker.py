@@ -1185,13 +1185,23 @@ class BakuLocalWorker:
 
         script_angle = params.get("script_angle")
         model_id = params.get("model_id")
-        trigger_reason = str(
+        raw_trigger_reason = str(
             params.get("trigger_reason")
             or (
                 "VOICE_SWITCH"
                 if (voice_engine or voice_id)
                 else ("SCRIPT_ANGLE" if script_angle else "MANUAL_RERENDER")
             )
+        ).strip().upper()
+        allowed_trigger_reasons = {
+            "AUTO_INITIAL",
+            "AUTO_PRICE_DROP",
+            "MANUAL_RERENDER",
+            "SCRIPT_ANGLE",
+            "VOICE_SWITCH",
+        }
+        trigger_reason = (
+            raw_trigger_reason if raw_trigger_reason in allowed_trigger_reasons else "MANUAL_RERENDER"
         )
 
         # Support both telegram-webhook (`telegram_message_id`) and direct (`update_telegram_message_id`)
