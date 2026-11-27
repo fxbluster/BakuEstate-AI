@@ -515,8 +515,8 @@ export type UnifiedStatusLabel =
 export function getUnifiedListingStatus(
   listing: Pick<
     Listing,
-    "editorial_status" | "pipeline_status" | "source_availability" | "video_cdn_url"
-  >,
+    "editorial_status" | "pipeline_status" | "source_availability"
+  > & { video_cdn_url?: string | null },
   renders: Array<Pick<RenderVersion, "status">> = [],
   publications: Array<Pick<Publication, "status">> = []
 ): { label: UnifiedStatusLabel; tone: BadgeTone } {
