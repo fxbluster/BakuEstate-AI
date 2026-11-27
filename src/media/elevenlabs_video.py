@@ -106,29 +106,37 @@ def animate_photo_to_video(
         "xi-api-key": key,
         "Content-Type": "application/json",
     }
-    payload: Dict[str, Any] = {
-        "model_id": target_model,
-        "prompt": prompt,
-        "image": {
-            "type": "inline_base64",
-            "content_base64": b64,
-            "mime_type": "image/jpeg",
-        },
+    image_ref = {
+        "type": "inline_base64",
+        "content_base64": b64,
+        "mime_type": "image/jpeg",
     }
 
     try:
         logger.info("Submitting ElevenLabs AI video (%s) for %s...", target_model, src.name)
-        resp = requests.post(
-            ELEVENLABS_FLOWS_VIDEO_URL,
-            headers=headers,
-            json=payload,
-            timeout=submit_timeout,
-        )
-        if resp.status_code not in (200, 201, 202):
+        resp = None
+        for frame_key in ("first_frame", "start_frame"):
+            payload: Dict[str, Any] = {
+                "model_id": target_model,
+                "prompt": prompt,
+                frame_key: image_ref,
+            }
+            resp = requests.post(
+                ELEVENLABS_FLOWS_VIDEO_URL,
+                headers=headers,
+                json=payload,
+                timeout=submit_timeout,
+            )
+            if resp.status_code == 422 and frame_key == "first_frame" and "extra_forbidden" in resp.text:
+                logger.info("ElevenLabs Flows rejected 'first_frame', retrying with 'start_frame'...")
+                continue
+            break
+
+        if resp is None or resp.status_code not in (200, 201, 202):
             logger.warning(
                 "ElevenLabs Flows Video returned HTTP %s: %s",
-                resp.status_code,
-                resp.text[:250],
+                resp.status_code if resp is not None else "None",
+                resp.text[:250] if resp is not None else "",
             )
             return None
 

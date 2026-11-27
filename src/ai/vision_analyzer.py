@@ -232,7 +232,8 @@ def analyze_listing_photos(
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.2,
-            "maxOutputTokens": 600,
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
 

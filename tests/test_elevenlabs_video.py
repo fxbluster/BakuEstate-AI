@@ -71,8 +71,8 @@ class TestElevenLabsVideo(unittest.TestCase):
         self.assertEqual(args[0], ELEVENLABS_FLOWS_VIDEO_URL)
         self.assertEqual(kwargs["headers"]["xi-api-key"], "el_test_key")
         self.assertEqual(kwargs["json"]["model_id"], DEFAULT_VIDEO_MODEL)
-        self.assertEqual(kwargs["json"]["image"]["type"], "inline_base64")
-        self.assertEqual(kwargs["json"]["image"]["mime_type"], "image/jpeg")
+        self.assertEqual(kwargs["json"]["first_frame"]["type"], "inline_base64")
+        self.assertEqual(kwargs["json"]["first_frame"]["mime_type"], "image/jpeg")
 
     @patch("requests.post")
     def test_animate_photo_fallback_on_403_permission(self, mock_post):
