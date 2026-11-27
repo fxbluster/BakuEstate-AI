@@ -23,6 +23,7 @@ import { isSupabaseConfigured } from "@/lib/supabase/env";
 import {
   formatBakuDateTime,
   formatDurationAz,
+  formatJobParamsEntries,
   formatRelativeAz,
   JOB_STATUS_META,
   JOB_TRIGGER_LABELS,
@@ -780,15 +781,40 @@ export function JobsClient({
                     )}
 
                     {isTechOpen && (
-                      <div className="rounded-lg border border-slate-800 bg-obsidian-950/90 p-3 font-mono text-[11px] text-slate-400 space-y-1">
-                        <div>Job ID: {job.id}</div>
-                        <div>
-                          Cəhd: {job.attempts}/{job.max_attempts} • Worker:{" "}
-                          {job.locked_by || "—"}
+                      <div className="rounded-lg border border-slate-800 bg-obsidian-950/90 p-3 text-[11px] text-slate-400 space-y-2">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          <span>
+                            İş ID:{" "}
+                            <span className="font-mono text-slate-300">
+                              {job.id.slice(0, 8)}
+                            </span>
+                          </span>
+                          <span>
+                            Cəhd: {job.attempts}/{job.max_attempts}
+                          </span>
+                          <span>Worker: {job.locked_by || "—"}</span>
                         </div>
-                        <div className="overflow-x-auto">
-                          Parametrlər: {JSON.stringify(job.params_json ?? {})}
-                        </div>
+                        {(() => {
+                          const paramEntries = formatJobParamsEntries(
+                            job.params_json
+                          );
+                          if (paramEntries.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-800/80">
+                              {paramEntries.map((item) => (
+                                <span
+                                  key={item.label}
+                                  className="rounded border border-slate-800 bg-obsidian-900 px-2 py-0.5 text-[11px] text-slate-300"
+                                >
+                                  <span className="text-slate-500">
+                                    {item.label}:{" "}
+                                  </span>
+                                  {item.value}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 

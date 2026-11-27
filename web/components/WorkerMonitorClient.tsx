@@ -230,7 +230,7 @@ export function WorkerLivePanel({
                 </span>
               </div>
               <p className="mt-1 text-xs text-slate-400">
-                Stateless Docker konteynerləri (<code className="font-mono text-slate-300">--no-scheduler</code>) • Cloudflare R2 media saxlancı • <code className="font-mono text-slate-300">FOR UPDATE SKIP LOCKED</code> növbəsi
+                Bulud Docker replikaları • Cloudflare R2 video saxlancı • Avtomatik paralel iş növbəsi
               </p>
             </div>
           </div>
@@ -298,8 +298,7 @@ export function WorkerLivePanel({
               <p className="text-xs text-amber-100/80 leading-relaxed">
                 Video montajı (FFmpeg &lt;= 18 MB + R2 yükləmə) və avtomatik
                 yığım Railway Docker konteynerlərində icra olunur. Railway
-                panelindən replika sağlamlığını, <code className="font-mono">WORKER_MODE</code>{" "}
-                dəyişənini və son deploy loglarını yoxlayın.
+                panelindən replika sağlamlığını və son deploy loglarını yoxlayın.
               </p>
             </div>
           </div>

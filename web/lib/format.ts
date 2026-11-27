@@ -711,3 +711,45 @@ export function formatListingEventSummary(
 
   return null;
 }
+
+const JOB_PARAM_LABELS: Record<string, string> = {
+  bina_id: "Elan ID",
+  listing_id: "Sistem ID",
+  target_account: "Hədəf Hesab",
+  voice_preset: "Diktor",
+  voice_id: "Diktor",
+  trigger_reason: "Səbəb",
+  enqueue_render_jobs: "Avto-render",
+  custom_script: "Xüsusi Ssenari",
+  selected_photo_urls: "Seçilmiş Fotolar",
+  script_angle: "Ssenari Bucağı",
+  max_pages: "Maks. Səhifə",
+  limit: "Limit",
+};
+
+export function formatJobParamsEntries(
+  params: Record<string, unknown> | null | undefined
+): Array<{ label: string; value: string }> {
+  if (!params || typeof params !== "object") return [];
+  const entries: Array<{ label: string; value: string }> = [];
+  for (const [key, raw] of Object.entries(params)) {
+    if (raw === null || raw === undefined || raw === "") continue;
+    const label = JOB_PARAM_LABELS[key] ?? key;
+    let value: string;
+    if (key === "selected_photo_urls" && Array.isArray(raw)) {
+      value = `${raw.length} foto`;
+    } else if (key === "custom_script" && typeof raw === "string") {
+      value = `${raw.length} simvol`;
+    } else if (typeof raw === "boolean") {
+      value = raw ? "Aktiv" : "Deaktiv";
+    } else if (Array.isArray(raw)) {
+      value = `${raw.length} element`;
+    } else if (typeof raw === "object") {
+      value = "Obyekt";
+    } else {
+      value = String(raw);
+    }
+    entries.push({ label, value });
+  }
+  return entries;
+}
