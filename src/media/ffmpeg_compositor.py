@@ -516,7 +516,17 @@ class VideoCompositor:
                 f"(Archetype: {archetype}, Mode: {framing_mode}, Duration: {total_duration:.2f}s, {len(image_paths)} slides)..."
             )
 
-            # 1. Render motion walkthrough via render_cinematic_walkthrough
+            # 1. Optional ElevenLabs Veo 3.1 AI Image-to-Video intro clip (graceful fallback)
+            ai_clips: Dict[int, Path] = {}
+            try:
+                from src.media.elevenlabs_video import generate_ai_intro_clips
+                ai_clips = generate_ai_intro_clips(image_paths, temp_dir, listing, max_clips=1)
+                if ai_clips:
+                    logger.info("Using %d ElevenLabs AI video clip(s) for cinematic intro.", len(ai_clips))
+            except Exception as _ai_vid_exc:
+                logger.warning("AI intro video skipped (fallback to Ken Burns): %s", _ai_vid_exc)
+
+            # 2. Render motion walkthrough via render_cinematic_walkthrough
             walkthrough_output = temp_dir / "walkthrough_raw.mp4"
             walkthrough_res = render_cinematic_walkthrough(
                 image_paths=image_paths,
@@ -524,7 +534,8 @@ class VideoCompositor:
                 total_duration=total_duration,
                 framing_mode=framing_mode,
                 archetype=archetype,
-                ffmpeg_exe=self.ffmpeg_exe
+                ffmpeg_exe=self.ffmpeg_exe,
+                ai_video_clips=ai_clips or None,
             )
             walkthrough_raw = walkthrough_res["video_path"]
             transitions = walkthrough_res.get("transitions", [])

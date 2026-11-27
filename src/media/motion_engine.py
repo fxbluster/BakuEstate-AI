@@ -363,7 +363,8 @@ class MotionEngine:
         archetype: str = PropertyArchetype.BUDGET,
         fps: int = FPS,
         width: int = VIDEO_WIDTH,
-        height: int = VIDEO_HEIGHT
+        height: int = VIDEO_HEIGHT,
+        ai_video_clips: Optional[Dict[int, Path]] = None,
     ) -> Dict[str, Any]:
         """
         Renders a continuous cinematic walkthrough video by chaining room motion clips
@@ -419,9 +420,15 @@ class MotionEngine:
         clip_paths: List[Path] = []
 
         try:
-            # 1. Render individual motion clips
+            # 1. Render individual motion clips (or normalize AI-generated video clips)
             for idx, img_p in enumerate(image_paths):
                 clip_p = temp_dir / f"clip_{idx:02d}.mp4"
+                ai_clip = ai_video_clips.get(idx) if ai_video_clips else None
+                if ai_clip and Path(ai_clip).is_file() and self.normalize_ai_video_clip(
+                    Path(ai_clip), clip_p, duration=slide_duration, fps=fps, width=width, height=height
+                ):
+                    clip_paths.append(clip_p)
+                    continue
                 profile = motion_seq[idx % len(motion_seq)]
                 self.create_motion_clip(
                     image_path=Path(img_p),
@@ -514,6 +521,38 @@ class MotionEngine:
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def normalize_ai_video_clip(
+        self,
+        src_clip: Path,
+        output_clip_path: Path,
+        duration: float,
+        fps: int = FPS,
+        width: int = VIDEO_WIDTH,
+        height: int = VIDEO_HEIGHT,
+    ) -> bool:
+        """Scales/crops an AI-generated video clip to 1080x1920 and exact slide duration."""
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},fps={fps},format=yuv420p"
+        )
+        cmd = [
+            self.ffmpeg_exe, "-y",
+            "-stream_loop", "-1",
+            "-i", str(src_clip),
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "faster",
+            "-pix_fmt", "yuv420p",
+            str(output_clip_path),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if res.returncode != 0 or not output_clip_path.is_file():
+            logger.warning("Failed to normalize AI video clip %s: %s", src_clip, res.stderr[-250:])
+            return False
+        return True
+
     def _run_pairwise_xfade_stitch(
         self,
         *,
@@ -594,7 +633,8 @@ def render_cinematic_walkthrough(
     fps: int = FPS,
     width: int = VIDEO_WIDTH,
     height: int = VIDEO_HEIGHT,
-    ffmpeg_exe: Optional[str] = None
+    ffmpeg_exe: Optional[str] = None,
+    ai_video_clips: Optional[Dict[int, Path]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to render a cinematic walkthrough video.
@@ -612,5 +652,6 @@ def render_cinematic_walkthrough(
         archetype=archetype,
         fps=fps,
         width=width,
-        height=height
+        height=height,
+        ai_video_clips=ai_video_clips,
     )
