@@ -216,7 +216,12 @@ export default async function ListingsPage({
   const channelProfiles: Partial<Record<ChannelNiche, SocialChannelProfile>> =
     rawChannels && typeof rawChannels === "object" ? rawChannels : {};
 
-  let query = supabase.from("listings").select("*", { count: "exact" });
+  let query = supabase
+    .from("listings")
+    .select(
+      "id, agency_id, bina_id, url, title, price, currency, price_azn_normalized, location, district_normalized, address, rooms, area, floor, floors, has_bill_of_sale, is_owner, contact_name, owner_phone_raw, owner_phone_normalized, photo_urls, archetype, canonical_niche, source_availability, first_seen_at, last_seen_at, pipeline_status, editorial_status, owner_outreach_status, duplicate_resolution, duplicate_confidence, duplicate_of_listing_id, content_revision, last_rendered_revision, created_at, updated_at",
+      { count: "exact" }
+    );
 
   if (member?.agency_id) {
     query = query.eq("agency_id", member.agency_id);

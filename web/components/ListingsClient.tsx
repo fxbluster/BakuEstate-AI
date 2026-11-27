@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -207,6 +207,7 @@ export function ListingsClient({
 }: ListingsClientProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const [isPending, startTransition] = useTransition();
 
   const [listings, setListings] =
     useState<ListingWithLatestRender[]>(initialListings);
@@ -293,6 +294,14 @@ export function ListingsClient({
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const hasNextPage = pagination?.hasNextPage ?? false;
 
+  useEffect(() => {
+    if (!isServerPaginated || typeof router.prefetch !== "function") return;
+    router.prefetch(`${pathname}?page=1`);
+    router.prefetch(`${pathname}?page=1&tab=NO_VIDEO`);
+    router.prefetch(`${pathname}?page=1&tab=DRAFTS`);
+    router.prefetch(`${pathname}?page=1&tab=PUBLISHED`);
+  }, [isServerPaginated, pathname, router]);
+
   function navigateWithParams(
     updates: Record<string, string | null>,
     resetPage: boolean
@@ -311,7 +320,9 @@ export function ListingsClient({
       next.set("page", "1");
     }
     const qs = next.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
+    startTransition(() => {
+      router.push(qs ? `${pathname}?${qs}` : pathname);
+    });
   }
 
   function handlePageChange(nextPage: number) {
@@ -1143,8 +1154,13 @@ export function ListingsClient({
       </div>
 
       {/* Listings Grid */}
+      {isPending && (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800/80">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-gold-400" />
+        </div>
+      )}
       {filtered.length === 0 ? (
-        <div className="exec-card flex flex-col items-center justify-center py-14 text-center px-6">
+        <div className={`exec-card flex flex-col items-center justify-center py-14 text-center px-6 transition-opacity ${isPending ? "opacity-60" : ""}`}>
           <Building2 className="h-10 w-10 text-slate-600" />
           <p className="mt-3 text-sm font-medium text-slate-200">
             Filtrə uyğun elan tapılmadı
@@ -1154,7 +1170,7 @@ export function ListingsClient({
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={`grid gap-4 sm:grid-cols-2 xl:grid-cols-3 transition-opacity ${isPending ? "opacity-60 pointer-events-none" : ""}`}>
           {filtered.map((item) => {
             const detailSlug = item.bina_id || item.id;
             const displayTag = item.bina_id ? `#${item.bina_id}` : "OFF-MARKET";
