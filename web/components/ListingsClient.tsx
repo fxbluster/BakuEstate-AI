@@ -100,10 +100,7 @@ export function getUnifiedListingStatus(item: ListingWithLatestRender): {
   ) {
     return { label: "Arxiv", tone: "neutral" };
   }
-  if (
-    item.publication?.status === "PUBLISHED" ||
-    item.editorial_status === "PUBLISHED"
-  ) {
+  if (item.publication?.status === "PUBLISHED") {
     return { label: "Paylaşıldı", tone: "emerald" };
   }
   if (

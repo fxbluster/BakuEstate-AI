@@ -530,11 +530,7 @@ export function getUnifiedListingStatus(
     return { label: "Arxiv", tone: "neutral" };
   }
 
-  if (
-    listing.editorial_status === "PUBLISHED" ||
-    publications.some((p) => p.status === "PUBLISHED") ||
-    publications.length > 0
-  ) {
+  if (publications.some((p) => p.status === "PUBLISHED")) {
     return { label: "Paylaşıldı", tone: "emerald" };
   }
 
