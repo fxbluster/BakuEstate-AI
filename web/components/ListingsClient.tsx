@@ -5,10 +5,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Building2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  FileCheck2,
   Film,
   Plus,
   Search,
@@ -19,8 +19,6 @@ import {
   Upload,
   X,
   MessageCircle,
-  CheckCircle2,
-  AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { resolveCanonicalListingNiche } from "@/lib/niche-router";
@@ -29,14 +27,11 @@ import { sortListings, SORT_OPTIONS, type SortMode } from "@/lib/listing-sorter"
 import {
   ARCHETYPE_LABELS,
   type BadgeTone,
-  DUPLICATE_RESOLUTION_META,
   EDITORIAL_STATUS_META,
   formatAzn,
   formatBakuDate,
   formatCompactNumber,
   formatPrice,
-  OWNER_OUTREACH_META,
-  RENDER_STATUS_META,
   SOURCE_AVAILABILITY_META,
 } from "@/lib/format";
 import type {
@@ -86,8 +81,53 @@ export interface ListingsFilterState {
 
 export interface ListingsServerTabCounts {
   all: number;
+  noVideo?: number;
   drafts: number;
   published: number;
+}
+
+export function getUnifiedListingStatus(item: ListingWithLatestRender): {
+  label: string;
+  tone: BadgeTone;
+} {
+  if (item.source_availability === "CONFIRMED_SOLD") {
+    return { label: "Satılıb", tone: "neutral" };
+  }
+  if (
+    item.source_availability === "REMOVED_ON_BINA" ||
+    item.editorial_status === "ARCHIVED" ||
+    item.editorial_status === "REJECTED"
+  ) {
+    return { label: "Arxiv", tone: "neutral" };
+  }
+  if (
+    item.publication?.status === "PUBLISHED" ||
+    item.editorial_status === "PUBLISHED"
+  ) {
+    return { label: "Paylaşıldı", tone: "emerald" };
+  }
+  if (
+    item.latestRender?.status === "RUNNING" ||
+    item.pipeline_status === "RENDERING"
+  ) {
+    return { label: "Montaj Olunur", tone: "violet" };
+  }
+  if (
+    item.latestRender?.status === "QUEUED" ||
+    item.pipeline_status === "QUEUED"
+  ) {
+    return { label: "Növbədə", tone: "sky" };
+  }
+  if (item.latestRender?.status === "COMPLETED") {
+    return { label: "Video Hazır", tone: "gold" };
+  }
+  if (
+    item.latestRender?.status === "FAILED" ||
+    item.pipeline_status === "FAILED"
+  ) {
+    return { label: "Xəta", tone: "rose" };
+  }
+  return { label: "Videosuz", tone: "neutral" };
 }
 
 export interface ListingsServerNicheCounts {
@@ -175,9 +215,13 @@ export function ListingsClient({
     setListings(initialListings);
   }, [initialListings]);
 
-  const [activeTab, setActiveTab] = useState<"ALL" | "DRAFTS" | "PUBLISHED">(
-    (initialFilters?.tab as "ALL" | "DRAFTS" | "PUBLISHED") || "ALL"
+  const [activeTab, setActiveTab] = useState<
+    "ALL" | "NO_VIDEO" | "DRAFTS" | "PUBLISHED"
+  >(
+    (initialFilters?.tab as "ALL" | "NO_VIDEO" | "DRAFTS" | "PUBLISHED") ||
+      "ALL"
   );
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [query, setQuery] = useState(initialFilters?.search ?? "");
   const [editorialFilter, setEditorialFilter] = useState<
     EditorialStatus | "ALL"
@@ -277,8 +321,21 @@ export function ListingsClient({
 
   const counts = useMemo(() => {
     if (serverTabCounts) {
-      return serverTabCounts;
+      return {
+        all: serverTabCounts.all,
+        noVideo:
+          serverTabCounts.noVideo ??
+          Math.max(
+            0,
+            serverTabCounts.all -
+              serverTabCounts.drafts -
+              serverTabCounts.published
+          ),
+        drafts: serverTabCounts.drafts,
+        published: serverTabCounts.published,
+      };
     }
+    let noVideo = 0;
     let drafts = 0;
     let published = 0;
     for (const item of listings) {
@@ -291,10 +348,13 @@ export function ListingsClient({
           item.publication.status === "READY_TO_PUBLISH")
       ) {
         drafts++;
+      } else {
+        noVideo++;
       }
     }
     return {
       all: isServerPaginated ? totalCount : listings.length,
+      noVideo,
       drafts,
       published,
     };
@@ -333,7 +393,15 @@ export function ListingsClient({
 
     const q = query.trim().toLowerCase();
     const matched = listings.filter((item) => {
-      if (activeTab === "DRAFTS") {
+      if (activeTab === "NO_VIDEO") {
+        const isPublished = item.publication?.status === "PUBLISHED";
+        const isDraft =
+          item.latestRender?.status === "COMPLETED" &&
+          (!item.publication ||
+            item.publication.status === "DRAFT_READY" ||
+            item.publication.status === "READY_TO_PUBLISH");
+        if (isPublished || isDraft) return false;
+      } else if (activeTab === "DRAFTS") {
         const isDraft =
           item.latestRender?.status === "COMPLETED" &&
           (!item.publication ||
@@ -696,6 +764,15 @@ export function ListingsClient({
     }
   }
 
+  const activeFilterCount = [
+    editorialFilter,
+    availabilityFilter,
+    archetypeFilter,
+    kupcaFilter,
+    duplicateFilter,
+    nicheFilter,
+  ].filter((v) => v !== "ALL").length;
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -745,9 +822,30 @@ export function ListingsClient({
           }`}
         >
           <Building2 className="h-3.5 w-3.5" />
-          <span>Bütün Elanlar</span>
+          <span>Hamısı</span>
           <span className="rounded-md bg-obsidian-950/80 px-1.5 py-0.5 text-[10px] text-slate-400">
             {counts.all}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab("NO_VIDEO");
+            setNicheFilter("ALL");
+            if (isServerPaginated)
+              navigateWithParams({ tab: "NO_VIDEO", niche: "ALL" }, true);
+          }}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+            activeTab === "NO_VIDEO"
+              ? "bg-slate-500/20 text-slate-200 border border-slate-500/40 shadow-sm"
+              : "text-slate-400 hover:text-slate-200 hover:bg-obsidian-850 border border-transparent"
+          }`}
+        >
+          <Film className="h-3.5 w-3.5" />
+          <span>Videosuz</span>
+          <span className="rounded-md bg-obsidian-950/80 px-1.5 py-0.5 text-[10px] font-mono text-slate-300">
+            {counts.noVideo}
           </span>
         </button>
 
@@ -765,7 +863,7 @@ export function ListingsClient({
           }`}
         >
           <Film className="h-3.5 w-3.5" />
-          <span>🎬 Yayıma Hazır Qaralamalar</span>
+          <span>Hazır</span>
           <span className="rounded-md bg-obsidian-950/80 px-1.5 py-0.5 text-[10px] font-mono text-amber-300">
             {counts.drafts}
           </span>
@@ -786,89 +884,11 @@ export function ListingsClient({
           }`}
         >
           <Send className="h-3.5 w-3.5" />
-          <span>🚀 Canlı Yayımda Olanlar</span>
+          <span>Paylaşıldı</span>
           <span className="rounded-md bg-obsidian-950/80 px-1.5 py-0.5 text-[10px] font-mono text-emerald-300">
             {counts.published}
           </span>
         </button>
-      </div>
-
-      {/* Secondary Filter Pill Row for Channel Niches */}
-      <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl border border-slate-800/80 bg-obsidian-900/60 backdrop-blur-md">
-        <span className="text-[11px] font-semibold text-slate-400 pl-2 pr-1 uppercase tracking-wider">
-          Kanal / Niche:
-        </span>
-
-        {(
-          [
-            {
-              id: "ALL",
-              label: "Hamısı",
-              count: nicheCounts.all,
-              activeCls:
-                "bg-gold-500/20 text-gold-300 border border-gold-500/40 shadow-sm",
-              countCls: "text-slate-400",
-            },
-            {
-              id: "LUXURY",
-              label: `💎 ${channelProfiles?.LUXURY?.handle?.trim() || "@bakuestate.premium"}`,
-              count: nicheCounts.luxury,
-              activeCls:
-                "bg-amber-500/20 text-amber-300 border border-amber-400/50 shadow-sm",
-              countCls: "text-amber-300",
-            },
-            {
-              id: "AFFORDABLE",
-              label: `🏠 ${channelProfiles?.AFFORDABLE?.handle?.trim() || "@baku.serfeli.evler"}`,
-              count: nicheCounts.affordable,
-              activeCls:
-                "bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-sm",
-              countCls: "text-emerald-300",
-            },
-            {
-              id: "GENERAL",
-              label: `🏢 ${channelProfiles?.GENERAL?.handle?.trim() || "@bakuestate.official"}`,
-              count: nicheCounts.general,
-              activeCls:
-                "bg-sky-500/20 text-sky-300 border border-sky-400/50 shadow-sm",
-              countCls: "text-sky-300",
-            },
-            {
-              id: "TIKTOK",
-              label: `🔥 ${channelProfiles?.TIKTOK?.handle?.trim() || "@baku_emlak_ai"}`,
-              count: nicheCounts.tiktok,
-              activeCls:
-                "bg-rose-500/20 text-rose-300 border border-rose-400/50 shadow-sm",
-              countCls: "text-rose-300",
-            },
-          ] as const
-        ).map((pill) => (
-          <button
-            key={pill.id}
-            type="button"
-            onClick={() => {
-              setNicheFilter(pill.id);
-              if (isServerPaginated) {
-                navigateWithParams(
-                  { niche: pill.id === "ALL" ? null : pill.id },
-                  true
-                );
-              }
-            }}
-            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
-              nicheFilter === pill.id
-                ? pill.activeCls
-                : "text-slate-400 hover:text-slate-200 hover:bg-obsidian-850 border border-transparent"
-            }`}
-          >
-            <span>{pill.label}</span>
-            <span
-              className={`rounded-md bg-obsidian-950/80 px-1.5 py-0.5 text-[10px] font-mono ${pill.countCls}`}
-            >
-              {pill.count}
-            </span>
-          </button>
-        ))}
       </div>
 
       {/* Feedback Banner */}
@@ -939,118 +959,187 @@ export function ListingsClient({
                 </option>
               ))}
             </select>
+
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((prev) => !prev)}
+              aria-expanded={filtersOpen}
+              className={`exec-btn-secondary text-xs py-2 shrink-0 ${
+                activeFilterCount > 0
+                  ? "border-gold-500/50 text-gold-300"
+                  : ""
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <span>Ətraflı filtrlər</span>
+              {activeFilterCount > 0 && (
+                <span className="rounded-full bg-gold-500/20 border border-gold-500/40 px-1.5 py-0.5 text-[10px] font-bold text-gold-300">
+                  {activeFilterCount}
+                </span>
+              )}
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${
+                  filtersOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
           </div>
         </form>
 
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-          <select
-            aria-label="Redaksiya statusu"
-            value={editorialFilter}
-            onChange={(e) => {
-              const val = e.target.value as EditorialStatus | "ALL";
-              setEditorialFilter(val);
-              if (isServerPaginated) {
-                navigateWithParams({ editorial: val }, true);
-              }
-            }}
-            className="exec-select text-xs"
-          >
-            <option value="ALL">Bütün redaksiya</option>
-            {Object.entries(EDITORIAL_STATUS_META).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v.label}
-              </option>
-            ))}
-          </select>
+        {filtersOpen && (
+          <div className="space-y-3 pt-3 border-t border-slate-800/80">
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+              <select
+                aria-label="Niş / Kanal"
+                value={nicheFilter}
+                onChange={(e) => {
+                  const val = e.target.value as ChannelNiche | "ALL";
+                  setNicheFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams(
+                      { niche: val === "ALL" ? null : val },
+                      true
+                    );
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Bütün nişlər ({nicheCounts.all})</option>
+                <option value="LUXURY">
+                  {channelProfiles?.LUXURY?.handle?.trim() ||
+                    "@bakuestate.premium"}{" "}
+                  ({nicheCounts.luxury})
+                </option>
+                <option value="AFFORDABLE">
+                  {channelProfiles?.AFFORDABLE?.handle?.trim() ||
+                    "@baku.serfeli.evler"}{" "}
+                  ({nicheCounts.affordable})
+                </option>
+                <option value="GENERAL">
+                  {channelProfiles?.GENERAL?.handle?.trim() ||
+                    "@bakuestate.official"}{" "}
+                  ({nicheCounts.general})
+                </option>
+                <option value="TIKTOK">
+                  {channelProfiles?.TIKTOK?.handle?.trim() || "@baku_emlak_ai"}{" "}
+                  ({nicheCounts.tiktok})
+                </option>
+              </select>
 
-          <select
-            aria-label="Mənbə aktivliyi"
-            value={availabilityFilter}
-            onChange={(e) => {
-              const val = e.target.value as SourceAvailability | "ALL";
-              setAvailabilityFilter(val);
-              if (isServerPaginated) {
-                navigateWithParams({ availability: val }, true);
-              }
-            }}
-            className="exec-select text-xs"
-          >
-            <option value="ALL">Bütün aktivlik</option>
-            {Object.entries(SOURCE_AVAILABILITY_META).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v.label}
-              </option>
-            ))}
-          </select>
+              <select
+                aria-label="Redaksiya statusu"
+                value={editorialFilter}
+                onChange={(e) => {
+                  const val = e.target.value as EditorialStatus | "ALL";
+                  setEditorialFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams({ editorial: val }, true);
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Bütün redaksiya</option>
+                {Object.entries(EDITORIAL_STATUS_META).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
 
-          <select
-            aria-label="Arxetip"
-            value={archetypeFilter}
-            onChange={(e) => {
-              const val = e.target.value as Archetype | "ALL";
-              setArchetypeFilter(val);
-              if (isServerPaginated) {
-                navigateWithParams({ archetype: val }, true);
-              }
-            }}
-            className="exec-select text-xs"
-          >
-            <option value="ALL">Bütün arxetiplər</option>
-            {Object.entries(ARCHETYPE_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
+              <select
+                aria-label="Mənbə aktivliyi"
+                value={availabilityFilter}
+                onChange={(e) => {
+                  const val = e.target.value as SourceAvailability | "ALL";
+                  setAvailabilityFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams({ availability: val }, true);
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Bütün aktivlik</option>
+                {Object.entries(SOURCE_AVAILABILITY_META).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
 
-          <select
-            aria-label="Kupça"
-            value={kupcaFilter}
-            onChange={(e) => {
-              const val = e.target.value as "ALL" | "YES" | "NO";
-              setKupcaFilter(val);
-              if (isServerPaginated) {
-                navigateWithParams({ kupca: val }, true);
-              }
-            }}
-            className="exec-select text-xs"
-          >
-            <option value="ALL">Kupça: Hamısı</option>
-            <option value="YES">Kupçalı</option>
-            <option value="NO">Kupçasız</option>
-          </select>
+              <select
+                aria-label="Arxetip"
+                value={archetypeFilter}
+                onChange={(e) => {
+                  const val = e.target.value as Archetype | "ALL";
+                  setArchetypeFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams({ archetype: val }, true);
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Bütün arxetiplər</option>
+                {Object.entries(ARCHETYPE_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
 
-          <select
-            aria-label="Təkrar filtri"
-            value={duplicateFilter}
-            onChange={(e) => {
-              const val = e.target.value as
-                | "ALL"
-                | "PENDING_REVIEW"
-                | "CONFIRMED_DUPLICATE"
-                | "CLEAN";
-              setDuplicateFilter(val);
-              if (isServerPaginated) {
-                navigateWithParams({ duplicate: val }, true);
-              }
-            }}
-            className="exec-select text-xs"
-          >
-            <option value="ALL">Təkrar: Hamısı</option>
-            <option value="PENDING_REVIEW">Şübhəli Təkrar</option>
-            <option value="CONFIRMED_DUPLICATE">Təsdiqlənmiş Təkrar</option>
-            <option value="CLEAN">Yalnız Təkrarsız</option>
-          </select>
+              <select
+                aria-label="Kupça"
+                value={kupcaFilter}
+                onChange={(e) => {
+                  const val = e.target.value as "ALL" | "YES" | "NO";
+                  setKupcaFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams({ kupca: val }, true);
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Kupça: Hamısı</option>
+                <option value="YES">Kupçalı</option>
+                <option value="NO">Kupçasız</option>
+              </select>
 
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="exec-btn-secondary text-xs py-2"
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            <span>Sıfırla</span>
-          </button>
-        </div>
+              <select
+                aria-label="Təkrar filtri"
+                value={duplicateFilter}
+                onChange={(e) => {
+                  const val = e.target.value as
+                    | "ALL"
+                    | "PENDING_REVIEW"
+                    | "CONFIRMED_DUPLICATE"
+                    | "CLEAN";
+                  setDuplicateFilter(val);
+                  if (isServerPaginated) {
+                    navigateWithParams({ duplicate: val }, true);
+                  }
+                }}
+                className="exec-select text-xs"
+              >
+                <option value="ALL">Təkrar: Hamısı</option>
+                <option value="PENDING_REVIEW">Şübhəli Təkrar</option>
+                <option value="CONFIRMED_DUPLICATE">Təsdiqlənmiş Təkrar</option>
+                <option value="CLEAN">Yalnız Təkrarsız</option>
+              </select>
+            </div>
+
+            {activeFilterCount > 0 && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="exec-btn-secondary text-xs py-1.5 px-3"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Filtrləri sıfırla</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Listings Grid */}
@@ -1072,28 +1161,7 @@ export function ListingsClient({
             const thumb = Array.isArray(item.photo_urls)
               ? item.photo_urls[0]
               : undefined;
-            const edMeta = EDITORIAL_STATUS_META[item.editorial_status] ?? {
-              label: item.editorial_status || "Baxış gözləyir",
-              tone: "amber" as BadgeTone,
-            };
-            const avMeta = SOURCE_AVAILABILITY_META[
-              item.source_availability
-            ] ?? {
-              label: item.source_availability || "Aktiv",
-              tone: "emerald" as BadgeTone,
-            };
-            const ownerMeta = OWNER_OUTREACH_META[
-              item.owner_outreach_status
-            ] ?? {
-              label: item.owner_outreach_status || "Əlaqə yoxdur",
-              tone: "neutral" as BadgeTone,
-            };
-            const dupMeta = DUPLICATE_RESOLUTION_META[
-              item.duplicate_resolution
-            ] ?? {
-              label: item.duplicate_resolution || "Təkrarsız",
-              tone: "neutral" as BadgeTone,
-            };
+            const unifiedStatus = getUnifiedListingStatus(item);
             const render = item.latestRender;
             const pub = item.publication;
             const isDraftReady =
@@ -1132,82 +1200,42 @@ export function ListingsClient({
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-obsidian-950 via-obsidian-950/20 to-transparent" />
 
-                  <div className="absolute top-3 left-3 right-3 flex flex-col gap-1.5 pointer-events-none z-10">
-                    <div className="flex items-center justify-between gap-2 pointer-events-auto">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="rounded-lg bg-obsidian-950/85 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 border border-gold-500/30">
-                          {displayTag}
+                  <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none z-10">
+                    <div className="flex items-center gap-1.5 min-w-0 pointer-events-auto">
+                      <span className="rounded-lg bg-obsidian-950/85 px-2 py-0.5 font-mono text-xs font-semibold text-gold-300 border border-gold-500/30">
+                        {displayTag}
+                      </span>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold backdrop-blur-md truncate ${
+                          nicheInfo.niche === "LUXURY"
+                            ? "border-amber-400/50 bg-amber-950/85 text-amber-200"
+                            : nicheInfo.niche === "AFFORDABLE"
+                              ? "border-emerald-400/50 bg-emerald-950/85 text-emerald-200"
+                              : nicheInfo.niche === "TIKTOK"
+                                ? "border-rose-400/50 bg-rose-950/85 text-rose-200"
+                                : "border-sky-400/50 bg-sky-950/85 text-sky-200"
+                        }`}
+                      >
+                        <span>
+                          {nicheInfo.niche === "LUXURY"
+                            ? "💎"
+                            : nicheInfo.niche === "AFFORDABLE"
+                              ? "🏠"
+                              : nicheInfo.niche === "TIKTOK"
+                                ? "🔥"
+                                : "🏢"}
                         </span>
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold backdrop-blur-md ${
-                            nicheInfo.niche === "LUXURY"
-                              ? "border-amber-400/50 bg-amber-950/85 text-amber-200"
-                              : nicheInfo.niche === "AFFORDABLE"
-                                ? "border-emerald-400/50 bg-emerald-950/85 text-emerald-200"
-                                : nicheInfo.niche === "TIKTOK"
-                                  ? "border-rose-400/50 bg-rose-950/85 text-rose-200"
-                                  : "border-sky-400/50 bg-sky-950/85 text-sky-200"
-                          }`}
-                        >
-                          <span>
-                            {nicheInfo.niche === "LUXURY"
-                              ? "💎"
-                              : nicheInfo.niche === "AFFORDABLE"
-                                ? "🏠"
-                                : nicheInfo.niche === "TIKTOK"
-                                  ? "🔥"
-                                  : "🏢"}
-                          </span>
-                          <span>{nicheInfo.handle}</span>
-                        </span>
-                      </div>
-
-                      <div className="shrink-0 pointer-events-auto">
-                        {render ? (
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold backdrop-blur-sm ${
-                              render.status === "COMPLETED"
-                                ? "border-emerald-500/50 bg-emerald-950/85 text-emerald-200"
-                                : render.status === "FAILED"
-                                  ? "border-rose-500/50 bg-rose-950/85 text-rose-200"
-                                  : "border-violet-500/50 bg-violet-950/85 text-violet-200"
-                            }`}
-                          >
-                            <Film className="h-3 w-3" />
-                            v{render.version_num} •{" "}
-                            {
-                              (
-                                RENDER_STATUS_META[render.status] ?? {
-                                  label: render.status,
-                                }
-                              ).label
-                            }
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-obsidian-950/80 px-2.5 py-0.5 text-[11px] text-slate-400">
-                            <Film className="h-3 w-3" />
-                            Video yoxdur
-                          </span>
-                        )}
-                      </div>
+                        <span>{nicheInfo.handle}</span>
+                      </span>
                     </div>
 
-                    {(item.has_bill_of_sale || item.archetype) && (
-                      <div className="flex items-center gap-1.5 pointer-events-auto">
-                        {item.archetype && (
-                          <StatusBadge
-                            label={ARCHETYPE_LABELS[item.archetype]}
-                            tone="neutral"
-                          />
-                        )}
-                        {item.has_bill_of_sale && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-950/85 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
-                            <FileCheck2 className="h-3 w-3" />
-                            Kupça
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <div className="shrink-0 pointer-events-auto">
+                      <StatusBadge
+                        label={unifiedStatus.label}
+                        tone={unifiedStatus.tone}
+                        className="backdrop-blur-md"
+                      />
+                    </div>
                   </div>
 
                   <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between">
@@ -1245,36 +1273,6 @@ export function ListingsClient({
                   </Link>
 
                   <div className="space-y-2 border-t border-slate-800/80 pt-3">
-                    <div className="flex flex-wrap gap-1.5">
-                      <StatusBadge label={edMeta.label} tone={edMeta.tone} />
-                      <StatusBadge label={avMeta.label} tone={avMeta.tone} />
-                      <StatusBadge
-                        label={ownerMeta.label}
-                        tone={ownerMeta.tone}
-                      />
-                      {item.duplicate_resolution !== "NONE" && (
-                        <StatusBadge
-                          label={dupMeta.label}
-                          tone={dupMeta.tone}
-                        />
-                      )}
-                      {pub?.preflight_status === "PASSED" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-950/85 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                          <span>✅ Yoxlanılıb</span>
-                        </span>
-                      ) : pub?.preflight_status === "PRICE_CHANGED" ||
-                        pub?.preflight_status === "PRICE_MISMATCH" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-950/85 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
-                          <AlertTriangle className="h-3 w-3 text-amber-400" />
-                          <span>⚠️ Qiymət Dəyişib</span>
-                        </span>
-                      ) : pub?.preflight_status === "REMOVED_ON_BINA" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-950/85 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
-                          <span>❌ bina.az-dan Silinib</span>
-                        </span>
-                      ) : null}
-                    </div>
 
                     {isDraftReady && (
                       <div className="space-y-2 mt-2">

@@ -133,8 +133,16 @@ export default async function ListingsPage({
     )
     .map((r) => r.id);
 
+  const noVideoListingIds = summaryRows
+    .filter(
+      (r) =>
+        !completedListingIdSet.has(r.id) && r.editorial_status !== "PUBLISHED"
+    )
+    .map((r) => r.id);
+
   const serverTabCounts = {
     all: summaryRows.length,
+    noVideo: noVideoListingIds.length,
     drafts: draftListingIds.length,
     published: summaryRows.filter((r) => r.editorial_status === "PUBLISHED").length,
   };
@@ -167,6 +175,18 @@ export default async function ListingsPage({
   } else if (tab === "DRAFTS") {
     if (draftListingIds.length > 0) {
       query = query.in("id", draftListingIds);
+    }
+  } else if (tab === "NO_VIDEO") {
+    if (noVideoListingIds.length > 0) {
+      if (completedListingIdSet.size === 0) {
+        query = query.neq("editorial_status", "PUBLISHED");
+      } else if (noVideoListingIds.length <= completedListingIdSet.size) {
+        query = query.in("id", noVideoListingIds);
+      } else {
+        query = query
+          .neq("editorial_status", "PUBLISHED")
+          .not("id", "in", `(${Array.from(completedListingIdSet).join(",")})`);
+      }
     }
   }
 
@@ -219,7 +239,8 @@ export default async function ListingsPage({
   const to = from + pageSize - 1;
 
   const listingsRes =
-    tab === "DRAFTS" && draftListingIds.length === 0
+    (tab === "DRAFTS" && draftListingIds.length === 0) ||
+    (tab === "NO_VIDEO" && noVideoListingIds.length === 0)
       ? { data: [] as Listing[], count: 0 }
       : await query.range(from, to);
 
