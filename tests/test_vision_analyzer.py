@@ -78,23 +78,27 @@ class TestVisionAnalyzer(unittest.TestCase):
 
     @patch("requests.post")
     def test_analyze_listing_photos_success(self, mock_post):
-        """Validates successful visual profile generation from mocked GPT-4o vision response."""
+        """Validates successful visual profile generation from mocked Gemini vision response."""
         mock_response_data = {
-            "choices": [
+            "candidates": [
                 {
-                    "message": {
-                        "content": json.dumps({
-                            "renovation_quality": "modern_luxury",
-                            "floor_and_ceiling": "Təbii palıd parketi, LED xətti işıqlı dartma tavan",
-                            "kitchen_appliances": "Quraşdırılmış Bosch soba və daş tezgah",
-                            "view_and_lighting": "Xəzər dənizinə panoramik mənzərə və vitraj pəncərələr",
-                            "hook_sentence_az": "Dəniz panoramalı və lüks təmirli bu premium mənzil şəhərin ən prestijli nöqtəsindədir!",
-                            "standout_features": [
-                                "panoramik dəniz mənzərəsi",
-                                "təbii parket",
-                                "quraşdırılmış mətbəx texnikası",
-                            ],
-                        })
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps({
+                                    "renovation_quality": "modern_luxury",
+                                    "floor_and_ceiling": "Təbii palıd parketi, LED xətti işıqlı dartma tavan",
+                                    "kitchen_appliances": "Quraşdırılmış Bosch soba və daş tezgah",
+                                    "view_and_lighting": "Xəzər dənizinə panoramik mənzərə və vitraj pəncərələr",
+                                    "hook_sentence_az": "Dəniz panoramalı və lüks təmirli bu premium mənzil şəhərin ən prestijli nöqtəsindədir!",
+                                    "standout_features": [
+                                        "panoramik dəniz mənzərəsi",
+                                        "təbii parket",
+                                        "quraşdırılmış mətbəx texnikası",
+                                    ],
+                                })
+                            }
+                        ]
                     }
                 }
             ]
@@ -107,7 +111,7 @@ class TestVisionAnalyzer(unittest.TestCase):
 
         profile = analyze_listing_photos(
             [self.sample_image_path],
-            api_key="sk-test-mock-key-12345",
+            api_key="AIza-test-mock-key-12345",
             timeout=15.0,
         )
 
@@ -122,20 +126,19 @@ class TestVisionAnalyzer(unittest.TestCase):
         # Verify API request details
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
-        self.assertEqual(args[0], "https://api.openai.com/v1/chat/completions")
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-test-mock-key-12345")
+        self.assertEqual(
+            args[0],
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        )
+        self.assertEqual(kwargs["headers"]["x-goog-api-key"], "AIza-test-mock-key-12345")
         self.assertEqual(kwargs["timeout"], 15.0)
 
         payload = kwargs["json"]
-        self.assertEqual(payload["model"], "gpt-4o")
-        self.assertEqual(payload["max_tokens"], 500)
-        self.assertEqual(payload["response_format"], {"type": "json_object"})
-
-        # Verify image detail low in user content
-        user_message = payload["messages"][1]["content"]
-        image_part = next(part for part in user_message if part.get("type") == "image_url")
-        self.assertEqual(image_part["image_url"]["detail"], "low")
-        self.assertTrue(image_part["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(payload["generationConfig"]["responseMimeType"], "application/json")
+        parts = payload["contents"][0]["parts"]
+        image_part = next(part for part in parts if "inline_data" in part)
+        self.assertEqual(image_part["inline_data"]["mime_type"], "image/jpeg")
+        self.assertTrue(len(image_part["inline_data"]["data"]) > 0)
 
     @patch("requests.post")
     def test_analyze_listing_photos_circuit_breaker_on_500(self, mock_post):

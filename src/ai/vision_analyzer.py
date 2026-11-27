@@ -1,6 +1,6 @@
 """BakuEstate Multimodal Vision Analyzer.
 
-Analyzes locally downloaded listing photos using OpenAI GPT-4o Vision API.
+Analyzes locally downloaded listing photos using Google Gemini Vision API.
 Extracts verified interior and exterior visual attributes to enrich video
 generation scripts, avoiding hallucinations and bypassing Cloudflare bot blocks.
 """
@@ -23,8 +23,8 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_VISION_MODEL = "gpt-4o"
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+DEFAULT_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
 DEFAULT_VISION_TIMEOUT = 15.0
 MAX_IMAGE_DIMENSION = 1080
 
@@ -167,14 +167,14 @@ def analyze_listing_photos(
     api_key: str | None = None,
     timeout: float = DEFAULT_VISION_TIMEOUT,
 ) -> PropertyVisualProfile:
-    """Analyzes listing photos via OpenAI GPT-4o Vision API.
+    """Analyzes listing photos via Google Gemini Vision API.
 
     Circuit Breaker: On timeout, 4xx, 5xx, or network exception, catches gracefully,
     logs a warning, and returns PropertyVisualProfile(is_fallback=True).
     """
-    key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
+    key = (api_key or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
     if not key:
-        logger.warning("OPENAI_API_KEY is not configured; returning fallback PropertyVisualProfile.")
+        logger.warning("GEMINI_API_KEY is not configured; returning fallback PropertyVisualProfile.")
         return PropertyVisualProfile(is_fallback=True)
 
     selected_paths = select_key_photos(image_paths)
@@ -193,59 +193,57 @@ def analyze_listing_photos(
         logger.warning("None of the selected images could be encoded; returning fallback PropertyVisualProfile.")
         return PropertyVisualProfile(is_fallback=True)
 
-    # Build prompt and payload
-    user_content: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                "You are an expert real estate appraiser and architectural visual analyst in Baku, Azerbaijan.\n"
-                "Inspect the attached photos of the property and return ONLY a valid JSON object with the following schema:\n"
-                "{\n"
-                '  "renovation_quality": "euro" | "modern_luxury" | "scandinavian" | "classic" | "needs_repair" | "standard",\n'
-                '  "floor_and_ceiling": "description of flooring and ceiling fixtures (e.g. natural oak parquet, stretch ceiling with spotlights)",\n'
-                '  "kitchen_appliances": "description of kitchen appliances and countertops (e.g. built-in Bosch, stone countertop)",\n'
-                '  "view_and_lighting": "description of view and natural lighting (e.g. panoramic Caspian sea view, floor-to-ceiling windows)",\n'
-                '  "hook_sentence_az": "1 punchy marketing hook in Azerbaijani highlighting the property\'s top visual strength",\n'
-                '  "standout_features": ["3 to 5 notable verified visual highlights"]\n'
-                "}\n"
-                "Do not fabricate or guess features not visible in the photos. Return strictly valid JSON."
-            ),
-        }
-    ]
+    prompt_text = (
+        "Sən Bakı əmlak bazarında çalışan peşəkar daşınmaz əmlak eksperti və Reels video kopirayterisən.\n"
+        "Əlavə edilmiş əmlak fotolarını diqqətlə analiz et və YALNIZ aşağıdakı sxemdə etibarlı JSON obyekti qaytar:\n"
+        "{\n"
+        '  "renovation_quality": "euro" | "modern_luxury" | "scandinavian" | "classic" | "needs_repair" | "standard",\n'
+        '  "floor_and_ceiling": "döşəmə və tavan detalları (məs: təbii palıd parket, spot işıqlı dartma tavan)",\n'
+        '  "kitchen_appliances": "mətbəx mebeli və texnikası (məs: quraşdırılmış Bosch texnika, mərmər tezgah)",\n'
+        '  "view_and_lighting": "mənzərə və təbii işıqlandırma (məs: panoramik şəhər mənzərəsi, vitraj pəncərələr)",\n'
+        '  "hook_sentence_az": "Azərbaycan dilində təbii, inandırıcı və cəlbedici 1 cümləlik video açılış cümləsi (klischesiz)",\n'
+        '  "standout_features": ["fotolarda real görünən 3–5 əsas üstünlük"]\n'
+        "}\n"
+        "QAYDALAR:\n"
+        "- Fotolarda görünməyən heç bir detalı (kupça, mərtəbə, dəniz mənzərəsi və s.) uydurma.\n"
+        "- Bütün mətn sahələrini təbii, səlis Azərbaycan dilində yaz.\n"
+        "- Yalnız düzgün JSON qaytar."
+    )
 
+    parts: list[dict[str, Any]] = [{"text": prompt_text}]
     for b64 in encoded_images:
-        user_content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{b64}",
-                "detail": "low",
-            },
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": b64,
+            }
         })
 
+    model_name = (os.getenv("GEMINI_VISION_MODEL") or DEFAULT_VISION_MODEL).strip()
+    endpoint = f"{GEMINI_API_BASE_URL}/{model_name}:generateContent"
+
     payload = {
-        "model": DEFAULT_VISION_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are an expert Baku real estate visual analyst. Always respond in valid JSON format.",
-            },
+        "contents": [
             {
                 "role": "user",
-                "content": user_content,
-            },
+                "parts": parts,
+            }
         ],
-        "max_tokens": 500,
-        "response_format": {"type": "json_object"},
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2,
+            "maxOutputTokens": 600,
+        },
     }
 
     headers = {
-        "Authorization": f"Bearer {key}",
+        "x-goog-api-key": key,
         "Content-Type": "application/json",
     }
 
     try:
         response = requests.post(
-            OPENAI_CHAT_COMPLETIONS_URL,
+            endpoint,
             headers=headers,
             json=payload,
             timeout=timeout,
@@ -253,19 +251,22 @@ def analyze_listing_photos(
 
         if response.status_code != 200:
             logger.warning(
-                "OpenAI Vision API returned HTTP %s: %s",
+                "Gemini Vision API returned HTTP %s: %s",
                 response.status_code,
                 response.text[:250],
             )
             return PropertyVisualProfile(is_fallback=True)
 
         data = response.json()
-        choices = data.get("choices", [])
-        if not choices:
-            logger.warning("OpenAI Vision API response contained no choices: %s", data)
+        candidates = data.get("candidates", [])
+        if not candidates:
+            logger.warning("Gemini Vision API response contained no candidates: %s", data)
             return PropertyVisualProfile(is_fallback=True)
 
-        message_content = choices[0].get("message", {}).get("content", "")
+        resp_parts = candidates[0].get("content", {}).get("parts", [])
+        message_content = "".join(
+            str(part.get("text", "")) for part in resp_parts if isinstance(part, dict)
+        )
         parsed_dict = _clean_and_parse_json(message_content)
 
         profile = PropertyVisualProfile.from_dict(parsed_dict)
@@ -273,10 +274,10 @@ def analyze_listing_photos(
         return profile
 
     except requests.exceptions.Timeout as exc:
-        logger.warning("OpenAI Vision API request timed out after %.1fs: %s", timeout, exc)
+        logger.warning("Gemini Vision API request timed out after %.1fs: %s", timeout, exc)
         return PropertyVisualProfile(is_fallback=True)
     except requests.exceptions.RequestException as exc:
-        logger.warning("OpenAI Vision API network error: %s", exc)
+        logger.warning("Gemini Vision API network error: %s", exc)
         return PropertyVisualProfile(is_fallback=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Unexpected error during vision analysis: %s", exc)
