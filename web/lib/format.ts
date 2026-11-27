@@ -12,6 +12,7 @@ import type {
   LeadSourceChannel,
   LeadStage,
   Listing,
+  ListingEvent,
   ListingEventType,
   OwnerOutreachStatus,
   PipelineStatus,
@@ -561,4 +562,152 @@ export function getUnifiedListingStatus(
   }
 
   return { label: "Videosuz", tone: "neutral" };
+}
+
+export const EVENT_ACTOR_LABELS: Record<string, string> = {
+  scraper: "Scraper",
+  liveness_poller: "Canlılıq Yoxlayıcısı",
+  web_user: "Veb İstifadəçi",
+  telegram_user: "Telegram",
+  local_worker: "Video Worker",
+  worker: "Video Worker",
+  migration: "Sistem",
+};
+
+export function formatVoiceEngineLabel(
+  voiceEngine: string | null | undefined,
+  modelId: string | null | undefined
+): string {
+  const eng = (voiceEngine ?? "").trim().toLowerCase();
+  const model = (modelId ?? "").trim();
+
+  if (eng.includes("eleven")) {
+    return model ? `ElevenLabs (${model})` : "ElevenLabs";
+  }
+  if (eng.includes("edge")) {
+    return model ? `Edge-TTS (${model})` : "Edge-TTS (Ehtiyat)";
+  }
+  if (eng.includes("openai")) {
+    return model ? `OpenAI TTS (${model})` : "OpenAI TTS";
+  }
+  if (eng) {
+    return model ? `${voiceEngine} (${model})` : String(voiceEngine);
+  }
+  return model || "—";
+}
+
+function formatEventStatusValue(
+  key: string,
+  val: unknown
+): string | null {
+  if (val === null || val === undefined || val === "") return null;
+  const s = String(val);
+  if (key === "editorial_status") {
+    return (
+      EDITORIAL_STATUS_META[s as keyof typeof EDITORIAL_STATUS_META]?.label ?? s
+    );
+  }
+  if (key === "owner_outreach_status") {
+    return (
+      OWNER_OUTREACH_META[s as keyof typeof OWNER_OUTREACH_META]?.label ?? s
+    );
+  }
+  if (key === "source_availability") {
+    return (
+      SOURCE_AVAILABILITY_META[s as keyof typeof SOURCE_AVAILABILITY_META]
+        ?.label ?? s
+    );
+  }
+  return s;
+}
+
+export function formatListingEventSummary(
+  ev: Pick<ListingEvent, "event_type" | "old_value_json" | "new_value_json">
+): string | null {
+  const oldVal = ev.old_value_json ?? {};
+  const newVal = ev.new_value_json ?? {};
+
+  if (ev.event_type === "SCRAPED_NEW") {
+    const parts: string[] = [];
+    const price = newVal.price_azn_normalized ?? newVal.price;
+    if (typeof price === "number" && price > 0) {
+      parts.push(
+        formatPrice(price, (newVal.currency as "AZN" | "USD") ?? "AZN")
+      );
+    }
+    if (typeof newVal.location === "string" && newVal.location.trim()) {
+      parts.push(newVal.location.trim());
+    }
+    return parts.length > 0 ? parts.join(" • ") : "Elan sistemə əlavə edildi";
+  }
+
+  if (ev.event_type === "PRICE_CHANGED") {
+    const oldPrice = oldVal.price_azn_normalized ?? oldVal.price;
+    const newPrice = newVal.price_azn_normalized ?? newVal.price;
+    if (typeof oldPrice === "number" && typeof newPrice === "number") {
+      return `${formatAzn(oldPrice)} → ${formatAzn(newPrice)}`;
+    }
+    if (typeof newPrice === "number") {
+      return `Yeni qiymət: ${formatAzn(newPrice)}`;
+    }
+  }
+
+  if (ev.event_type === "KUPCA_CHANGED") {
+    const oldK = oldVal.has_bill_of_sale;
+    const newK = newVal.has_bill_of_sale;
+    if (typeof oldK === "boolean" && typeof newK === "boolean") {
+      return `${oldK ? "Kupçalı" : "Kupçasız"} → ${newK ? "Kupçalı" : "Kupçasız"}`;
+    }
+  }
+
+  if (ev.event_type === "PHOTOS_CHANGED") {
+    return "Elan fotoları yeniləndi";
+  }
+
+  if (ev.event_type === "REMOVED_ON_BINA") {
+    return "Elan bina.az-da tapılmadı və ya silindi";
+  }
+
+  if (ev.event_type === "DUPLICATE_FLAGGED") {
+    return "Təkrar elan kimi işarələndi";
+  }
+
+  if (ev.event_type === "STATUS_CHANGED") {
+    const changes: string[] = [];
+    for (const key of [
+      "editorial_status",
+      "owner_outreach_status",
+      "source_availability",
+    ] as const) {
+      const o = formatEventStatusValue(key, oldVal[key]);
+      const n = formatEventStatusValue(key, newVal[key]);
+      if (n && o !== n) {
+        changes.push(o ? `${o} → ${n}` : n);
+      }
+    }
+    if (changes.length > 0) return changes.join(" • ");
+  }
+
+  if (ev.event_type === "OWNER_UPDATED") {
+    const parts: string[] = [];
+    const outreach = formatEventStatusValue(
+      "owner_outreach_status",
+      newVal.owner_outreach_status
+    );
+    if (outreach) parts.push(`Əlaqə: ${outreach}`);
+
+    if (
+      newVal.commission_value !== null &&
+      newVal.commission_value !== undefined
+    ) {
+      const suffix = newVal.commission_type === "FIXED" ? " AZN" : "%";
+      parts.push(`Komissiya: ${newVal.commission_value}${suffix}`);
+    }
+    if (typeof newVal.owner_min_price_azn === "number") {
+      parts.push(`Min. qiymət: ${formatAzn(newVal.owner_min_price_azn)}`);
+    }
+    if (parts.length > 0) return parts.join(" • ");
+  }
+
+  return null;
 }

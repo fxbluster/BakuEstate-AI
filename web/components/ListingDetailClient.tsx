@@ -33,10 +33,13 @@ import {
   ARCHETYPE_LABELS,
   type BadgeTone,
   buildWhatsAppUrl,
+  EVENT_ACTOR_LABELS,
   EVENT_TYPE_META,
   formatAzn,
   formatBakuDateTime,
+  formatListingEventSummary,
   formatPrice,
+  formatVoiceEngineLabel,
   formatVoiceLabel,
   getUnifiedListingStatus,
   OWNER_OUTREACH_META,
@@ -908,241 +911,6 @@ export function ListingDetailClient({
         </div>
       )}
 
-      {/* Pre-Render Media & Script Studio */}
-      <section className="exec-card p-5 space-y-4 border-gold-500/30">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-gold-400" />
-            <div>
-              <h2 className="text-base font-semibold text-slate-100">
-                Pre-Render Media &amp; Ssenari Studiyası
-              </h2>
-              <p className="text-xs text-slate-400">
-                4–10 foto seçib sıralayın, AI ssenari yaradın (&lt;= 1,000
-                simvol) və bulud Railway worker-ə göndərin.
-              </p>
-            </div>
-          </div>
-          <span
-            className={`rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${
-              hasEnoughPhotos
-                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
-                : "border-amber-500/40 bg-amber-500/15 text-amber-300"
-            }`}
-          >
-            {selectedPhotos.length} / {MAX_STUDIO_PHOTOS} foto seçilib
-          </span>
-        </div>
-
-        {!hasEnoughPhotos && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
-            <div>
-              <p className="font-semibold">
-                Render üçün ən azı 4 foto tələb olunur (min 4, maks 10).
-              </p>
-              <p className="mt-0.5 text-amber-100/80">
-                Hazırda elanda {photos.length} foto var, {selectedPhotos.length}{" "}
-                ədəd seçilib.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Photo Selector Grid */}
-        {photos.length > 0 && (
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
-              <ImageIcon className="h-3.5 w-3.5 text-gold-400" />
-              <span>Foto Seçimi və Sıralama</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-5">
-              {photos.map((src, idx) => {
-                const selectedIdx = selectedPhotos.indexOf(src);
-                const isSelected = selectedIdx !== -1;
-
-                return (
-                  <div
-                    key={`${src}-${idx}`}
-                    className={`rounded-xl border overflow-hidden transition ${
-                      isSelected
-                        ? "border-gold-400/70 bg-gold-500/10"
-                        : "border-slate-800 bg-obsidian-950/70 opacity-75 hover:opacity-100"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => togglePhotoSelection(src)}
-                      className="relative block w-full aspect-[4/3] bg-obsidian-950"
-                    >
-                      <img
-                        src={src}
-                        alt={`Foto ${idx + 1}`}
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                      />
-                      <span
-                        className={`absolute top-1.5 left-1.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${
-                          isSelected
-                            ? "bg-gold-400 text-obsidian-950"
-                            : "bg-obsidian-950/80 text-slate-300 border border-slate-700"
-                        }`}
-                      >
-                        {isSelected ? (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Check className="h-3 w-3" />
-                            {selectedIdx + 1}
-                          </span>
-                        ) : (
-                          "+"
-                        )}
-                      </span>
-                    </button>
-
-                    {isSelected && (
-                      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-obsidian-950/90 border-t border-slate-800/80">
-                        <button
-                          type="button"
-                          aria-label={`Foto ${selectedIdx + 1} sola`}
-                          disabled={selectedIdx === 0}
-                          onClick={() => moveSelectedPhoto(selectedIdx, -1)}
-                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
-                        >
-                          <ArrowLeft className="h-3 w-3" />
-                        </button>
-                        <span className="font-mono text-[10px] text-gold-300">
-                          #{selectedIdx + 1}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label={`Foto ${selectedIdx + 1} sağa`}
-                          disabled={selectedIdx === selectedPhotos.length - 1}
-                          onClick={() => moveSelectedPhoto(selectedIdx, 1)}
-                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
-                        >
-                          <ArrowRight className="h-3 w-3" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Script Editor + Target Account + Voice Preset */}
-        <div className="grid gap-4 lg:grid-cols-12">
-          <div className="space-y-2 lg:col-span-8">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label
-                htmlFor="studio-script-textarea"
-                className="text-xs font-semibold text-slate-300"
-              >
-                Video Ssenarisi (İxtiyari / Redaktə Oluna Bilən)
-              </label>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`font-mono text-[11px] ${
-                    scriptTooLong ? "text-rose-400 font-bold" : "text-slate-400"
-                  }`}
-                >
-                  {customScriptText.length} / {MAX_SCRIPT_CHARS}
-                </span>
-                <button
-                  type="button"
-                  disabled={generatingScript}
-                  onClick={handleGenerateRenderScript}
-                  className="exec-btn-secondary py-1 px-2.5 text-xs"
-                >
-                  <Sparkles className="h-3.5 w-3.5 text-gold-400" />
-                  <span>
-                    {generatingScript ? "Yaradılır..." : "AI Ssenari Yarat"}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            <textarea
-              id="studio-script-textarea"
-              rows={4}
-              value={customScriptText}
-              onChange={(e) => setCustomScriptText(e.target.value)}
-              placeholder="AI Ssenari Yarat düyməsini sıxın və ya öz ssenarinizi yazın (maksimum 1,000 simvol)..."
-              className={`exec-input text-xs ${
-                scriptTooLong ? "border-rose-500/70" : ""
-              }`}
-            />
-            {scriptTooLong && (
-              <p className="text-[11px] text-rose-400">
-                Ssenari 1,000 simvol limitini aşır. Zəhmət olmasa qısaldın.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-3 lg:col-span-4">
-            <div className="space-y-1">
-              <label
-                htmlFor="studio-target-account"
-                className="text-xs font-medium text-slate-300"
-              >
-                Hədəf Kanal / Hesab
-              </label>
-              <select
-                id="studio-target-account"
-                value={studioTargetAccount}
-                onChange={(e) => setStudioTargetAccount(e.target.value)}
-                className="exec-select w-full text-xs"
-              >
-                {TARGET_ACCOUNTS.map((acc) => (
-                  <option key={acc.handle} value={acc.handle}>
-                    {acc.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label
-                htmlFor="studio-voice-select"
-                className="text-xs font-medium text-slate-300"
-              >
-                Diktor Səsi
-              </label>
-              <select
-                id="studio-voice-select"
-                value={studioVoiceIdx}
-                onChange={(e) => setStudioVoiceIdx(Number(e.target.value))}
-                className="exec-select w-full text-xs"
-              >
-                {VOICE_OPTIONS.map((v, idx) => (
-                  <option key={v.label} value={idx}>
-                    {v.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="button"
-              disabled={
-                busyAction !== null || !hasEnoughPhotos || scriptTooLong
-              }
-              onClick={handleStudioRenderSubmit}
-              className="exec-btn-primary w-full text-xs"
-            >
-              <Film className="h-3.5 w-3.5" />
-              <span>
-                {busyAction === "studio_render"
-                  ? "Növbəyə salınır..."
-                  : "Renderə Göndər"}
-              </span>
-            </button>
-          </div>
-        </div>
-      </section>
-
       {/* Main 2-column Layout */}
       <div className="grid gap-6 lg:grid-cols-12">
         {/* Left 7 cols: Video Player + Render Versions + Publications */}
@@ -1295,6 +1063,113 @@ export function ListingDetailClient({
                     </div>
                   )}
 
+                  {/* Video System Metadata */}
+                  {(() => {
+                    const abMeta =
+                      selectedRender.ab_metadata &&
+                      typeof selectedRender.ab_metadata === "object"
+                        ? (selectedRender.ab_metadata as Record<string, unknown>)
+                        : null;
+                    const visualProfile =
+                      abMeta?.visual_profile &&
+                      typeof abMeta.visual_profile === "object"
+                        ? (abMeta.visual_profile as Record<string, unknown>)
+                        : null;
+                    const renovationLabel =
+                      typeof visualProfile?.renovation_quality === "string"
+                        ? visualProfile.renovation_quality
+                        : null;
+
+                    return (
+                      <div className="rounded-xl border border-slate-800 bg-obsidian-950/80 p-3 space-y-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                          Sistem Video Məlumatları
+                        </p>
+                        <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+                          <div>
+                            <dt className="text-slate-500">Diktor</dt>
+                            <dd className="font-medium text-slate-200 truncate">
+                              {formatVoiceLabel(selectedRender.voice_id) ?? "Standart"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-slate-500">Səs Mühərriki</dt>
+                            <dd className="font-medium text-slate-200 truncate">
+                              {formatVoiceEngineLabel(
+                                selectedRender.voice_engine,
+                                selectedRender.model_id
+                              )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-slate-500">Müddət / Reviziya</dt>
+                            <dd className="font-medium text-slate-200">
+                              {selectedRender.duration_seconds
+                                ? `${Math.round(selectedRender.duration_seconds)} san`
+                                : "—"}{" "}
+                              • Rev #{selectedRender.content_revision ?? 1}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-slate-500">Render Qiyməti</dt>
+                            <dd className="font-medium text-slate-200">
+                              {selectedRender.rendered_price
+                                ? formatPrice(
+                                    selectedRender.rendered_price,
+                                    (selectedRender.rendered_currency as "AZN" | "USD") ??
+                                      "AZN"
+                                  )
+                                : formatPrice(listing.price, listing.currency)}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-slate-500">R2 Saxlanc</dt>
+                            <dd className="font-medium text-slate-200">
+                              {selectedRender.storage_pruned_at
+                                ? "Təmizlənib"
+                                : selectedRender.storage_object_path ||
+                                    selectedRender.video_cdn_url
+                                  ? "R2 Aktiv"
+                                  : "Gözləyir"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-slate-500">Telegram</dt>
+                            <dd className="font-medium text-slate-200">
+                              {selectedRender.telegram_message_id
+                                ? `Göndərilib (#${selectedRender.telegram_message_id})`
+                                : "Göndərilməyib"}
+                            </dd>
+                          </div>
+                          {selectedRender.script_angle && (
+                            <div>
+                              <dt className="text-slate-500">Ssenari Bucağı</dt>
+                              <dd className="font-medium text-slate-200 truncate">
+                                {selectedRender.script_angle}
+                              </dd>
+                            </div>
+                          )}
+                          {renovationLabel && (
+                            <div>
+                              <dt className="text-slate-500">AI Təmir Analizi</dt>
+                              <dd className="font-medium text-slate-200 truncate">
+                                {renovationLabel}
+                              </dd>
+                            </div>
+                          )}
+                          <div className="col-span-2">
+                            <dt className="text-slate-500">Tamamlanma Tarixi</dt>
+                            <dd className="font-medium text-slate-200">
+                              {selectedRender.completed_at
+                                ? formatBakuDateTime(selectedRender.completed_at)
+                                : "Davam edir / Gözləyir"}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                    );
+                  })()}
+
                   {selectedRender.error_message && (
                     <div className="rounded-xl border border-rose-500/35 bg-rose-500/10 p-3 text-xs text-rose-200">
                       Xəta: {selectedRender.error_message}
@@ -1304,7 +1179,7 @@ export function ListingDetailClient({
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-slate-800 p-8 text-center text-xs text-slate-400">
-                Bu elan üçün hələ video render versiyası yaradılmayıb. Yuxarıdakı
+                Bu elan üçün hələ video render versiyası yaradılmayıb. Aşağıdakı
                 Pre-Render Studiyasından növbəyə sala bilərsiniz.
               </div>
             )}
@@ -1584,67 +1459,359 @@ export function ListingDetailClient({
           )}
 
           {/* Listing Events Audit Timeline */}
-          <section className="exec-card p-5 space-y-4">
-            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-100">
-              <History className="h-4 w-4 text-gold-400" />
-              <span>Dəyişiklik Tarixçəsi ({events.length})</span>
-            </h2>
+          {(() => {
+            type TimelineEntry = {
+              id: string;
+              label: string;
+              tone: BadgeTone;
+              timestamp: string;
+              summary: string | null;
+              actorLabel: string;
+              priceDeltaPct?: number | null;
+            };
 
-            {events.length === 0 ? (
-              <p className="text-xs text-slate-400">
-                Hələ dəyişiklik qeydi yoxdur.
-              </p>
-            ) : (
-              <ol className="relative space-y-4 border-l border-slate-800 pl-4">
-                {events.map((ev) => {
-                  const meta = EVENT_TYPE_META[ev.event_type] ?? {
-                    label: ev.event_type,
-                    tone: "neutral" as BadgeTone,
-                  };
-                  return (
-                    <li key={ev.id} className="relative space-y-1">
-                      <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-obsidian-900 bg-gold-400" />
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <StatusBadge label={meta.label} tone={meta.tone} />
-                        <span className="text-[11px] text-slate-500">
-                          {formatBakuDateTime(ev.created_at)}
-                        </span>
-                      </div>
+            const timelineItems: TimelineEntry[] = [
+              ...events.map((ev) => {
+                const meta = EVENT_TYPE_META[ev.event_type] ?? {
+                  label: ev.event_type,
+                  tone: "neutral" as BadgeTone,
+                };
+                return {
+                  id: `ev-${ev.id}`,
+                  label: meta.label,
+                  tone: meta.tone,
+                  timestamp: ev.created_at,
+                  summary: formatListingEventSummary(ev),
+                  actorLabel: EVENT_ACTOR_LABELS[ev.actor] ?? ev.actor,
+                  priceDeltaPct: ev.price_delta_pct,
+                };
+              }),
+              ...renders.map((r) => {
+                const st = RENDER_STATUS_META[r.status] ?? {
+                  label: r.status,
+                  tone: "neutral" as BadgeTone,
+                };
+                const voice = formatVoiceLabel(r.voice_id);
+                const trigger =
+                  RENDER_TRIGGER_LABELS[r.trigger_reason] ?? r.trigger_reason;
+                const parts = [
+                  trigger,
+                  voice,
+                  r.duration_seconds
+                    ? `${Math.round(r.duration_seconds)}s`
+                    : null,
+                ].filter(Boolean);
+                return {
+                  id: `render-${r.id}`,
+                  label: `Video v${r.version_num} • ${st.label}`,
+                  tone: st.tone,
+                  timestamp: r.completed_at ?? r.created_at,
+                  summary: parts.length > 0 ? parts.join(" • ") : null,
+                  actorLabel: "Video Worker",
+                };
+              }),
+              ...publications.map((pub) => ({
+                id: `pub-${pub.id}`,
+                label: `${PUBLICATION_CHANNEL_LABELS[pub.channel] ?? pub.channel} Paylaşımı`,
+                tone: "emerald" as BadgeTone,
+                timestamp: pub.published_at ?? pub.created_at,
+                summary: pub.notes || pub.post_url || "Elan yayımlandı",
+                actorLabel: "Veb İstifadəçi",
+              })),
+            ].sort(
+              (a, b) =>
+                new Date(b.timestamp).getTime() -
+                new Date(a.timestamp).getTime()
+            );
 
-                      {ev.price_delta_pct !== null && (
-                        <p className="text-xs font-semibold text-emerald-300">
-                          Qiymət fərqi:{" "}
-                          {Number(ev.price_delta_pct) > 0 ? "+" : ""}
-                          {Number(ev.price_delta_pct).toFixed(2)}%
-                        </p>
-                      )}
+            return (
+              <section className="exec-card p-5 space-y-4">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-100">
+                  <History className="h-4 w-4 text-gold-400" />
+                  <span>Dəyişiklik Tarixçəsi ({timelineItems.length})</span>
+                </h2>
 
-                      {(ev.old_value_json || ev.new_value_json) && (
-                        <div className="rounded-lg border border-slate-800/80 bg-obsidian-950/70 p-2 font-mono text-[11px] text-slate-400 overflow-x-auto">
-                          {ev.old_value_json && (
-                            <div className="text-slate-500">
-                              Köhnə: {JSON.stringify(ev.old_value_json)}
-                            </div>
-                          )}
-                          {ev.new_value_json && (
-                            <div className="text-slate-200">
-                              Yeni: {JSON.stringify(ev.new_value_json)}
-                            </div>
-                          )}
+                {timelineItems.length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Hələ dəyişiklik qeydi yoxdur.
+                  </p>
+                ) : (
+                  <ol className="relative space-y-3.5 border-l border-slate-800 pl-4 max-h-[380px] overflow-y-auto pr-1">
+                    {timelineItems.map((item) => (
+                      <li key={item.id} className="relative space-y-1">
+                        <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-obsidian-900 bg-gold-400" />
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <StatusBadge label={item.label} tone={item.tone} />
+                          <span className="text-[11px] text-slate-500">
+                            {formatBakuDateTime(item.timestamp)}
+                          </span>
                         </div>
-                      )}
 
-                      <p className="text-[10px] uppercase tracking-wider text-slate-500">
-                        Mənbə: {ev.actor}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </section>
+                        {item.priceDeltaPct !== null &&
+                          item.priceDeltaPct !== undefined && (
+                            <p className="text-xs font-semibold text-emerald-300">
+                              Qiymət fərqi:{" "}
+                              {Number(item.priceDeltaPct) > 0 ? "+" : ""}
+                              {Number(item.priceDeltaPct).toFixed(2)}%
+                            </p>
+                          )}
+
+                        {item.summary && (
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            {item.summary}
+                          </p>
+                        )}
+
+                        <p className="text-[10px] text-slate-500">
+                          Mənbə: {item.actorLabel}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            );
+          })()}
         </div>
       </div>
+
+      {/* Pre-Render Media & Script Studio (moved below main video & CRM sections) */}
+      <section
+        id="pre-render-studio"
+        className="exec-card p-5 space-y-4 border-gold-500/30"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-gold-400" />
+            <div>
+              <h2 className="text-base font-semibold text-slate-100">
+                Pre-Render Media &amp; Ssenari Studiyası
+              </h2>
+              <p className="text-xs text-slate-400">
+                4–10 foto seçib sıralayın, AI ssenari yaradın (&lt;= 1,000
+                simvol) və bulud Railway worker-ə göndərin.
+              </p>
+            </div>
+          </div>
+          <span
+            className={`rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${
+              hasEnoughPhotos
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+            }`}
+          >
+            {selectedPhotos.length} / {MAX_STUDIO_PHOTOS} foto seçilib
+          </span>
+        </div>
+
+        {!hasEnoughPhotos && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+            <div>
+              <p className="font-semibold">
+                Render üçün ən azı 4 foto tələb olunur (min 4, maks 10).
+              </p>
+              <p className="mt-0.5 text-amber-100/80">
+                Hazırda elanda {photos.length} foto var, {selectedPhotos.length}{" "}
+                ədəd seçilib.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Photo Selector Grid */}
+        {photos.length > 0 && (
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+              <ImageIcon className="h-3.5 w-3.5 text-gold-400" />
+              <span>Foto Seçimi və Sıralama</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-5">
+              {photos.map((src, idx) => {
+                const selectedIdx = selectedPhotos.indexOf(src);
+                const isSelected = selectedIdx !== -1;
+
+                return (
+                  <div
+                    key={`${src}-${idx}`}
+                    className={`rounded-xl border overflow-hidden transition ${
+                      isSelected
+                        ? "border-gold-400/70 bg-gold-500/10"
+                        : "border-slate-800 bg-obsidian-950/70 opacity-75 hover:opacity-100"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => togglePhotoSelection(src)}
+                      className="relative block w-full aspect-[4/3] bg-obsidian-950"
+                    >
+                      <img
+                        src={src}
+                        alt={`Foto ${idx + 1}`}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                      <span
+                        className={`absolute top-1.5 left-1.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${
+                          isSelected
+                            ? "bg-gold-400 text-obsidian-950"
+                            : "bg-obsidian-950/80 text-slate-300 border border-slate-700"
+                        }`}
+                      >
+                        {isSelected ? (
+                          <span className="inline-flex items-center gap-0.5">
+                            <Check className="h-3 w-3" />
+                            {selectedIdx + 1}
+                          </span>
+                        ) : (
+                          "+"
+                        )}
+                      </span>
+                    </button>
+
+                    {isSelected && (
+                      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-obsidian-950/90 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          aria-label={`Foto ${selectedIdx + 1} sola`}
+                          disabled={selectedIdx === 0}
+                          onClick={() => moveSelectedPhoto(selectedIdx, -1)}
+                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
+                        >
+                          <ArrowLeft className="h-3 w-3" />
+                        </button>
+                        <span className="font-mono text-[10px] text-gold-300">
+                          #{selectedIdx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Foto ${selectedIdx + 1} sağa`}
+                          disabled={selectedIdx === selectedPhotos.length - 1}
+                          onClick={() => moveSelectedPhoto(selectedIdx, 1)}
+                          className="rounded p-0.5 text-slate-300 hover:bg-obsidian-800 disabled:opacity-30"
+                        >
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Script Editor + Target Account + Voice Preset */}
+        <div className="grid gap-4 lg:grid-cols-12">
+          <div className="space-y-2 lg:col-span-8">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="studio-script-textarea"
+                className="text-xs font-semibold text-slate-300"
+              >
+                Video Ssenarisi (İxtiyari / Redaktə Oluna Bilən)
+              </label>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`font-mono text-[11px] ${
+                    scriptTooLong ? "text-rose-400 font-bold" : "text-slate-400"
+                  }`}
+                >
+                  {customScriptText.length} / {MAX_SCRIPT_CHARS}
+                </span>
+                <button
+                  type="button"
+                  disabled={generatingScript}
+                  onClick={handleGenerateRenderScript}
+                  className="exec-btn-secondary py-1 px-2.5 text-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-gold-400" />
+                  <span>
+                    {generatingScript ? "Yaradılır..." : "AI Ssenari Yarat"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              id="studio-script-textarea"
+              rows={4}
+              value={customScriptText}
+              onChange={(e) => setCustomScriptText(e.target.value)}
+              placeholder="AI Ssenari Yarat düyməsini sıxın və ya öz ssenarinizi yazın (maksimum 1,000 simvol)..."
+              className={`exec-input text-xs ${
+                scriptTooLong ? "border-rose-500/70" : ""
+              }`}
+            />
+            {scriptTooLong && (
+              <p className="text-[11px] text-rose-400">
+                Ssenari 1,000 simvol limitini aşır. Zəhmət olmasa qısaldın.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-3 lg:col-span-4">
+            <div className="space-y-1">
+              <label
+                htmlFor="studio-target-account"
+                className="text-xs font-medium text-slate-300"
+              >
+                Hədəf Kanal / Hesab
+              </label>
+              <select
+                id="studio-target-account"
+                value={studioTargetAccount}
+                onChange={(e) => setStudioTargetAccount(e.target.value)}
+                className="exec-select w-full text-xs"
+              >
+                {TARGET_ACCOUNTS.map((acc) => (
+                  <option key={acc.handle} value={acc.handle}>
+                    {acc.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label
+                htmlFor="studio-voice-select"
+                className="text-xs font-medium text-slate-300"
+              >
+                Diktor Səsi
+              </label>
+              <select
+                id="studio-voice-select"
+                value={studioVoiceIdx}
+                onChange={(e) => setStudioVoiceIdx(Number(e.target.value))}
+                className="exec-select w-full text-xs"
+              >
+                {VOICE_OPTIONS.map((v, idx) => (
+                  <option key={v.label} value={idx}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              disabled={
+                busyAction !== null || !hasEnoughPhotos || scriptTooLong
+              }
+              onClick={handleStudioRenderSubmit}
+              className="exec-btn-primary w-full text-xs"
+            >
+              <Film className="h-3.5 w-3.5" />
+              <span>
+                {busyAction === "studio_render"
+                  ? "Növbəyə salınır..."
+                  : "Renderə Göndər"}
+              </span>
+            </button>
+          </div>
+        </div>
+      </section>
 
       {/* Script / Voice Rerender Modal */}
       {rerenderModalOpen && (
