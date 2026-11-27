@@ -128,7 +128,7 @@ class TestVisionAnalyzer(unittest.TestCase):
         args, kwargs = mock_post.call_args
         self.assertEqual(
             args[0],
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
         )
         self.assertEqual(kwargs["headers"]["x-goog-api-key"], "AIza-test-mock-key-12345")
         self.assertEqual(kwargs["timeout"], 15.0)

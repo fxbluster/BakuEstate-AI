@@ -24,7 +24,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+DEFAULT_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-3.8-flash")
 DEFAULT_VISION_TIMEOUT = 15.0
 MAX_IMAGE_DIMENSION = 1080
 
