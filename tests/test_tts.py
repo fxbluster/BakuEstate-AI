@@ -641,7 +641,7 @@ class TestAccountRouterVoiceAndDistrict(unittest.TestCase):
             mock_post.assert_called_once()
             call_kwargs = mock_post.call_args[1]
             payload = call_kwargs["json"]
-            self.assertEqual(payload["model_id"], "eleven_v4")
+            self.assertEqual(payload["model_id"], "eleven_v4_turbo")
 
         temp_dir.cleanup()
 

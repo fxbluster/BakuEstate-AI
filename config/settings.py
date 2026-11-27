@@ -244,9 +244,9 @@ ELEVENLABS_VOICE_ARIF = os.getenv("ELEVENLABS_VOICE_ARIF", "ZQJv3hwvRAIC7fvWZ1Qr
 ELEVENLABS_VOICE_AYAN = os.getenv("ELEVENLABS_VOICE_AYAN", "DZaip8UahF0Qri1FxU8M")
 ELEVENLABS_VOICE_BANU = ELEVENLABS_VOICE_AYAN  # Backward compatibility alias
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", ELEVENLABS_VOICE_ARIF)
-_raw_eleven_model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_v4")
-if _raw_eleven_model in ("eleven_multilingual_v2", "multilingual_v2", ""):
-    ELEVENLABS_MODEL_ID = "eleven_v4"
+_raw_eleven_model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_v4_turbo")
+if _raw_eleven_model in ("eleven_multilingual_v2", "multilingual_v2", "eleven_v4", ""):
+    ELEVENLABS_MODEL_ID = "eleven_v4_turbo"
 else:
     ELEVENLABS_MODEL_ID = _raw_eleven_model
 

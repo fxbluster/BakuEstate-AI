@@ -31,7 +31,7 @@ except ImportError:
     ELEVENLABS_VOICE_ARIF = "ZQJv3hwvRAIC7fvWZ1Qr"
     ELEVENLABS_VOICE_AYAN = "DZaip8UahF0Qri1FxU8M"
     ELEVENLABS_VOICE_BANU = "DZaip8UahF0Qri1FxU8M"
-    ELEVENLABS_MODEL_ID = "eleven_v4"
+    ELEVENLABS_MODEL_ID = "eleven_v4_turbo"
 
 from src.cloud.supabase_repo import (
     SupabaseRepo,
