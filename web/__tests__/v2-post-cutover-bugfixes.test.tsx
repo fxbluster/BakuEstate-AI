@@ -392,7 +392,7 @@ describe("v2 Post-Cutover Bugfixes (YOL C TDD)", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Yayıma Hazır Qaralamalar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Hazır/i }));
     expect(mockPush).toHaveBeenCalledTimes(1);
     const pushedUrl = String(mockPush.mock.calls[0][0]);
     expect(pushedUrl).toContain("tab=DRAFTS");
@@ -426,9 +426,10 @@ describe("v2 Post-Cutover Bugfixes (YOL C TDD)", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /Yayıma Hazır Qaralamalar\s*28/i })).not.toBeNull();
-    expect(screen.getByRole("button", { name: /Bütün Elanlar\s*40/i })).not.toBeNull();
-    expect(screen.getByRole("button", { name: /@bakuestate\.premium\s*19/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Hazır\s*28/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Hamısı\s*40/i })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Ətraflı filtrlər/i }));
+    expect(screen.getByRole("option", { name: /@bakuestate\.premium.*19/i })).not.toBeNull();
   });
 
   it("7. ListingsClient displays custom channelProfiles handles when set and falls back to defaults", () => {
@@ -448,9 +449,10 @@ describe("v2 Post-Cutover Bugfixes (YOL C TDD)", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /@menim\.luxury/i })).not.toBeNull();
-    expect(screen.getByRole("button", { name: /@menim\.emlak/i })).not.toBeNull();
-    expect(screen.getByRole("button", { name: /@baku\.serfeli\.evler/i })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Ətraflı filtrlər/i }));
+    expect(screen.getByRole("option", { name: /@menim\.luxury/i })).not.toBeNull();
+    expect(screen.getByRole("option", { name: /@menim\.emlak/i })).not.toBeNull();
+    expect(screen.getByRole("option", { name: /@baku\.serfeli\.evler/i })).not.toBeNull();
   });
 
   it("8. SettingsClient loads and saves custom social channel handles & URLs in niche_rules_json.channels", async () => {

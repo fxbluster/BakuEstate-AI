@@ -421,7 +421,10 @@ describe("Phase 2: Server Pagination, Pre-Render Studio, OFF_MARKET, Settings & 
     );
 
     // Changing niche filter resets page=1
-    fireEvent.click(screen.getByRole("button", { name: /@bakuestate\.premium/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Ətraflı filtrlər/i }));
+    fireEvent.change(screen.getByLabelText(/Niş \/ Kanal/i), {
+      target: { value: "LUXURY" },
+    });
     expect(mockPush).toHaveBeenLastCalledWith(
       expect.stringMatching(/niche=LUXURY.*page=1|page=1.*niche=LUXURY/)
     );
