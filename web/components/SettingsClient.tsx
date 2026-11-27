@@ -116,6 +116,9 @@ export function SettingsClient({
   const [aiRateLimitRpm, setAiRateLimitRpm] = useState(
     String(initialSettings.ai_rate_limit_rpm ?? 20)
   );
+  const [autoRenderEnabled, setAutoRenderEnabled] = useState<boolean>(
+    Boolean(initialSettings.auto_render_enabled ?? false)
+  );
 
   const [members, setMembers] = useState<AgencyMember[]>(initialMembers);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -163,6 +166,7 @@ export function SettingsClient({
         },
         monthly_ai_budget_usd: Math.max(0, Number(monthlyBudgetUsd) || 0),
         ai_rate_limit_rpm: Math.max(1, Number(aiRateLimitRpm) || 20),
+        auto_render_enabled: autoRenderEnabled,
       };
 
       const res = await fetch("/api/agency/settings", {
@@ -493,6 +497,48 @@ export function SettingsClient({
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Auto Video Rendering Control */}
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-obsidian-950/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-100">
+                Avtomatik Video Yığımı (Auto-Render)
+              </span>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                  autoRenderEnabled
+                    ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                    : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                }`}
+              >
+                {autoRenderEnabled ? "AÇIQDIR" : "DAYANDIRILIB"}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Bağlı olduqda worker yeni elanlar və qiymət endirimləri üçün avtomatik video yığmır. Əl ilə &quot;Video Yığ&quot; / &quot;Yenidən Render&quot; düymələri həmişə işləyir.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRenderEnabled}
+            data-testid="toggle-auto-render"
+            onClick={() => setAutoRenderEnabled((prev) => !prev)}
+            className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold transition-colors ${
+              autoRenderEnabled
+                ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                : "border-slate-700 bg-obsidian-900 text-slate-300 hover:border-gold-500/40 hover:text-gold-300"
+            }`}
+          >
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                autoRenderEnabled ? "bg-emerald-400" : "bg-slate-500"
+              }`}
+            />
+            <span>{autoRenderEnabled ? "Avtomatiki Bağla" : "Avtomatiki Aç"}</span>
+          </button>
         </div>
 
         {/* Watermark & AI Budget */}

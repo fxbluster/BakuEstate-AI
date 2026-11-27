@@ -129,6 +129,7 @@ export interface AgencySettings {
   watermark_preset_json: Record<string, unknown>;
   monthly_ai_budget_usd: number;
   ai_rate_limit_rpm: number;
+  auto_render_enabled?: boolean;
   updated_at: string;
 }
 

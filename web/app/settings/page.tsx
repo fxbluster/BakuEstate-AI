@@ -82,6 +82,7 @@ export default async function SettingsPage() {
     watermark_preset_json: {},
     monthly_ai_budget_usd: 50,
     ai_rate_limit_rpm: 20,
+    auto_render_enabled: false,
     updated_at: new Date().toISOString(),
   };
 

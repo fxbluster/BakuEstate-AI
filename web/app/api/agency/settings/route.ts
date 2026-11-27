@@ -88,7 +88,7 @@ export async function GET(request: Request) {
   const { data: settings, error } = await supabase
     .from("agency_settings")
     .select(
-      "agency_id, public_phone, telegram_chat_id, niche_rules_json, social_api_mode, watermark_preset_json, monthly_ai_budget_usd, ai_rate_limit_rpm, updated_at"
+      "agency_id, public_phone, telegram_chat_id, niche_rules_json, social_api_mode, watermark_preset_json, monthly_ai_budget_usd, ai_rate_limit_rpm, auto_render_enabled, updated_at"
     )
     .eq("agency_id", operator.agencyId)
     .maybeSingle();
@@ -297,6 +297,16 @@ export async function PATCH(request: Request) {
     patch.social_api_mode = body.social_api_mode;
   }
 
+  if (body.auto_render_enabled !== undefined) {
+    if (typeof body.auto_render_enabled !== "boolean") {
+      return NextResponse.json(
+        { ok: false, error: "auto_render_enabled boolean (true/false) olmalıdır." },
+        { status: 400 }
+      );
+    }
+    patch.auto_render_enabled = body.auto_render_enabled;
+  }
+
   if (Object.keys(patch).length === 0) {
     return NextResponse.json(
       { ok: false, error: "Yenilənməli heç bir sahə göndərilməyib." },
@@ -310,7 +320,7 @@ export async function PATCH(request: Request) {
     .update(patch)
     .eq("agency_id", operator.agencyId)
     .select(
-      "agency_id, public_phone, telegram_chat_id, niche_rules_json, social_api_mode, watermark_preset_json, monthly_ai_budget_usd, ai_rate_limit_rpm, updated_at"
+      "agency_id, public_phone, telegram_chat_id, niche_rules_json, social_api_mode, watermark_preset_json, monthly_ai_budget_usd, ai_rate_limit_rpm, auto_render_enabled, updated_at"
     )
     .single();
 

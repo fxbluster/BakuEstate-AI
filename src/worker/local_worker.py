@@ -688,9 +688,13 @@ class BakuLocalWorker:
         check_existing = bool(params.get("check_existing_for_changes", True))
         enqueue_renders = bool(params.get("enqueue_render_jobs", True))
         special_opportunities_only = bool(params.get("special_opportunities_only", False))
+        auto_render_enabled = self._is_auto_render_enabled(job.get("agency_id"))
         backlog_renders_enqueued = 0
 
-        if not specific_id:
+        if not auto_render_enabled:
+            logger.info("Auto-render is disabled in agency_settings; SCRAPE_NEW will only collect listings without queueing renders.")
+            enqueue_renders = False
+        elif not specific_id:
             backlog_fn = getattr(self.repo, "get_unrendered_backlog_listings", None)
             backlog = backlog_fn(limit=max(1, limit)) if callable(backlog_fn) else []
             if isinstance(backlog, list) and len(backlog) > 0:
@@ -755,6 +759,19 @@ class BakuLocalWorker:
             "special_opportunities_only": special_opportunities_only,
         }
 
+    def _is_auto_render_enabled(self, agency_id: Optional[str]) -> bool:
+        """Returns True if agency_settings.auto_render_enabled is enabled (defaults to True when unset)."""
+        aid = str(agency_id or "").strip()
+        if not aid:
+            return True
+        getter = getattr(self.repo, "get_agency_settings", None)
+        if not callable(getter):
+            return True
+        settings = getter(aid)
+        if not isinstance(settings, dict) or "auto_render_enabled" not in settings:
+            return True
+        return bool(settings.get("auto_render_enabled"))
+
     def _check_auto_render_guardrails(
         self,
         job: Dict[str, Any],
@@ -771,6 +788,18 @@ class BakuLocalWorker:
         """
         trigger_source = str(job.get("trigger_source") or "AUTO_SCHEDULER").strip().upper()
         is_auto = trigger_source == "AUTO_SCHEDULER"
+
+        if is_auto and not self._is_auto_render_enabled(job.get("agency_id") or listing.get("agency_id")):
+            logger.info(
+                "Skipping %s for %s: auto_render_enabled is OFF in agency_settings.",
+                job_label,
+                listing.get("bina_id"),
+            )
+            return {
+                "bina_id": listing.get("bina_id"),
+                "status": "SKIPPED_AUTO_RENDER_DISABLED",
+                "reason": "AUTO_RENDER_DISABLED_IN_SETTINGS",
+            }
 
         if always_check_status or is_auto:
             editorial = str(listing.get("editorial_status") or "PENDING_REVIEW").upper()
