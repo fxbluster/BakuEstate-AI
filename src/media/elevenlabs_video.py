@@ -115,7 +115,7 @@ def animate_photo_to_video(
     try:
         logger.info("Submitting ElevenLabs AI video (%s) for %s...", target_model, src.name)
         resp = None
-        for frame_key in ("first_frame", "start_frame"):
+        for frame_key in ("first_frame", "start_frame", "image"):
             payload: Dict[str, Any] = {
                 "model_id": target_model,
                 "prompt": prompt,
@@ -127,8 +127,8 @@ def animate_photo_to_video(
                 json=payload,
                 timeout=submit_timeout,
             )
-            if resp.status_code == 422 and frame_key == "first_frame" and "extra_forbidden" in resp.text:
-                logger.info("ElevenLabs Flows rejected 'first_frame', retrying with 'start_frame'...")
+            if resp.status_code == 422 and frame_key != "image" and "extra_forbidden" in resp.text:
+                logger.info("ElevenLabs Flows rejected '%s', retrying next frame key...", frame_key)
                 continue
             break
 
